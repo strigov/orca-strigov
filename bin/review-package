@@ -81,7 +81,11 @@ if [ "$head" = "WORKTREE" ]; then
   if [ -f "$idx" ]; then
     cp "$idx" "$tmpidx"
   fi
-  GIT_INDEX_FILE="$tmpidx" git add --intent-to-add -A -- . "$exclude"
+  # No "$exclude" here on purpose: .superpowers is gitignored, so -A never
+  # adds it, while an explicit exclude pathspec that matches an ignored
+  # directory makes git (>= 2.55) print "paths are ignored" and exit 1,
+  # which kills the script under set -e before the package is written.
+  GIT_INDEX_FILE="$tmpidx" git add --intent-to-add -A -- .
   {
     echo "# Review package: ${base}..WORKTREE"
     echo
