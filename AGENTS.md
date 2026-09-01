@@ -10,7 +10,7 @@ Layout:
 - `skills/orca-dev/roles.md` — role → agent/model/effort matrix, cascades, family rule
 - `skills/orca-dev/orca-recipes.md` — launch, wait, release, blocker fixes
 - `skills/orca-dev/prompts/` — one template per role
-- `bin/` — `review-package`, `sdd-workspace`, `verify-gate` (bash, no model)
+- `bin/` — `review-package`, `sdd-workspace`, `verify-gate`, `wait-agent-ready` (bash, no model)
 - `install.sh` — links the skill into `~/.codex/skills`, pre-trusts a repo for Claude/Antigravity, reports blockers
 - `docs/spikes/` — empirical findings the protocol is built on
 

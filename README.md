@@ -1,6 +1,6 @@
 # orca-strigov — orca-dev
 
-A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex coordinates**, everything else runs as Orca worker terminals on whichever agent and model fits the role:
+A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex coordinates**, everything else runs as Orca worker terminals on whichever agent and model fits the role (`skills/orca-dev/roles.md` is authoritative; this table is a summary):
 
 | role | agent / model |
 |---|---|
@@ -8,8 +8,8 @@ A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex
 | plan revisions / fallback | Claude Opus xhigh → reviewed by Codex Sol max |
 | implementation | Gemini 3.7 Flash High (Antigravity CLI) → Codex Luna max fallback → Codex Terra max escalation |
 | frontend phases | Claude Opus xhigh (new UI) / Sonnet (tweaks) |
-| verification gate | `bin/verify-gate` script → Gemini Flash only when red |
-| code review | Claude Opus xhigh (Fable on risky phases), Codex Sol xhigh control review |
+| verification gate | `bin/verify-gate` script; a Gemini Flash worker only when the script has no commands or cannot classify |
+| code review | Claude Opus xhigh (Fable on risky phases), Codex Sol xhigh control review — reviewers swap families when a Codex or Claude model wrote the code |
 | final branch review | Claude Opus xhigh |
 
 It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-cc-plugins) from Claude Code to Orca: the same phased plans, authorization ledger, bounded review loops and family rule (writer ≠ reviewer family), with Orca's `worker-start` / `worker_done` replacing two ad-hoc transports.
@@ -17,9 +17,9 @@ It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-c
 ## Install
 
 ```bash
-git clone <this repo> ~/orca-strigov && cd ~/orca-strigov
+git clone git@github.com:strigov/orca-strigov.git ~/orca-strigov && cd ~/orca-strigov
 ./install.sh                       # links skills/orca-dev into ~/.codex/skills
-./install.sh --repo /path/to/repo  # pre-trusts the repo for Claude Code and Antigravity, reports blockers
+./install.sh --repo /path/to/repo  # pre-trusts the repo and its git worktrees for Claude Code and Antigravity; exit 1 on any WARN
 ```
 
 Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI), `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
@@ -38,9 +38,10 @@ skills/orca-dev/prompts/        one template per role
 bin/verify-gate                 deterministic gate from the plan's `verify:` list
 bin/review-package              reviewer package: commits + stat + -U10 diff
 bin/sdd-workspace               per-plan scratch workspace
+bin/wait-agent-ready            waits for an agent's TUI before an inject (mandatory in Path B)
 docs/spikes/                    what was measured before this was designed
 ```
 
 ## Status
 
-Phase 1 — core protocol, sequential phases, role matrix. Parallel groups and Step 5 are specified in `SKILL.md` but not yet exercised end-to-end. See `docs/spikes/RESULTS.md` for the empirical basis and known startup blockers.
+Three end-to-end smoke runs on `spikes/fixture` (2026-09-01/02) exercised the full protocol: sequential phases, a parallel group with two Orca child worktrees, fix rounds, the Flash → Luna availability cascade, the strong (GPT Pro) and standard planners, the planner's blocked-on-missing-input question, synthesis and the final review — see `docs/smoke-runs.md`. Not yet observed in a real run: an implementer `BLOCKED` → diagnosis → reasoning escalation. A 2026-09-02 audit of the protocol text, prompts and scripts (`docs/audit-2026-09-02.md`) was applied on top. Empirical basis and startup blockers: `docs/spikes/RESULTS.md`.
