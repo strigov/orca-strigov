@@ -6,10 +6,11 @@ orca_run: run_edc41ebcb977
 phases:
   - id: Ф1
     scope: "JSON-хранилище и атомарные операции чтения/записи с pytest-обвязкой"
-    status: in-progress
+    status: done
+    commits: "728a4c9.."
   - id: Ф2
     scope: "Подключение add/list/done к хранилищу без изменения CLI-контракта"
-    status: pending
+    status: in-progress
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
 ---

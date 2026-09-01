@@ -1,6 +1,60 @@
 """Tiny in-memory todo CLI used as a planning fixture."""
 import argparse
+import json
+import os
 import sys
+import tempfile
+from pathlib import Path
+
+_DEFAULT_TODO_FILE: Path = Path(__file__).resolve().with_name("todo.json")
+
+
+def _storage_path() -> Path:
+    value = os.environ.get("TODO_FILE")
+    if value:
+        return Path(value).expanduser()
+    return _DEFAULT_TODO_FILE
+
+
+def _load_items(path: Path) -> list[dict]:
+    try:
+        with path.open("r", encoding="utf-8") as storage_file:
+            items = json.load(storage_file)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        return []
+
+    if not isinstance(items, list):
+        return []
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"id", "text", "done"}
+            or type(item["id"]) is not int
+            or type(item["text"]) is not str
+            or type(item["done"]) is not bool
+        ):
+            return []
+    return items
+
+
+def _save_items(path: Path, items: list[dict]) -> None:
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False, dir=path.parent
+        ) as storage_file:
+            temp_path = storage_file.name
+            json.dump(items, storage_file, ensure_ascii=False)
+            storage_file.flush()
+            os.fsync(storage_file.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 _ITEMS: list[dict] = []
 
