@@ -1,10 +1,13 @@
 """Tiny in-memory todo CLI used as a planning fixture."""
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Iterator
 
 _DEFAULT_TODO_FILE: Path = Path(__file__).resolve().with_name("todo.json")
 
@@ -14,6 +17,21 @@ def _storage_path() -> Path:
     if value:
         return Path(value).expanduser()
     return _DEFAULT_TODO_FILE
+
+
+def _lock_path(storage_path: Path) -> Path:
+    return storage_path.with_name(storage_path.name + ".lock")
+
+
+@contextmanager
+def _storage_lock(storage_path: Path) -> Iterator[None]:
+    lock_path = _lock_path(storage_path)
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _load_items(path: Path) -> list[dict]:
@@ -62,44 +80,48 @@ def _next_id(items: list[dict]) -> int:
 
 def add(text: str) -> dict:
     path = _storage_path()
-    items = _load_items(path)
-    item = {"id": _next_id(items), "text": text, "done": False}
-    items.append(item)
-    _save_items(path, items)
-    return item
+    with _storage_lock(path):
+        items = _load_items(path)
+        item = {"id": _next_id(items), "text": text, "done": False}
+        items.append(item)
+        _save_items(path, items)
+        return item
 
 
 def complete(item_id: int) -> dict:
     path = _storage_path()
-    items = _load_items(path)
-    for item in items:
-        if item["id"] == item_id:
-            item["done"] = True
-            _save_items(path, items)
-            return item
-    raise KeyError(item_id)
+    with _storage_lock(path):
+        items = _load_items(path)
+        for item in items:
+            if item["id"] == item_id:
+                item["done"] = True
+                _save_items(path, items)
+                return item
+        raise KeyError(item_id)
 
 
 def remove(item_id: int) -> dict:
     path = _storage_path()
-    items = _load_items(path)
-    for idx, item in enumerate(items):
-        if item["id"] == item_id:
-            del items[idx]
-            _save_items(path, items)
-            return item
-    raise KeyError(item_id)
+    with _storage_lock(path):
+        items = _load_items(path)
+        for idx, item in enumerate(items):
+            if item["id"] == item_id:
+                del items[idx]
+                _save_items(path, items)
+                return item
+        raise KeyError(item_id)
 
 
 def edit(item_id: int, text: str) -> dict:
     path = _storage_path()
-    items = _load_items(path)
-    for item in items:
-        if item["id"] == item_id:
-            item["text"] = text
-            _save_items(path, items)
-            return item
-    raise KeyError(item_id)
+    with _storage_lock(path):
+        items = _load_items(path)
+        for item in items:
+            if item["id"] == item_id:
+                item["text"] = text
+                _save_items(path, items)
+                return item
+        raise KeyError(item_id)
 
 
 def list_items(show_done: bool = True) -> list[dict]:
