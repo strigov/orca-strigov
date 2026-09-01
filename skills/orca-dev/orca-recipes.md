@@ -100,6 +100,8 @@ Decide the terminal's fate **before** acknowledging the Delivery:
 
 Never leave a settled worker open "to look at later" — `worker-read --dispatch <id>` still works after release.
 
+**Read the release result.** `worker-release` can answer `"state": "retained", "reason": "user_takeover", "processAction": "none"` — Orca refuses to kill a terminal the user has focused or typed into during the run (observed 2026-09-01 on two Claude reviewers the user had opened in the UI). That is not a failure, but the terminal is still open: follow up with `orca terminal close --terminal <handle> --json` (handle = `worker-show --dispatch <id>` → `agent_terminal_handle`) once its `worker_done` is processed. Any other non-`released` state → treat as "still open" and close explicitly too.
+
 ## 6. Failure handling
 
 - `worker-show` says `failed`/`stopped` → `worker-start --task <task> --retry-of <dispatch_id> ...` with explicit placement (Path A) or a fresh Path B terminal; retry does not inherit placement.
