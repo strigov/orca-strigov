@@ -1,7 +1,7 @@
 ---
 slug: todo-concurrency-csv-import
 created: 2026-09-01
-status: in-progress
+status: done
 orca_run: run_20196664d76c
 phases:
   - id: Ф1
@@ -10,7 +10,8 @@ phases:
     commits: "4fd3316.."
   - id: Ф2
     scope: "CSV-команда import PATH с транзакционной валидацией и слиянием по правилам fixture"
-    status: in-progress
+    status: done
+    commits: "f53f106.."
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
 ---
