@@ -16,7 +16,7 @@ Task: JSON persistence for `spikes/fixture/todo.py` (atomic write, `TODO_FILE` o
 ## Defects found
 
 1. **`bin/review-package` WORKTREE mode** — `git add --intent-to-add -A -- . ':(exclude).superpowers'` exits 1 under git 2.55 when the excluded directory is gitignored ("paths are ignored… use -f"); `set -e` aborted the script before the package was written. Fixed: the exclude pathspec is dropped from the `add -N` line only (gitignore already keeps `.superpowers` out; the diff/log commands keep the exclude).
-2. **Antigravity Path B did not start** — terminal created, `tui-idle` satisfied, `dispatch --inject` returned no confirmation, Orca flagged `agent_prompt_stalled`; the worker made no file changes. Spike-0 probe 4 used the same path successfully, so this is intermittent or timing-related. Open: reproduce by hand (`terminal create --command "agy …"` → `wait --for tui-idle` → `dispatch --inject` → `terminal read`) and check whether agy needs an extra Enter / a longer settle time after idle.
+2. **Antigravity Path B did not start** — root cause found by manual replay: `terminal wait --for tui-idle` returns `satisfied` ~1 s after `terminal create`, while the screen still shows only the shell prompt with the `agy …` command line; agy 1.1.23 then spends 10–20 s on login/experiment refresh (its log: start 17:57:09, first model request 18:03). The inject landed in that window and was lost; Orca failed the dispatch as `agent_prompt_stalled` 31 s after `dispatched_at`. Injecting into a visibly ready agy (banner on screen) completed a ping task in 17 s. Fix: `bin/wait-agent-ready <handle> agy` between `tui-idle` and `dispatch --inject` (now mandatory in `orca-recipes.md` Path B).
 
 ## Not exercised
 
