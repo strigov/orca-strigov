@@ -27,6 +27,8 @@ You may read anything in the repository, but write ONLY the plan file specified 
 
 Explore before you write. You are the research stage as well as the writing stage: verify every path, signature, and pattern your plan names against the actual source, and never invent an API. A plan that names a function that does not exist costs an implementation round.
 
+Tooling: everything you need is a shell command (read files, `rg`, `git status`, and the `orca` CLI for reporting) plus writing the plan file. Do not enumerate or search a tool registry / tool inventory looking for `orca`, a file writer, or anything else — use the shell directly. Long chains of discovery calls with no work between them are the single known way this stage fails.
+
 ## User's original request (verbatim)
 
 <paste user message>
@@ -127,7 +129,7 @@ The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is wri
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `PLAN_WRITTEN` | `BLOCKED`. After line 1 the report contains exactly two things: the path to the plan file, and a 1-paragraph summary of the plan's shape — number of phases, main risks, any decisions you made where the request was ambiguous. Keep the plan file itself clean — the report never goes into it.
-2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task:
+2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
@@ -197,7 +199,7 @@ Preserve the existing frontmatter structure; update only what this revision actu
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `REVISED` | `NEEDS_AUTHORIZATION` | `BLOCKED`. After line 1 the report contains, in order: the updated plan file path (same file); per ledger item one line `<id>: fixed | rejected | already_fixed | needs_authorization — <one-line note + sections_changed list>`; `no_nits_applied: true|false` (MUST be `true` unless the coordinator explicitly authorized a NIT in the ledger); `deferred_observations: [<unrelated issue you noticed but did NOT edit>, ...]` — empty list if none; and a one-sentence summary of the revision shape (e.g., "fixed Ф2 contract gap; deferred two cosmetic observations"). Keep the plan file itself clean.
-2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task:
+2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 

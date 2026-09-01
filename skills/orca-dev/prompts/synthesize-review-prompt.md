@@ -55,7 +55,7 @@ Only when outcome is accepted-at-escalation: the blocking items the user chose t
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly `SYNTHESIS_DONE docs/reviews/<slug>-<phase-id>.md` — the bare token followed by the path you wrote. If the file could not be written, line 1 is instead the bare token `BLOCKED`. After line 1: one sentence per section you filled or omitted. Touch NOTHING else in the repository.
-2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task:
+2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 

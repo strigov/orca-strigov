@@ -109,9 +109,13 @@ Before choosing the `strong` planning profile:
 
 ```bash
 pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null && echo bridge-up || echo bridge-down
+# optional, ~2 s: full self-check of the bridge (browser login, proxy, tunnel, connector)
+V=$(ls -d ~/.codex-chatgpt-web/versions/*-darwin-arm64 | tail -1); "$V/runtime/bun" "$V/app/cli.js" status | tail -1   # → "Doctor result: ready"
 ```
 
-Bridge down → `standard` profile without asking. Bridge up but the Pro attempt fails twice (see roles.md) → `standard`, tell the user in one line.
+Bridge down or doctor not `ready` → `standard` profile without asking. Bridge up but the Pro attempt fails twice (see roles.md; the retry is a fresh terminal) → `standard`, tell the user in one line.
+
+Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Library/Application Support/Codex Web GPT/logs/launcher.jsonl` — `browser.turn_ended` with `status`, and `broker claim received (... valid=false, retiredTurn=<trace>)` lines mark the token race from `roles.md`; `~/.codex-chatgpt-web/diagnostics/browser-turns/<trace>-*/` holds the per-checkpoint DOM captures.
 
 ## 8. Cheat-sheet: role → recipe
 

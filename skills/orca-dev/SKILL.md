@@ -133,7 +133,7 @@ Look for `docs/plans/*.md` (or the repo's plan dir) with top-level `status: in-p
 2. `orca orchestration run-create --objective "<slug>" --json`; keep the run id — you write it into the plan frontmatter as `orca_run:` at the plan commit.
 3. Fill `prompts/plan-writer-prompt.md` Mode A (user request verbatim, repo root, known constraints, `[REPORT_FILE]`), `task-create`, attach per recipes. Required frontmatter includes `verify:` — the writer lists the repo's lint/typecheck/test commands the gate will run.
 4. Wait. `PLAN_WRITTEN` → Step 2. `BLOCKED` → read the report's stated reason; ask the user if it is a requirements question, otherwise dispatch a `diagnosis` worker.
-5. Pro availability failure: one retry in the same terminal ("RETRY (attempt 2 of 2) …"), then close it and dispatch the standard writer (Opus max). Tell the user in one line. The planning profile flips to `standard` for the rest of this plan (reviewer = Sol from round 1).
+5. Pro availability failure: close the terminal and retry ONCE in a fresh Pro terminal (new task, "RETRY (attempt 2 of 2) …" — never the same terminal: its retained ChatGPT chat already holds the failure and the retry gives up immediately, see `roles.md`), then close that one too and dispatch the standard writer (Opus max). Tell the user in one line. The planning profile flips to `standard` for the rest of this plan (reviewer = Sol from round 1).
 
 Release the writer's terminal after `worker_done` — Mode B is always a fresh worker.
 
