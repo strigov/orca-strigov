@@ -63,19 +63,23 @@ phases:
   - id: Ф2
     scope: "..."
     status: pending
+    risk: none
     parallel_group: G1        # optional — see "Parallel groups" in decomposition rules
   - id: Ф3
     scope: "..."
     status: pending
+    risk: none
     parallel_group: G1
 ---
 ```
+`risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly.
+
 
 Body must have these H2 sections, in order:
 
 1. `## Goal` — what this enables, why now. Two short paragraphs max.
-1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block only on these criteria, stated user requirements, repo constraints, or high-materiality risks (`DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION`, `ACCEPTANCE_CRITERIA`).
-1b. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the coordinator authorizes scope expansion.
+1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan; every phase must trace to at least one of them.
+1b. `## Non-goals / deferred` — explicit exclusions: what this plan deliberately does not do.
 1c. `## Global Constraints` — the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. Every phase's requirements implicitly include this section. If the spec imposes none, write literally `None declared in the spec.` Do NOT merge into `## Contracts`: Contracts define interfaces between phases; Global Constraints are external requirements binding the whole plan.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility.
 3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that the implementer can build without guessing.
@@ -87,11 +91,11 @@ For sections 1a, 1b, and 1c, use this template body verbatim (replace bullets wi
 
 ## Acceptance criteria
 
-List 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block only on these criteria, stated user requirements, repo constraints, or high-materiality risks.
+List 3–7 externally observable criteria that define "done" for the whole plan.
 
 ## Non-goals / deferred
 
-List explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the coordinator authorizes scope expansion.
+List explicit exclusions.
 
 ## Global Constraints
 
@@ -124,7 +128,7 @@ The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is wri
 - **TDD-friendly**: tests should be writable before or alongside implementation, not as an afterthought.
 - **Single responsibility per file**: no god-files created.
 - **In existing codebases**: follow established patterns. Don't unilaterally restructure unrelated code.
-- **Acceptance-criteria gate**: the `## Acceptance criteria` section is the reviewer's sole authority for blocking on missing requirements; `## Non-goals / deferred` is the explicit defer-list. Together they bound the reviewer's mandate — any reviewer finding outside these sections must be classified `DEFER` or `REJECTED_BY_SCOPE`, never `MUST_FIX_NOW`, unless it clears the high-materiality bar.
+- **Acceptance criteria are the contract**: every phase traces to at least one criterion, and no criterion is unobservable from outside. Never write instructions addressed to reviewers into the plan — how reviewers weigh the plan is their template's business, not the plan's.
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
@@ -134,7 +138,7 @@ The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is wri
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`PLAN_WRITTEN`); `--outcome failed` when you could not (`BLOCKED`). Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 That's it. Do NOT commit — the coordinator handles git.
 ```
@@ -204,5 +208,5 @@ Preserve the existing frontmatter structure; update only what this revision actu
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`REVISED`); `--outcome failed` when you could not (`NEEDS_AUTHORIZATION`, `BLOCKED`). Never encode failure only in prose. If the token is `NEEDS_AUTHORIZATION`, the worker_done body must carry the `NEEDS_AUTHORIZATION: <ledger id> requires <extra change> because <reason>` line verbatim.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 ```

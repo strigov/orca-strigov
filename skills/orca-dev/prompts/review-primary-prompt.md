@@ -35,7 +35,7 @@ The verification gate already ran the repo's mechanical verification on this exa
 
 `<gate summary line: lint: … | typecheck: … | tests: …>`
 
-The tree is mechanically green (or the noted stages were skipped/inherited). Do not spend your round re-proving what the gate proved — target your verification (below) at what the gate cannot see: whether the tests verify the right behavior, missing cases, and anything the gate skipped.
+The gate summary above says what was mechanically checked and what was skipped or inherited — read it literally. Do not spend your round re-proving what the gate proved — target your verification (below) at what the gate cannot see: whether the tests verify the right behavior, missing cases, and anything the gate skipped.
 
 Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state. Forbidden commands: `git checkout`, `git switch`, `git restore`, `git reset`, `git stash`, `git clean`, `git commit`, `git merge`, `git rebase`. Running tests and linters is allowed (build artifacts are not a mutation); editing tracked files is not. This is sharper here than in an ordinary review: Step 4 reviews an UN-COMMITTED diff, so a `git checkout` or `git stash` from the reviewer destroys the implementation outright.
 
@@ -85,7 +85,7 @@ For fix rounds (round 2+ in Step 4), compare the diff against the AUTHORIZED_CHA
 
 Issues must cite `file:line` where the deviation is.
 
-If a requirement cannot be verified from this diff alone (it lives in unchanged code or spans phases), do NOT broaden your search — report it as a `CANNOT_VERIFY:` item in the output. Its `CHECK:` must be executable without judgment: one concrete `grep`/`git` command or a `Read <file:line>`, with the exact expected result in `EXPECT:`. `CANNOT_VERIFY` items do not affect the line-1 verdict token.
+If a requirement cannot be verified from this diff alone (it lives in unchanged code or spans phases), do NOT broaden your search — report it as a `CANNOT_VERIFY:` item in the output. Its `CHECK:` must be executable without judgment: one concrete shell command (`grep`, `git`, `sed -n '<n>,<m>p' <file>`) — never a tool name — with the exact expected result in `EXPECT:`. `CANNOT_VERIFY` items do not affect the line-1 verdict token.
 
 ### 4b. Code quality (always — even when 4a found issues)
 
@@ -120,7 +120,7 @@ Every round: warnings or other noise in the implementer's reported test output a
 
 ```
 CANNOT_VERIFY:
-- CANNOT_VERIFY: <requirement> | CHECK: <one concrete grep/git command or Read <file:line>> | EXPECT: <expected result>
+- CANNOT_VERIFY: <requirement> | CHECK: <one concrete shell command> | EXPECT: <expected result>
 - ...
 
 PLAN_MANDATED:
@@ -152,7 +152,7 @@ Verification run:
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`REVIEW_OK`, `REVIEW_BLOCKING` — both mean the review itself succeeded); `--outcome failed` when you could not produce a review at all. Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 ## Follow-up review delta
 
@@ -161,7 +161,7 @@ For round 2+ in Step 4, first verify each ACCEPTED ledger item from the AUTHORIZ
 ## Discipline
 
 - Read the diff yourself. Do not trust the implementer's self-summary — a stated rationale never downgrades a finding's severity.
-- When unsure, classify by impact. Block only if the impact is material and current. The materiality classes and the high-materiality bar replace earlier heuristics that defaulted ambiguous findings to BLOCKING — do not fall back on them.
+- When unsure, classify by impact. Block only if the impact is material and current.
 - Do not rewrite the reviewer checklist into the report — stick to findings.
 - Do not fix code yourself. You are reviewing, not implementing.
 ```

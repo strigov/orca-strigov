@@ -29,13 +29,13 @@ You are the final whole-branch review stage of orca-dev (Step 5). You are a fres
 - Review package (REQUIRED): `[DIFF_FILE]` — the whole-branch diff MERGE_BASE..HEAD written by `bin/review-package`: commit list + stat + full diff
 - Change ledger: `<repo-root>/docs/plans/<slug>.ledger.json` — accumulated findings from all phase-review rounds; you triage its open DEFER / NIT items below
 
-Read the plan file and the ledger first. Then read `[DIFF_FILE]` in ONE read call — it contains the commit list, a stat summary, and the full diff with surrounding context. The diff's context lines ARE the changed files: do not read a changed file separately unless a hunk you must judge is cut off mid-function — and say so in your report. Do not re-derive the diff with git commands. If the package file is missing, fetch the diff yourself: `git log --oneline <merge-base-sha>..<head-sha>`, `git diff --stat <merge-base-sha>..<head-sha>`, `git diff -U10 <merge-base-sha>..<head-sha>`.
+Read the plan file and the ledger first. Then read `[DIFF_FILE]` in ONE read call — it contains the commit list, a stat summary, and the full diff with surrounding context. The diff's context lines ARE the changed files: do not read a changed file separately unless a hunk you must judge is cut off mid-function — and say so in your report. If the package file is missing, fetch the diff yourself: `git log --oneline <merge-base-sha>..<head-sha>`, `git diff --stat <merge-base-sha>..<head-sha>`, `git diff -U10 <merge-base-sha>..<head-sha>`.
 
 Unlike a phase gate, inspecting code OUTSIDE the diff is legitimate here — that is how you verify integration and architecture — but tie each excursion to a numbered check below, and name what you checked in your report.
 
 ## Read-only review
 
-Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Use tools like `git show`, `git diff`, and `git log` to inspect history. If you need a working copy of a different revision, check it out into a separate temporary directory (e.g. `git worktree add /tmp/review-[SHA] [SHA]`) — never move HEAD on this checkout.
+Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Use tools like `git show`, `git diff`, and `git log` to inspect history. If you need a working copy of a different revision, check it out into a separate temporary directory (e.g. `git worktree add <tmpdir> <sha>`) — never move HEAD on this checkout.
 
 ## Merge-level checks (run ALL, in order — do not stop at the first failure)
 
@@ -95,7 +95,7 @@ Ready to merge: <yes | no> — <1-2 sentence technical reasoning>
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`REVIEW_OK`, `REVIEW_BLOCKING` — both mean the review itself succeeded); `--outcome failed` when you could not produce a review at all. Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 ## Round 2 (re-review after the fix wave)
 

@@ -54,11 +54,11 @@ Only when outcome is accepted-at-escalation: the blocking items the user chose t
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly `SYNTHESIS_DONE docs/reviews/<slug>-<phase-id>.md` — the bare token followed by the path you wrote. If the file could not be written, line 1 is instead the bare token `BLOCKED`. After line 1: one sentence per section you filled or omitted. Touch NOTHING else in the repository.
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly the bare token `SYNTHESIS_DONE`; line 2 is the path you wrote (`docs/reviews/<slug>-<phase-id>.md`). If the file could not be written, line 1 is instead the bare token `BLOCKED` and line 2 the reason. After line 1: one sentence per section you filled or omitted. Touch NOTHING else in the repository.
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`SYNTHESIS_DONE`); `--outcome failed` when you could not (`BLOCKED` — the review record could not be written). Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 ```

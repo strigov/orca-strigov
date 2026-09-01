@@ -27,12 +27,22 @@
 # Default OUTFILE (range mode only):
 #   <repo-root>/.superpowers/sdd/review-<base7>..<head7>.diff
 # (named per range, so a re-review after fixes gets a distinct fresh file).
+# That default lands in the SHARED sdd root, not in a per-plan workspace;
+# callers should pass OUTFILE (e.g. "$(sdd-workspace PLAN)/review-N.diff").
+#
+# An empty package (0 commits in range mode, or 0 diff hunks in either mode)
+# is reported as `EMPTY <path>: ...` on stdout with exit 1, so a reviewer is
+# never dispatched on nothing.
+# In WORKTREE mode a WARN line goes to stderr when more than 20 untracked
+# files or more than 1 MB of untracked content are included (a stray build
+# output or vendored tree would bloat the package); behavior is unchanged.
 set -euo pipefail
 
 usage() {
   echo "usage: review-package BASE HEAD [OUTFILE]" >&2
   echo "       review-package BASE WORKTREE OUTFILE" >&2
   echo "       (HEAD must not be literally 'WORKTREE' — pass that ref's SHA instead)" >&2
+  echo "       (pass OUTFILE: the default goes to the shared .superpowers/sdd root, not a plan workspace)" >&2
   exit 2
 }
 
@@ -85,6 +95,14 @@ if [ "$head" = "WORKTREE" ]; then
   # adds it, while an explicit exclude pathspec that matches an ignored
   # directory makes git (>= 2.55) print "paths are ignored" and exit 1,
   # which kills the script under set -e before the package is written.
+  ucount=0; ubytes=0
+  while IFS= read -r -d '' f; do
+    ucount=$((ucount+1))
+    [ -f "$f" ] && ubytes=$((ubytes + $(wc -c < "$f")))
+  done < <(git ls-files --others --exclude-standard -z)
+  if [ "$ucount" -gt 20 ] || [ "$ubytes" -gt 1048576 ]; then
+    echo "WARN: including $ucount untracked file(s), $ubytes bytes, in the review package (check for build output / vendored trees)" >&2
+  fi
   GIT_INDEX_FILE="$tmpidx" git add --intent-to-add -A -- .
   {
     echo "# Review package: ${base}..WORKTREE"
@@ -119,5 +137,11 @@ fi
 # bash 3.2 does not trip `set -e` on a failed compound-command redirect —
 # verify the package actually landed before printing the success line.
 [ -s "$out" ] || { echo "failed to write $out" >&2; exit 1; }
+
+hunks=$(grep -c '^diff --git' "$out" || true)
+if { [ "$head" != "WORKTREE" ] && [ "$commits" -eq 0 ]; } || [ "$hunks" -eq 0 ]; then
+  echo "EMPTY ${out}: ${commits} commit(s), ${hunks} hunk(s)"
+  exit 1
+fi
 
 echo "wrote ${out}: ${commits} commit(s), $(wc -c < "$out" | tr -d ' ') bytes"

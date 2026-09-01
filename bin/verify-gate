@@ -6,14 +6,21 @@
 # commit (in a throwaway worktree) to classify the failure as inherited or new.
 #
 # Usage: verify-gate <plan-file> <base-sha> [repo-root]
-# Exit:  0 = GATE_OK (all green, or only inherited failures)
+# Exit:  0 = GATE_OK (all green, or green plus inherited failures)
 #        1 = GATE_FAIL (a command fails at HEAD/worktree and passes at BASE)
 #        2 = NO_COMMANDS (frontmatter has no `verify:` list) → dispatch the gate worker
-#        3 = usage error
-#        4 = NEEDS_JUDGMENT (fails at HEAD and at BASE, but the phase's changed
-#            paths appear in the command or its output — could be a new test that
-#            did not exist at BASE, or an environment gap in the BASE worktree;
-#            the script cannot tell) → dispatch the gate worker with this output
+#        3 = usage error, python3 missing, or unparsable `verify:` item
+#        4 = NEEDS_JUDGMENT — the script cannot honestly call the gate green:
+#            - a command fails at HEAD and at BASE, but the phase's changed paths
+#              appear in the command or its output (new test? environment gap?)
+#            - a command is not runnable at HEAD (rc 126/127, "command not
+#              found", "<cmd>: No such file or directory" / "<cmd>: not found"):
+#              a missing tool is never a test result, so it is never INHERITED
+#            - zero commands passed: a gate where nothing is green is never
+#              GATE_OK, even if every failure looks inherited
+#            - an INHERITED classification is unreliable because dependency
+#              directories are shared with the BASE worktree (see below)
+#            → dispatch the gate worker with this output
 #
 # A base failure counts as INHERITED only when (a) none of the phase's changed
 # paths (git diff --name-only BASE + untracked) appear in the command or in its
@@ -21,10 +28,25 @@
 # at HEAD and at BASE. A base failure with a different signature is
 # NEEDS_JUDGMENT — typically the BASE worktree lacks something the environment
 # provides at HEAD, and the script must not call that "inherited".
-# If the BASE worktree cannot be created (bad sha, no commits), the command is
-# reported as FAIL: an unverifiable base never turns a red command green.
+# If the BASE worktree cannot be created or entered (bad sha, no commits), the
+# command is reported as FAIL: an unverifiable base never turns a red command
+# green.
 # Dependency directories (node_modules, .venv, venv) present in the repo root are
-# symlinked into the BASE worktree so the two runs share one environment.
+# symlinked into the BASE worktree so the two runs share one environment. That
+# sharing is a known hole: an editable install / package link inside .venv or
+# node_modules resolves to the HEAD sources, so the "BASE run" may execute HEAD
+# code. Rule: when a dependency directory was symlinked AND any changed path
+# lies outside the test directories (test/, tests/, __tests__/, spec/, specs/,
+# test_*.py, *_test.py, *.test.*, *.spec.*, conftest.py), i.e. sources changed,
+# every would-be INHERITED becomes NEEDS_JUDGMENT with the reason
+# "inherited classification unreliable: shared .venv/node_modules may execute
+# HEAD sources".
+#
+# `verify:` accepts a block list (items may be unindented, a `# comment` may
+# follow the key or an item), a flow list `[a, "b"]`, and block scalars
+# (`- |` keeps newlines, `- >` joins the lines with spaces). Commands never
+# inherit the gate's stdin (</dev/null), so `cat`-like commands cannot swallow
+# the remaining list.
 #
 # stdout, line 1: GATE_OK | GATE_FAIL | NO_COMMANDS | NEEDS_JUDGMENT
 # stdout, line 2: summary in the protocol's shape:
@@ -35,40 +57,87 @@ set -u
 plan="${1:-}"; base="${2:-}"; root="${3:-$(pwd)}"
 [ -z "$plan" ] || [ -z "$base" ] && { echo "usage: verify-gate <plan-file> <base-sha> [repo-root]" >&2; exit 3; }
 [ -f "$plan" ] || { echo "plan file not found: $plan" >&2; exit 3; }
-cd "$root" || exit 3
+command -v python3 >/dev/null 2>&1 || { echo "verify-gate: python3 is required (frontmatter parsing) but not found in PATH" >&2; exit 3; }
+case "$plan" in /*) ;; *) plan="$(pwd)/$plan" ;; esac   # resolve before cd into [repo-root]
+cd "$root" || { echo "verify-gate: cannot cd to repo root: $root" >&2; exit 3; }
 
 # --- extract `verify:` list from frontmatter (block or flow style) -------------
 # (function + heredoc, not heredoc inside $(...): macOS bash 3.2 cannot parse that)
+# Writes the commands NUL-separated to $2 (a literal block scalar may contain
+# newlines). Exits 3 on an item the script refuses to guess about.
 extract_verify() {
-python3 - "$1" <<'PY'
+python3 - "$1" "$2" <<'PY'
 import sys,re
-text=open(sys.argv[1],encoding='utf-8').read()
-m=re.match(r'^---\n(.*?)\n---\n',text,re.S)
+src,dst=sys.argv[1],sys.argv[2]
+text=open(src,encoding='utf-8').read()
+m=re.match(r'^---\r?\n(.*?)\r?\n---(?:\r?\n|$)',text,re.S)
 if not m: sys.exit(0)
-fm=m.group(1)
-out=[]
-block=re.search(r'^verify:\s*\n((?:[ \t]+-[^\n]*\n?)+)',fm,re.M)
-if block:
-    for line in block.group(1).splitlines():
-        line=line.strip()
-        if line.startswith('-'):
-            v=line[1:].strip()
-            if v.startswith('"') and v.endswith('"'): v=v[1:-1].replace('\\"','"').replace('\\\\','\\')
-            elif v.startswith("'") and v.endswith("'"): v=v[1:-1].replace("''","'")
-            if v: out.append(v)
-else:
-    flow=re.search(r'^verify:\s*\[(.*)\]\s*$',fm,re.M)
-    if flow:
-        for v in re.findall(r'"([^"]*)"|\'([^\']*)\'|([^,\[\]]+)',flow.group(1)):
-            v=next(x for x in v if x is not None and x!='') if any(v) else ''
-            v=v.strip()
-            if v: out.append(v)
-print('\n'.join(out))
+lines=m.group(1).splitlines()
+def indent(s): return len(s)-len(s.lstrip(' \t'))
+def strip_comment(v):  # drop a trailing " # ..." that is outside quotes
+    q=None; i=0
+    while i<len(v):
+        ch=v[i]
+        if q:
+            if q=='"' and ch=='\\': i+=2; continue
+            if ch==q: q=None
+        elif ch in ('"',"'"): q=ch
+        elif ch=='#' and (i==0 or v[i-1] in ' \t'): return v[:i].rstrip()
+        i+=1
+    return v.rstrip()
+def unquote(v):
+    if len(v)>=2 and v[0]=='"' and v[-1]=='"': return v[1:-1].replace('\\"','"').replace('\\\\','\\')
+    if len(v)>=2 and v[0]=="'" and v[-1]=="'": return v[1:-1].replace("''","'")
+    return v
+def die(msg): sys.stderr.write('verify-gate: '+msg+'\n'); sys.exit(3)
+out=[]; kind=None; k=0; mf=None
+for k,l in enumerate(lines):
+    if re.match(r'^verify:[ \t]*(#.*)?$',l): kind='block'; break
+    mf=re.match(r'^verify:[ \t]*\[(.*)\][ \t]*(#.*)?$',l)
+    if mf: kind='flow'; break
+if kind=='flow':
+    for g in re.findall(r'\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\[\]]+))',mf.group(1)):
+        v=next((x for x in g if x),'').strip()
+        if v: out.append(v)
+elif kind=='block':
+    i=k+1; n=len(lines)
+    while i<n:
+        l=lines[i]
+        if l.strip()=='' or l.lstrip().startswith('#'): i+=1; continue
+        md=re.match(r'^([ \t]*)-(?:[ \t]+(.*))?$',l)
+        if not md: break                      # next key (or anything that is not an item)
+        ind=len(md.group(1)); v=(md.group(2) or '').strip(); i+=1
+        ms=re.match(r'^([>|])[-+]?[0-9]*[ \t]*(#.*)?$',v)
+        if ms:                                # block scalar: body = following more-indented lines
+            body=[]
+            while i<n:
+                b=lines[i]
+                if b.strip()=='': body.append(''); i+=1; continue
+                if indent(b)<=ind: break
+                body.append(b); i+=1
+            while body and body[-1]=='': body.pop()
+            if not body: die('empty block scalar (%s) in verify: item %d' % (ms.group(1),len(out)+1))
+            bi=min(indent(b) for b in body if b.strip())
+            body=[b[bi:] if b.strip() else '' for b in body]
+            v='\n'.join(body) if ms.group(1)=='|' else ' '.join(b.strip() for b in body if b.strip())
+        else:                                 # plain/quoted scalar, possibly continued on indented lines
+            while i<n:
+                b=lines[i]
+                if b.strip()=='' or re.match(r'^[ \t]*-([ \t]|$)',b) or indent(b)<=ind: break
+                v=v+' '+b.strip(); i+=1
+            v=unquote(strip_comment(v))
+        v=v.strip()
+        if v: out.append(v)
+with open(dst,'w',encoding='utf-8') as fh:
+    for v in out: fh.write(v+'\0')
 PY
 }
-cmds=$(extract_verify "$plan")
-if [ -z "$cmds" ]; then
-  echo "NO_COMMANDS"; echo "verify: 0 cmd(s) | passed: 0 | failed: 0 | inherited: 0"; exit 2
+cmdfile=$(mktemp "${TMPDIR:-/tmp}/verify-gate-cmds.XXXXXX") || exit 3
+trap 'rm -f "$cmdfile"' EXIT
+extract_verify "$plan" "$cmdfile"; xrc=$?
+[ $xrc -eq 0 ] || { echo "verify-gate: could not parse verify: list of $plan (python exit $xrc)" >&2; exit 3; }
+if [ ! -s "$cmdfile" ]; then
+  echo "NO_COMMANDS"; echo "verify: 0 cmd(s) | passed: 0 | failed: 0 | inherited: 0 | judgment: 0"; exit 2
 fi
 
 n=0; p=0; f=0; i=0; j=0; status=0; report=""
@@ -83,47 +152,106 @@ mentions_changed() {  # $1 = text ; true if any changed path (or its basename) a
   done <<< "$changed"
   return 1
 }
-base_out=""   # stdout+stderr of the last run_at_base call
-run_at_base() {  # $1 = command ; returns the command's exit code at BASE (125 = no base worktree)
+is_test_path() {  # $1 = repo-relative path ; true if it lives in a test dir or is a test file
+  case "/$1" in */test/*|*/tests/*|*/__tests__/*|*/spec/*|*/specs/*) return 0;; esac
+  case "$(basename "$1")" in test_*.py|*_test.py|*_test.go|*.test.*|*.spec.*|conftest.py) return 0;; esac
+  return 1
+}
+source_changed=0   # any changed path outside the test dirs
+while IFS= read -r pth; do
+  [ -z "$pth" ] && continue
+  is_test_path "$pth" || { source_changed=1; break; }
+done <<< "$changed"
+missing_tool() {  # $1 = rc, $2 = output, $3 = command ; true if the command itself could not run
+  [ "$1" -eq 126 ] || [ "$1" -eq 127 ] && return 0
+  local cmd word; cmd="${3#"${3%%[![:space:]]*}"}"; word="${cmd%%[[:space:]]*}"
+  case "$2" in
+    *"command not found"*) return 0;;
+    *"$word: No such file or directory"*|*"$word: not found"*) return 0;;
+  esac
+  return 1
+}
+deps_linked=0  # set when a dependency dir was symlinked into a BASE worktree
+base_out=""    # stdout+stderr of the last run_at_base call
+run_at_base() {  # $1 = command ; returns the command's exit code at BASE (125 = no usable base worktree)
   local wt; wt=$(mktemp -d "${TMPDIR:-/tmp}/verify-gate-base.XXXXXX")
   base_out=""
-  git worktree add -q --detach "$wt" "$base" 2>/dev/null || { rm -rf "$wt"; return 125; }
+  git worktree add -q --detach "$wt" "$base" 2>/dev/null || {
+    echo "verify-gate: cannot create a worktree for base ${base:0:7}" >&2; rm -rf "$wt"; return 125; }
   # share the environment: dependency dirs are not part of the commit
   local dep
   for dep in node_modules .venv venv; do
-    [ -e "$root/$dep" ] && [ ! -e "$wt/$dep" ] && ln -s "$root/$dep" "$wt/$dep"
+    if [ -e "$root/$dep" ] && [ ! -e "$wt/$dep" ]; then ln -s "$root/$dep" "$wt/$dep" && deps_linked=1; fi
   done
-  base_out=$( cd "$wt" && bash -c "$1" 2>&1 ); local rc=$?
+  if ! ( cd "$wt" ) 2>/dev/null; then
+    echo "verify-gate: cannot enter base worktree $wt" >&2
+    git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"; return 125
+  fi
+  base_out=$( cd "$wt" && bash -c "$1" </dev/null 2>&1 ); local rc=$?
   git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"
   return $rc
 }
-signature() {  # $1 = output ; last 8 non-empty lines, ANSI/paths/numbers normalized
-  printf '%s\n' "$1" | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$root#ROOT#g" -e 's#/[^ ]*verify-gate-base\.[A-Za-z0-9]*#ROOT#g' -e 's/[0-9]\+\(\.[0-9]\+\)\?s\b/Ns/g' -e 's/[0-9]\{2,\}/N/g' | sed '/^[[:space:]]*$/d' | tail -8
+signature() {  # $1 = output ; last 8 non-empty lines, ANSI/paths/durations/numbers normalized
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/verify-gate-sig.XXXXXX") || return 1
+  printf '%s\n' "$1" > "$tmpf"
+  sig_normalize "$root" "$tmpf"
+  rm -f "$tmpf"
 }
-while IFS= read -r c; do
+sig_normalize() {  # $1 = root, $2 = file with the output → stdout ; counts on test-runner
+                   # summary lines are kept verbatim ("12 failed" != "11 failed")
+python3 - "$1" "$2" <<'PY'
+import sys,re
+root=sys.argv[1]
+esc=re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+summary=re.compile(r'\b(passed|failed|errors?|skipped)\b')
+out=[]
+for l in open(sys.argv[2],encoding='utf-8',errors='replace').read().splitlines():
+    l=esc.sub('',l).replace(root,'ROOT')
+    l=re.sub(r'/[^ ]*verify-gate-base\.[A-Za-z0-9]*','ROOT',l)
+    l=re.sub(r'[0-9]+(\.[0-9]+)?s\b','Ns',l)          # durations vary run to run
+    if not summary.search(l): l=re.sub(r'[0-9]{2,}','N',l)
+    if l.strip(): out.append(l)
+sys.stdout.write('\n'.join(out[-8:])+'\n')
+PY
+}
+while IFS= read -r -d '' c || [ -n "$c" ]; do
   [ -z "$c" ] && continue
-  n=$((n+1))
-  out=$(bash -c "$c" 2>&1); rc=$?
-  if [ $rc -eq 0 ]; then p=$((p+1)); report+="PASS $c"$'\n'; continue; fi
+  n=$((n+1)); label=$(printf '%s' "$c" | tr '\n' ' ')
+  out=$(bash -c "$c" </dev/null 2>&1); rc=$?
+  if [ $rc -eq 0 ]; then p=$((p+1)); report+="PASS $label"$'\n'; continue; fi
   tail_out=$(printf '%s\n' "$out" | tail -40 | sed 's/^/    /')
+  if missing_tool "$rc" "$out" "$c"; then
+    j=$((j+1)); [ $status -eq 0 ] && status=4
+    report+="JUDGMENT $label  (not runnable at HEAD: rc $rc / command not found — a missing tool or bad path is not a test result)"$'\n'"$tail_out"$'\n'
+    continue
+  fi
   run_at_base "$c"; brc=$?
   if [ $brc -eq 0 ]; then
     f=$((f+1)); status=1
-    report+="FAIL $c"$'\n'"$tail_out"$'\n'
+    report+="FAIL $label"$'\n'"$tail_out"$'\n'
   elif [ $brc -eq 125 ]; then
     f=$((f+1)); status=1
-    report+="FAIL $c  (base ${base:0:7} could not be checked out — treated as a new failure)"$'\n'"$tail_out"$'\n'
+    report+="FAIL $label  (base ${base:0:7} could not be checked out — treated as a new failure)"$'\n'"$tail_out"$'\n'
   elif mentions_changed "$c"$'\n'"$(printf '%s\n' "$out" | tail -200)"; then
     j=$((j+1)); [ $status -eq 0 ] && status=4
-    report+="JUDGMENT $c  (fails at base ${base:0:7} too, but touches paths changed by this phase)"$'\n'"$tail_out"$'\n'
+    report+="JUDGMENT $label  (fails at base ${base:0:7} too, but touches paths changed by this phase)"$'\n'"$tail_out"$'\n'
   elif [ "$(signature "$out")" = "$(signature "$base_out")" ]; then
-    i=$((i+1)); report+="INHERITED $c  (same failure at base ${base:0:7}; no changed path involved)"$'\n'
+    if [ $deps_linked -eq 1 ] && [ $source_changed -eq 1 ]; then
+      j=$((j+1)); [ $status -eq 0 ] && status=4
+      report+="JUDGMENT $label  (same failure at base ${base:0:7}; inherited classification unreliable: shared .venv/node_modules may execute HEAD sources)"$'\n'"$tail_out"$'\n'
+    else
+      i=$((i+1)); report+="INHERITED $label  (same failure at base ${base:0:7}; no changed path involved)"$'\n'
+    fi
   else
     j=$((j+1)); [ $status -eq 0 ] && status=4
-    report+="JUDGMENT $c  (fails at base ${base:0:7} too, but with a different failure — environment gap or unrelated cause)"$'\n'"$tail_out"$'\n'"    --- at base:"$'\n'"$(printf '%s\n' "$base_out" | tail -10 | sed 's/^/    /')"$'\n'
+    report+="JUDGMENT $label  (fails at base ${base:0:7} too, but with a different failure — environment gap or unrelated cause)"$'\n'"$tail_out"$'\n'"    --- at base:"$'\n'"$(printf '%s\n' "$base_out" | tail -10 | sed 's/^/    /')"$'\n'
   fi
-done <<< "$cmds"
+done < "$cmdfile"
 
+if [ $status -eq 0 ] && [ $p -eq 0 ]; then
+  status=4
+  report="NEEDS_JUDGMENT: 0 commands passed ($i inherited failure(s), nothing green) — an all-inherited gate is not GATE_OK"$'\n'"$report"
+fi
 case $status in 0) echo "GATE_OK";; 1) echo "GATE_FAIL";; 4) echo "NEEDS_JUDGMENT";; esac
 echo "verify: $n cmd(s) | passed: $p | failed: $f | inherited: $i | judgment: $j"
 printf '%s' "$report"
