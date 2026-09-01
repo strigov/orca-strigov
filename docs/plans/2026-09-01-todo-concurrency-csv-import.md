@@ -6,10 +6,11 @@ orca_run: run_20196664d76c
 phases:
   - id: Ф1
     scope: "Межпроцессная блокировка всех read-modify-write операций todo и стресс-проверка 8×25"
-    status: in-progress
+    status: done
+    commits: "4fd3316.."
   - id: Ф2
     scope: "CSV-команда import PATH с транзакционной валидацией и слиянием по правилам fixture"
-    status: pending
+    status: in-progress
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
 ---
