@@ -56,10 +56,14 @@ def _save_items(path: Path, items: list[dict]) -> None:
             except FileNotFoundError:
                 pass
 
+def _next_id(items: list[dict]) -> int:
+    return max((item["id"] for item in items), default=0) + 1
+
+
 def add(text: str) -> dict:
     path = _storage_path()
     items = _load_items(path)
-    item = {"id": len(items) + 1, "text": text, "done": False}
+    item = {"id": _next_id(items), "text": text, "done": False}
     items.append(item)
     _save_items(path, items)
     return item
@@ -76,6 +80,28 @@ def complete(item_id: int) -> dict:
     raise KeyError(item_id)
 
 
+def remove(item_id: int) -> dict:
+    path = _storage_path()
+    items = _load_items(path)
+    for idx, item in enumerate(items):
+        if item["id"] == item_id:
+            del items[idx]
+            _save_items(path, items)
+            return item
+    raise KeyError(item_id)
+
+
+def edit(item_id: int, text: str) -> dict:
+    path = _storage_path()
+    items = _load_items(path)
+    for item in items:
+        if item["id"] == item_id:
+            item["text"] = text
+            _save_items(path, items)
+            return item
+    raise KeyError(item_id)
+
+
 def list_items(show_done: bool = True) -> list[dict]:
     items = _load_items(_storage_path())
     return [i for i in items if show_done or not i["done"]]
@@ -86,12 +112,20 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("add").add_argument("text")
     sub.add_parser("done").add_argument("id", type=int)
+    sub.add_parser("remove").add_argument("id", type=int)
+    edit_parser = sub.add_parser("edit")
+    edit_parser.add_argument("id", type=int)
+    edit_parser.add_argument("text")
     sub.add_parser("list").add_argument("--open", action="store_true")
     ns = p.parse_args(argv)
     if ns.cmd == "add":
         print(add(ns.text))
     elif ns.cmd == "done":
         print(complete(ns.id))
+    elif ns.cmd == "remove":
+        print(remove(ns.id))
+    elif ns.cmd == "edit":
+        print(edit(ns.id, ns.text))
     else:
         for i in list_items(show_done=not ns.open):
             print(i)
