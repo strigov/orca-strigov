@@ -102,7 +102,7 @@ echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 3. The user's request verbatim where the template asks for it.
 4. Self-contained: the worker sees nothing from your session.
 5. Role, agent, model, effort taken from `roles.md`; **family rule** checked for reviewer dispatches (writer's family ≠ reviewer's family). Never `ultra`.
-6. Path A vs Path B chosen per `orca-recipes.md` (Antigravity is always Path B; Codex is Path B until hooks are trusted).
+6. Path A vs Path B chosen per `orca-recipes.md` (Antigravity is always Path B — implementer, gate, synthesizer, quickfix and integration-check alike, with `bin/wait-agent-ready` before `dispatch --inject`; `worker-start --agent antigravity` ends in `agent_prompt_stalled` (observed 2026-09-01 on the synthesizer). Codex is Path B until hooks are trusted).
 7. Round 2+: ledger path present and open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
 8. Review dispatches (4.1 / 4.2 / 5 / plan review): this round's freshly generated package path as `[DIFF_FILE]`, the implementer's report as `[IMPL_REPORT_FILE]` (read-only input), `[GLOBAL_CONSTRAINTS]` copied verbatim from the plan.
 9. Anti-coaching scan on every reviewer spec: delete any sentence containing "do not flag", "don't treat", "not a defect", "at most Minor", "Minor at most", "the plan chose", "ignore the". Referencing settled ledger ids (`REJECTED_BY_SCOPE` / `DEFER`) is the only allowed form.
@@ -141,7 +141,7 @@ Release the writer's terminal after `worker_done` — Mode B is always a fresh w
 
 Reviewer per profile and round (`roles.md`): strong r1 = Fable xhigh; everything else = Sol max. FRESH worker every round; read-only; never re-inject into a previous reviewer's terminal.
 
-- `APPROVED` → commit the plan file alone (`docs(plans): add <slug>`, plan file staged by name, `orca_run:` already in frontmatter, Co-Authored-By trailer naming the coordinator model, no push). → Step 2.5.
+- `APPROVED` → **branch check first**: if `git branch --show-current` is `main` / `master`, run `git checkout -b feat/<slug>` before anything is committed — committing to `main` requires the user's explicit words in this session (observed 2026-09-01: a plan landed on `main` without consent). Then commit the plan file alone (`docs(plans): add <slug>`, plan file staged by name, `orca_run:` already in frontmatter, Co-Authored-By trailer naming the coordinator model, no push). → Step 2.5.
 - `CHANGES_REQUESTED` → ledger sequence:
   (a) triage each BLOCKING item's `class:` → ledger `decision` (`MUST_FIX_NOW` / `REGRESSION_FROM_AUTHORIZED_FIX` → `ACCEPTED` or `PARTIALLY_ACCEPTED`; `DEFER` / `NIT` / `REJECTED_BY_SCOPE` → same-named decisions). `plan-mandated` items → `ESCALATED_TO_HUMAN`, shown to the user with the plan text, never fixed without an answer.
   (b) write/update the ledger (ids `P<round>-B<n>`, reviewer `plan-review`); first update prior entries' `status`.
@@ -202,7 +202,7 @@ Never re-run the same model on the same input unchanged.
 
 ### Step 4.5 — synthesis (only after 2+ rounds, or accept-at-escalation)
 
-`synthesizer` worker (Flash) with `prompts/synthesize-review-prompt.md`: ledger, plan, phase, base, final 4.1/4.2 reports, outcome. Writes `docs/reviews/<slug>-<phase>.md`; staged with the phase commit.
+`synthesizer` worker (Flash, Path B + `wait-agent-ready` like every Antigravity worker) with `prompts/synthesize-review-prompt.md`: ledger, plan, phase, base, final 4.1/4.2 reports, outcome. Writes `docs/reviews/<slug>-<phase>.md`; staged with the phase commit.
 
 ### Step 5 — final whole-branch review (once per plan, cap 2)
 
@@ -227,7 +227,7 @@ Steps 1–2 cover all phases up front; Steps 3–4 run per phase; after a phase'
 Two pending phases sharing `parallel_group` run concurrently. Preconditions: plan approved, clean `git status`, no live write task.
 
 1. Flip both to `in-progress`, commit `docs(plans): start parallel group <G>`.
-2. Per phase: `orca orchestration worker-start --task <t> --worktree new-child --name <slug>-<phase> --setup run --agent … ` (Path A) or `orca worktree create --name <slug>-<phase> --setup run --json` + Path B in that worktree. Read the worktree id from the receipt; all later `"$WS"` / `"$RPKG"` / `"$GATE"` calls for the track run with cwd inside it; per-track ledger lives inside the worktree.
+2. Per phase: `orca orchestration worker-start --task <t> --worktree new-child --name <slug>-<phase> --setup run --agent … ` (Path A) or `orca worktree create --name <slug>-<phase> --setup run --json` + Path B in that worktree. Read the worktree id from the receipt, then **pre-trust the new path** before the first dispatch into it — `install.sh --repo <track-path>` (recipes §3; a parent directory's trust does not cover a child worktree, and Claude/Antigravity workers otherwise stall on the trust dialog and burn a dispatch attempt); all later `"$WS"` / `"$RPKG"` / `"$GATE"` calls for the track run with cwd inside it; per-track ledger lives inside the worktree.
 3. Steps 3 → 3.5 → 4 per track independently; commit per track inside its worktree.
 4. Merge sequentially in the main tree: `git merge --no-ff <track-branch>` twice; a conflict falsifies the plan's independence claim → abort, escalate.
 5. Integration check: `"$GATE" <plan-file> <pre-merge-sha>` on the merged tree → `GATE_FAIL` → one fresh implementer repair (cap 2) → one 4.1 round on the repair diff → commit `fix: repair integration of group <G>`.
