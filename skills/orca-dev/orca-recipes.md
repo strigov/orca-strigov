@@ -134,3 +134,15 @@ Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Librar
 | plan-reviewer (Sol) / review-control | A (hooks trusted) or B | `--agent codex --model gpt-5.6-sol --effort max|xhigh` |
 | implementer (Flash) / gate / synthesizer / quickfix | B | `agy --model gemini-3.7-flash-high --effort high --dangerously-skip-permissions` |
 | implementer fallback (Luna) / escalation (Terra) | A or B | `--agent codex --model gpt-5.6-luna|gpt-5.6-terra --effort max` |
+
+## 9. Windows (native, no WSL)
+
+Installed with `install.ps1` (see `docs/install-windows.md`). Differences from macOS that the coordinator must apply:
+
+- Your shell is PowerShell. The three workspace scripts are bash: run them as `bash "$env:ORCA_DEV_HOME/bin/<script>" …` (Git for Windows `bash.exe`, not the WSL launcher in `System32`). Paths you pass to them may use forward slashes; paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
+- `orca orchestration check --types "worker_done,escalation,question"` — quote comma-separated lists in PowerShell.
+- Path A works unchanged (`worker-start --agent claude|codex`). Path B argv is the same text; Antigravity (`agy`) on native Windows is unverified — if `agy` is missing, the implementer cascade starts at Luna (roles.md) and the gate/synthesizer fallbacks apply; say so once.
+- The skill is linked into `%USERPROFILE%\.codex\skills\orca-dev` (symlink or junction); `readlink -f` does not resolve junctions in Git Bash, which is why `ORCA_DEV_HOME` exists — never derive `bin/` from the skill path on Windows.
+- The GPT Pro bridge (`codex-chatgpt-web`) is macOS-only: the planning profile is always `standard`.
+- Trust files live in the same places under `%USERPROFILE%` (`.claude.json`, `.gemini\antigravity-cli\settings.json`, `.codex\config.toml`); paths are keyed with backslashes. `install.ps1 -Repo <path>` handles the repo and its git worktrees; a parallel track's child worktree still needs `install.ps1 -Repo <track-path>` before the first dispatch (same rule as macOS).
+

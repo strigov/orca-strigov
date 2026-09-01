@@ -16,13 +16,27 @@ It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-c
 
 ## Install
 
+**macOS** (also Linux / WSL2):
+
 ```bash
 git clone git@github.com:strigov/orca-strigov.git ~/orca-strigov && cd ~/orca-strigov
-./install.sh                       # links skills/orca-dev into ~/.codex/skills
+./install.sh                       # links skills/orca-dev into ~/.codex/skills, sets nothing else
 ./install.sh --repo /path/to/repo  # pre-trusts the repo and its git worktrees for Claude Code and Antigravity; exit 1 on any WARN
+./install.sh --check /path/to/repo # read-only report
 ```
 
-Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI), `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
+**Windows** (native, PowerShell — see `docs/install-windows.md` for prerequisites and the WSL2 alternative):
+
+```powershell
+git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov; cd $HOME\orca-strigov
+.\install.ps1                              # links the skill (symlink or junction), sets ORCA_DEV_HOME, checks CLIs and hooks
+.\install.ps1 -Repo C:\path\to\repo       # pre-trusts the repo and its git worktrees
+.\install.ps1 -Check C:\path\to\repo      # read-only report; exit 1 on any WARN
+```
+
+Windows needs Git for Windows on `PATH` (its `bash.exe` runs the protocol's `bin/` scripts); the GPT Pro bridge is macOS-only, so Windows always plans on the `standard` profile.
+
+Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI; unverified on native Windows — without it the implementer cascade starts at Codex Luna), `git`, `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
 
 ## Use
 
@@ -39,6 +53,7 @@ bin/verify-gate                 deterministic gate from the plan's `verify:` lis
 bin/review-package              reviewer package: commits + stat + -U10 diff
 bin/sdd-workspace               per-plan scratch workspace
 bin/wait-agent-ready            waits for an agent's TUI before an inject (mandatory in Path B)
+install.sh / install.ps1        macOS (Linux/WSL2) and Windows installers: link the skill, pre-trust repos, report blockers
 docs/spikes/                    what was measured before this was designed
 ```
 

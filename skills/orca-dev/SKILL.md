@@ -88,11 +88,14 @@ Procedure: take `subject`, strip whitespace/emphasis, exact-match against the st
 Resolve once per session (they live in this skill's repo; `SKILL_DIR` is the directory containing this file):
 
 ```bash
-SKILL_DIR="$(cd "$(dirname "$(readlink -f ~/.codex/skills/orca-dev/SKILL.md)")" && pwd)"
-BIN="$SKILL_DIR/../../bin"
+# ORCA_DEV_HOME (set by install.sh / install.ps1) wins; otherwise resolve the skill symlink.
+if [ -n "${ORCA_DEV_HOME:-}" ]; then BIN="$ORCA_DEV_HOME/bin"
+else SKILL_DIR="$(cd "$(dirname "$(readlink -f ~/.codex/skills/orca-dev/SKILL.md)")" && pwd)"; BIN="$SKILL_DIR/../../bin"; fi
 WS="$BIN/sdd-workspace"; RPKG="$BIN/review-package"; GATE="$BIN/verify-gate"
 echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 ```
+
+On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) the same three paths are `$env:ORCA_DEV_HOME\bin\…` and every call is prefixed with `bash` (Git for Windows): `bash "$env:ORCA_DEV_HOME/bin/verify-gate" <plan> <base>`.
 
 - `"$WS" <plan-file>` prints the plan-scoped scratch directory (`.superpowers/sdd/<plan-basename>/`, self-ignoring) — home of prompt files, report files, review packages. Run it with cwd inside a track's worktree for parallel tracks. `"$WS" --name quickfix-<slug>` does the same for a plan-less quickfix.
 - `"$RPKG" BASE HEAD [OUTFILE]` (committed range) or `"$RPKG" BASE WORKTREE OUTFILE` (working tree vs BASE) writes the review package; only its `wrote <path>: N commit(s), M bytes` line enters your context.
