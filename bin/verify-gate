@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# verify-gate — deterministic verification gate for orca-dev (Step 3.5).
+#
+# Reads the `verify:` list from a plan file's YAML frontmatter, runs each command
+# in the repo root, and on failure re-runs the failing command at the phase BASE
+# commit (in a throwaway worktree) to classify the failure as inherited or new.
+#
+# Usage: verify-gate <plan-file> <base-sha> [repo-root]
+# Exit:  0 = GATE_OK (all green, or only inherited failures)
+#        1 = GATE_FAIL (a command fails at HEAD/worktree and passes at BASE)
+#        2 = NO_COMMANDS (frontmatter has no `verify:` list) → dispatch the gate worker
+#        3 = usage error
+#        4 = NEEDS_JUDGMENT (fails at HEAD and at BASE, but the phase's changed
+#            paths appear in the command or its output — could be a new test that
+#            did not exist at BASE, or an environment gap in the BASE worktree;
+#            the script cannot tell) → dispatch the gate worker with this output
+#
+# A base failure counts as INHERITED only when none of the phase's changed paths
+# (git diff --name-only BASE + untracked) appear in the command or in its output.
+#
+# stdout, line 1: GATE_OK | GATE_FAIL | NO_COMMANDS | NEEDS_JUDGMENT
+# stdout, line 2: summary in the protocol's shape:
+#   verify: <n> cmd(s) | passed: <p> | failed: <f> | inherited: <i> | judgment: <j>
+# then one line per command: "<PASS|FAIL|INHERITED|JUDGMENT> <command>" and, for
+# FAIL/JUDGMENT, the last 40 lines of its output indented.
+set -u
+plan="${1:-}"; base="${2:-}"; root="${3:-$(pwd)}"
+[ -z "$plan" ] || [ -z "$base" ] && { echo "usage: verify-gate <plan-file> <base-sha> [repo-root]" >&2; exit 3; }
+[ -f "$plan" ] || { echo "plan file not found: $plan" >&2; exit 3; }
+cd "$root" || exit 3
+
+# --- extract `verify:` list from frontmatter (block or flow style) -------------
+# (function + heredoc, not heredoc inside $(...): macOS bash 3.2 cannot parse that)
+extract_verify() {
+python3 - "$1" <<'PY'
+import sys,re
+text=open(sys.argv[1],encoding='utf-8').read()
+m=re.match(r'^---\n(.*?)\n---\n',text,re.S)
+if not m: sys.exit(0)
+fm=m.group(1)
+out=[]
+block=re.search(r'^verify:\s*\n((?:[ \t]+-[^\n]*\n?)+)',fm,re.M)
+if block:
+    for line in block.group(1).splitlines():
+        line=line.strip()
+        if line.startswith('-'):
+            v=line[1:].strip()
+            if v.startswith('"') and v.endswith('"'): v=v[1:-1].replace('\\"','"').replace('\\\\','\\')
+            elif v.startswith("'") and v.endswith("'"): v=v[1:-1].replace("''","'")
+            if v: out.append(v)
+else:
+    flow=re.search(r'^verify:\s*\[(.*)\]\s*$',fm,re.M)
+    if flow:
+        for v in re.findall(r'"([^"]*)"|\'([^\']*)\'|([^,\[\]]+)',flow.group(1)):
+            v=next(x for x in v if x is not None and x!='') if any(v) else ''
+            v=v.strip()
+            if v: out.append(v)
+print('\n'.join(out))
+PY
+}
+cmds=$(extract_verify "$plan")
+if [ -z "$cmds" ]; then
+  echo "NO_COMMANDS"; echo "verify: 0 cmd(s) | passed: 0 | failed: 0 | inherited: 0"; exit 2
+fi
+
+n=0; p=0; f=0; i=0; j=0; status=0; report=""
+# paths the phase changed (tracked + untracked), used to decide whether a base
+# failure can honestly be called inherited
+changed=$( { git diff --name-only "$base" 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sed '/^$/d' | sort -u)
+mentions_changed() {  # $1 = text ; true if any changed path (or its basename) appears in it
+  local pth
+  while IFS= read -r pth; do
+    [ -z "$pth" ] && continue
+    case "$1" in *"$pth"*|*"$(basename "$pth")"*) return 0;; esac
+  done <<< "$changed"
+  return 1
+}
+run_at_base() {  # $1 = command ; returns the command's exit code at BASE
+  local wt; wt=$(mktemp -d "${TMPDIR:-/tmp}/verify-gate-base.XXXXXX")
+  git worktree add -q --detach "$wt" "$base" 2>/dev/null || { rm -rf "$wt"; return 125; }
+  ( cd "$wt" && bash -c "$1" >/dev/null 2>&1 ); local rc=$?
+  git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+  return $rc
+}
+while IFS= read -r c; do
+  [ -z "$c" ] && continue
+  n=$((n+1))
+  out=$(bash -c "$c" 2>&1); rc=$?
+  if [ $rc -eq 0 ]; then p=$((p+1)); report+="PASS $c"$'\n'; continue; fi
+  tail_out=$(printf '%s\n' "$out" | tail -40 | sed 's/^/    /')
+  if run_at_base "$c"; then
+    f=$((f+1)); status=1
+    report+="FAIL $c"$'\n'"$tail_out"$'\n'
+  elif mentions_changed "$c"$'\n'"$(printf '%s\n' "$out" | tail -200)"; then
+    j=$((j+1)); [ $status -eq 0 ] && status=4
+    report+="JUDGMENT $c  (fails at base ${base:0:7} too, but touches paths changed by this phase)"$'\n'"$tail_out"$'\n'
+  else
+    i=$((i+1)); report+="INHERITED $c  (also fails at base ${base:0:7}; no changed path involved)"$'\n'
+  fi
+done <<< "$cmds"
+
+case $status in 0) echo "GATE_OK";; 1) echo "GATE_FAIL";; 4) echo "NEEDS_JUDGMENT";; esac
+echo "verify: $n cmd(s) | passed: $p | failed: $f | inherited: $i | judgment: $j"
+printf '%s' "$report"
+exit $status
