@@ -1,6 +1,6 @@
 ---
 name: orca-dev
-description: Multi-model development protocol for the Orca ADE with Codex as coordinator. Use when the user asks for an implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code) or types `$orca-dev`. The coordinator only triages, dispatches Orca workers, waits for worker_done, keeps the ledger and git bookkeeping. Plan is written by GPT Pro (fallback Claude Opus max) and reviewed by Claude Fable max / Codex Sol max (loop cap 4); phases are implemented by Gemini 3.7 Flash via Antigravity with Codex Luna max as fallback and Terra max as reasoning escalation; a script gate runs before every review round; Claude Opus/Fable review each phase (4.1) with a Codex Sol xhigh control review (4.2, fused loop cap 4); Opus runs one final whole-branch review (cap 2). Trivial single-file edits go to a Flash quickfix worker.
+description: Multi-model development protocol for the Orca ADE with Codex as coordinator. Use when the user asks for an implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code) or types `$orca-dev`. The coordinator only triages, dispatches Orca workers, waits for worker_done, keeps the ledger and git bookkeeping. Plan is written by GPT Pro (fallback Claude Opus xhigh) and reviewed by Claude Fable xhigh / Codex Sol max (loop cap 4); phases are implemented by Gemini 3.7 Flash via Antigravity with Codex Luna max as fallback and Terra max as reasoning escalation; a script gate runs before every review round; Claude Opus/Fable review each phase (4.1) with a Codex Sol xhigh control review (4.2, fused loop cap 4); Opus runs one final whole-branch review (cap 2). Trivial single-file edits go to a Flash quickfix worker.
 ---
 
 # orca-dev — coordinator protocol
@@ -112,7 +112,7 @@ echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 
 ```
 Frontend-only task (.tsx/.jsx/.vue/.svelte/.css/.scss, or "UI", "дизайн", "компонент", "страница", screenshot with UI intent)?
-  new UI / redesign → frontend-implementer (claude opus max); simple tweak → frontend-implementer (claude sonnet)
+  new UI / redesign → frontend-implementer (claude opus xhigh); simple tweak → frontend-implementer (claude sonnet)
   → skip Step 1–2 only if the user gave a complete brief AND it is one phase; otherwise full protocol.
 Else single-file change, <~20 lines, no architectural judgment? → quickfix (flash → luna)
 Else → full protocol.
@@ -133,19 +133,19 @@ Look for `docs/plans/*.md` (or the repo's plan dir) with top-level `status: in-p
 2. `orca orchestration run-create --objective "<slug>" --json`; keep the run id — you write it into the plan frontmatter as `orca_run:` at the plan commit.
 3. Fill `prompts/plan-writer-prompt.md` Mode A (user request verbatim, repo root, known constraints, `[REPORT_FILE]`), `task-create`, attach per recipes. Required frontmatter includes `verify:` — the writer lists the repo's lint/typecheck/test commands the gate will run.
 4. Wait. `PLAN_WRITTEN` → Step 2. `BLOCKED` → read the report's stated reason; ask the user if it is a requirements question, otherwise dispatch a `diagnosis` worker.
-5. Pro availability failure: close the terminal and retry ONCE in a fresh Pro terminal (new task, "RETRY (attempt 2 of 2) …" — never the same terminal: its retained ChatGPT chat already holds the failure and the retry gives up immediately, see `roles.md`), then close that one too and dispatch the standard writer (Opus max). Tell the user in one line. The planning profile flips to `standard` for the rest of this plan (reviewer = Sol from round 1).
+5. Pro availability failure: close the terminal and retry ONCE in a fresh Pro terminal (new task, "RETRY (attempt 2 of 2) …" — never the same terminal: its retained ChatGPT chat already holds the failure and the retry gives up immediately, see `roles.md`), then close that one too and dispatch the standard writer (Opus xhigh). Tell the user in one line. The planning profile flips to `standard` for the rest of this plan (reviewer = Sol from round 1).
 
 Release the writer's terminal after `worker_done` — Mode B is always a fresh worker.
 
 ### Step 2 — plan review (loop, cap 4)
 
-Reviewer per profile and round (`roles.md`): strong r1 = Fable max; everything else = Sol max. FRESH worker every round; read-only; never re-inject into a previous reviewer's terminal.
+Reviewer per profile and round (`roles.md`): strong r1 = Fable xhigh; everything else = Sol max. FRESH worker every round; read-only; never re-inject into a previous reviewer's terminal.
 
 - `APPROVED` → commit the plan file alone (`docs(plans): add <slug>`, plan file staged by name, `orca_run:` already in frontmatter, Co-Authored-By trailer naming the coordinator model, no push). → Step 2.5.
 - `CHANGES_REQUESTED` → ledger sequence:
   (a) triage each BLOCKING item's `class:` → ledger `decision` (`MUST_FIX_NOW` / `REGRESSION_FROM_AUTHORIZED_FIX` → `ACCEPTED` or `PARTIALLY_ACCEPTED`; `DEFER` / `NIT` / `REJECTED_BY_SCOPE` → same-named decisions). `plan-mandated` items → `ESCALATED_TO_HUMAN`, shown to the user with the plan text, never fixed without an answer.
   (b) write/update the ledger (ids `P<round>-B<n>`, reviewer `plan-review`); first update prior entries' `status`.
-  (c) dispatch `plan-reviser` (fresh Opus max, Mode B) with ledger path + open items inline + the reviewer's BLOCKING lines verbatim. `NEEDS_AUTHORIZATION` → extend the ledger item if inside scope, else escalate.
+  (c) dispatch `plan-reviser` (fresh Opus xhigh, Mode B) with ledger path + open items inline + the reviewer's BLOCKING lines verbatim. `NEEDS_AUTHORIZATION` → extend the ledger item if inside scope, else escalate.
   (d) dispatch a FRESH reviewer with the follow-up template (ledger path + the reviser's per-item report). Round++.
 
 **Loop control — in order, first match wins, after every `CHANGES_REQUESTED`:**
@@ -172,7 +172,7 @@ Verdicts:
 - `DONE` → Step 3.5. `DONE_WITH_CONCERNS` → read the concerns in the report; correctness/scope → address before review; observations → note.
 - `NEEDS_CONTEXT` → answer it in a new task re-injected into the same terminal.
 - `NEEDS_AUTHORIZATION` (fix rounds only) → Step 4(c) branch.
-- `BLOCKED` → `diagnosis` worker (Fable max; Opus fallback announced) with the report + plan path. Its verdict: more context → re-inject with context; needs more reasoning → Terra max (same terminal if the implementer was Luna, else fresh with the BLOCKED report); task too large → Mode B reviser splits the phase, re-run Step 2 on the change; plan wrong → user.
+- `BLOCKED` → `diagnosis` worker (Fable xhigh; Opus fallback announced) with the report + plan path. Its verdict: more context → re-inject with context; needs more reasoning → Terra max (same terminal if the implementer was Luna, else fresh with the BLOCKED report); task too large → Mode B reviser splits the phase, re-run Step 2 on the change; plan wrong → user.
 - Availability failure (see Verdicts) → next model in the cascade, fresh terminal, tell the user.
 
 Never re-run the same model on the same input unchanged.
@@ -190,7 +190,7 @@ Never re-run the same model on the same input unchanged.
 
 **4.0 package** — every round: `dir=$("$WS" <plan-file>)`; `"$RPKG" <BASE> WORKTREE "$dir/review-<phase>-r<round>-<base7>.diff"`.
 
-**4.1 primary review** — `review-primary`: Opus max; Fable max when the plan's Risks mark this phase SECURITY / DATA_LOSS, or from round 3 (Opus fallback announced). Fresh worker every round. Spec: base, plan, phase, round, gate summary, `[DIFF_FILE]`, `[IMPL_REPORT_FILE]`, `[REPORT_FILE]` (the reviewer's own), `[GLOBAL_CONSTRAINTS]`, ledger path (round 2+). Report lines 1–3 mandatory. Then process `CANNOT_VERIFY` items mechanically: run the literal `CHECK:`; match → ledger `verified-by-controller`; mismatch → `ACCEPTED`, joins this round's BLOCKING list (skip 4.2 this round); not executable → ledger `open` + `handed-to-4.2`, carried as "verify additionally" into the next 4.2. A phase is never done with an open CANNOT_VERIFY.
+**4.1 primary review** — `review-primary`: Opus xhigh; Fable xhigh when the plan's Risks mark this phase SECURITY / DATA_LOSS, or from round 3 (Opus fallback announced). Fresh worker every round. Spec: base, plan, phase, round, gate summary, `[DIFF_FILE]`, `[IMPL_REPORT_FILE]`, `[REPORT_FILE]` (the reviewer's own), `[GLOBAL_CONSTRAINTS]`, ledger path (round 2+). Report lines 1–3 mandatory. Then process `CANNOT_VERIFY` items mechanically: run the literal `CHECK:`; match → ledger `verified-by-controller`; mismatch → `ACCEPTED`, joins this round's BLOCKING list (skip 4.2 this round); not executable → ledger `open` + `handed-to-4.2`, carried as "verify additionally" into the next 4.2. A phase is never done with an open CANNOT_VERIFY.
 
 **4.2 control review** — only when 4.1 returned `REVIEW_OK`: `review-control` (Sol xhigh, fresh, read-only, no tests). Spec: this round's package, `[IMPL_REPORT_FILE]`, its own `[REPORT_FILE]`, constraints, gate summary, "verify additionally" lines.
 
@@ -206,7 +206,7 @@ Never re-run the same model on the same input unchanged.
 
 ### Step 5 — final whole-branch review (once per plan, cap 2)
 
-After the last phase's auto-commit (top-level `status: done`), before archival. `MERGE_BASE = git merge-base main HEAD` (fallback: the first phase's recorded base7). Package: `"$RPKG" <MERGE_BASE> HEAD "$dir/review-final-r1-<base7>.diff"` (WORKTREE mode if the last phase was left uncommitted). ONE `review-final` worker (Opus max). `REVIEW_OK` → clean finish. `REVIEW_BLOCKING` → ledger (`review-final`, `FR<round>-B<n>`; `plan-mandated` → human) → ONE fixer: a fresh implementer (current cascade model, fresh-fallback re-brief, whole-plan scope, `[REPORT_FILE]` = `$dir/final-fix-report.md`) with the complete list (BLOCKING + `MUST_FIX_BEFORE_MERGE` triages). Round 2: fresh WORKTREE package, fresh reviewer with the fix list inlined. Still blocking → escalate. Clean → commit the fixes (`fix: address final-review findings for <slug>`), then archival.
+After the last phase's auto-commit (top-level `status: done`), before archival. `MERGE_BASE = git merge-base main HEAD` (fallback: the first phase's recorded base7). Package: `"$RPKG" <MERGE_BASE> HEAD "$dir/review-final-r1-<base7>.diff"` (WORKTREE mode if the last phase was left uncommitted). ONE `review-final` worker (Opus xhigh). `REVIEW_OK` → clean finish. `REVIEW_BLOCKING` → ledger (`review-final`, `FR<round>-B<n>`; `plan-mandated` → human) → ONE fixer: a fresh implementer (current cascade model, fresh-fallback re-brief, whole-plan scope, `[REPORT_FILE]` = `$dir/final-fix-report.md`) with the complete list (BLOCKING + `MUST_FIX_BEFORE_MERGE` triages). Round 2: fresh WORKTREE package, fresh reviewer with the fix list inlined. Still blocking → escalate. Clean → commit the fixes (`fix: address final-review findings for <slug>`), then archival.
 
 ## Auto-commit (after a clean fused review)
 
@@ -254,14 +254,14 @@ Fixers receive only open ACCEPTED / PARTIALLY_ACCEPTED items; reviewers receive 
 
 ## Reporting cadence
 
-One line entering each step (`Plan ready → plan review r1/4 (Fable max)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and Fable→Opus substitutions are always stated.
+One line entering each step (`Plan ready → plan review r1/4 (Fable xhigh)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and Fable→Opus substitutions are always stated.
 
 ## Red flags — never
 
 - Write source or tests yourself; research the codebase yourself; run tests yourself except via `"$GATE"`.
 - Launch Codex without an explicit `--model` (the user's default routes to the Pro bridge).
 - Re-inject into a previous reviewer's terminal — reviewers are fresh every round; the only terminal reuse is the implementer's own thread (and Terra on Luna's thread).
-- Use `--effort high` for a Claude judgment role (it is a low setting) or `ultra` anywhere without the user's word.
+- Use `--effort high` for a Claude judgment role (it is a low setting), `--effort max` for any Claude role (billed ×1.5 — `xhigh` is the ceiling), or `ultra` anywhere without the user's word.
 - Skip 4.1 and go to 4.2; run 4.2 after a blocking 4.1; review without this round's fresh package; review without a `GATE_OK` on the current tree.
 - Pair a writer and a reviewer from the same model family.
 - Tell a reviewer what not to flag; triage a `plan-mandated` item into ACCEPTED / REJECTED.

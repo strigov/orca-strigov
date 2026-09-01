@@ -4,7 +4,7 @@ Use AFTER the last phase has passed Step 4 and been committed, BEFORE plan archi
 
 ## Dispatch
 
-Role: `review-final` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Claude Opus max). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `review-final` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Claude Opus xhigh). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
 **A fresh Orca worker terminal every round — never re-inject into a previous reviewer's terminal** (no bias from the previous round).
 

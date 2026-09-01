@@ -10,7 +10,7 @@ Role: `plan-writer` (Mode A) / `plan-reviser` (Mode B) — launch recipe, model 
 
 The worker writes the plan file itself and may read anything in the repository — research inside the worker is exactly what it is for. It must NOT touch source files and must NOT run state-changing git commands.
 
-Mode A may be served by GPT Pro via the codex-chatgpt-web bridge or by Claude Opus max; Mode B is always Claude Opus max (see `../roles.md`). The template is model-agnostic and must work for either — never add model-specific instructions to the body.
+Mode A may be served by GPT Pro via the codex-chatgpt-web bridge or by Claude Opus xhigh; Mode B is always Claude Opus xhigh (see `../roles.md`). The template is model-agnostic and must work for either — never add model-specific instructions to the body.
 
 The plan reviewer is a fresh worker from a different model family than the writer (see `../roles.md`) — writer and reviewer never share a family.
 

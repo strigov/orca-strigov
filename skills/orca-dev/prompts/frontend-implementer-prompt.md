@@ -6,7 +6,7 @@ Use when dispatching a frontend-only phase (or a frontend-only task routed strai
 
 Role: `frontend-implementer` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-Per `../roles.md`: Claude Opus max for new UI (new page/component, visible redesign, visual rework), Claude Sonnet for simple tweaks (CSS change, copy edit, minor markup). The template itself stays model-agnostic.
+Per `../roles.md`: Claude Opus xhigh for new UI (new page/component, visible redesign, visual rework), Claude Sonnet for simple tweaks (CSS change, copy edit, minor markup). The template itself stays model-agnostic.
 
 The worker has NO session context. The prompt must be fully self-contained — include plan path + phase id + visual intent + any screenshot references + relevant existing files/components to follow.
 

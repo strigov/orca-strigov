@@ -2,7 +2,7 @@
 
 The single source of truth for **who does what, on which model, at which effort**. `SKILL.md` and every prompt template refer to roles by name; nothing else hardcodes a model. Launch mechanics (how a role becomes an Orca worker) live in `orca-recipes.md`.
 
-Model ids are provider-opaque strings passed through Orca (`--model` / `--effort`) or through custom argv. Effort values are provider-specific: Codex `low|medium|high|xhigh|max` (never `ultra` unless the user says the word); Claude `low|medium|high|xhigh|max` — **`high` maps to a low internal setting (25); judgment roles always use `max`**; Antigravity `low|medium|high`.
+Model ids are provider-opaque strings passed through Orca (`--model` / `--effort`) or through custom argv. Effort values are provider-specific: Codex `low|medium|high|xhigh|max` (never `ultra` unless the user says the word); Claude `low|medium|high|xhigh|max` — **`high` maps to a low internal setting (25); judgment roles use `xhigh`. `max` is billed at ×1.5 since the September 2026 pricing change — never use it unless the user asks for it by name**; Antigravity `low|medium|high`.
 
 ## Families
 
@@ -21,17 +21,17 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 | role | step | primary | fallback / escalation | write? | freshness |
 |---|---|---|---|---|---|
 | `coordinator` | all | Codex (the terminal running this skill) — model per user's own config | — | bookkeeping only (Rule 1) | one session |
-| `plan-writer` | 1 (Mode A) | **codex `chatgpt-web/pro`** (opt-in "strong" profile, see below) | claude `opus` `max` | plan file only | fresh |
-| `plan-reviser` | 2 (Mode B) | claude `opus` `max` | — | plan file only | fresh every round |
-| `plan-reviewer` | 2 | round 1: claude `fable` `max` when the writer was Pro; otherwise codex `gpt-5.6-sol` `max` | rounds 2+: codex `gpt-5.6-sol` `max` (the reviser is Opus, so the reviewer must leave the Anthropic family) | no | fresh every round |
+| `plan-writer` | 1 (Mode A) | **codex `chatgpt-web/pro`** (opt-in "strong" profile, see below) | claude `opus` `xhigh` | plan file only | fresh |
+| `plan-reviser` | 2 (Mode B) | claude `opus` `xhigh` | — | plan file only | fresh every round |
+| `plan-reviewer` | 2 | round 1: claude `fable` `xhigh` when the writer was Pro; otherwise codex `gpt-5.6-sol` `max` | rounds 2+: codex `gpt-5.6-sol` `max` (the reviser is Opus, so the reviewer must leave the Anthropic family) | no | fresh every round |
 | `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis "needs more reasoning") → codex `gpt-5.6-terra` `max` | yes | same terminal across fix rounds |
-| `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `max` for new UI / redesign; claude `sonnet` for simple tweaks | — | yes | same terminal across fix rounds |
+| `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` for simple tweaks | — | yes | same terminal across fix rounds |
 | `gate` | 3.5 | `bin/verify-gate` script (no model) | script red or no `verify:` commands → antigravity `gemini-3.7-flash-high` `high` | no | fresh |
-| `review-primary` | 4.1 | claude `opus` `max` | claude `fable` `max` on SECURITY / DATA_LOSS phases or fused-loop round ≥ 3; Opus fallback if Fable unavailable — announced, never silent | no | fresh every round |
+| `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `xhigh` on SECURITY / DATA_LOSS phases or fused-loop round ≥ 3; Opus fallback if Fable unavailable — announced, never silent | no | fresh every round |
 | `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | — | no | fresh every round |
 | `synthesizer` | 4.5 | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
-| `review-final` | 5 | claude `opus` `max` | — | no | fresh every round (cap 2) |
-| `diagnosis` | BLOCKED / impasse summaries | claude `fable` `max` | claude `opus` `max` — announced | no | fresh |
+| `review-final` | 5 | claude `opus` `xhigh` | — | no | fresh every round (cap 2) |
+| `diagnosis` | BLOCKED / impasse summaries | claude `fable` `xhigh` | claude `opus` `xhigh` — announced | no | fresh |
 | `quickfix` | trivial path | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `max` | yes | fresh |
 | `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.7-flash-high` `high` | — | no | fresh |
 
@@ -39,8 +39,8 @@ Claude is used **only** in judgment roles (plan revision, reviews, diagnosis) an
 
 ## Planning profiles
 
-- **`strong` (default when the bridge is healthy):** round 1 = Pro writes → Fable max reviews. Rounds 2+ = Opus max revises → Sol max reviews. Pro is used for the initial plan only — never for revisions.
-- **`standard`:** Opus max writes → Sol max reviews, all rounds. This is the automatic fallback when Pro is unavailable, and the profile to pick explicitly for small plans (Pro turns run 10–25 minutes each).
+- **`strong` (default when the bridge is healthy):** round 1 = Pro writes → Fable xhigh reviews. Rounds 2+ = Opus xhigh revises → Sol max reviews. Pro is used for the initial plan only — never for revisions.
+- **`standard`:** Opus xhigh writes → Sol max reviews, all rounds. This is the automatic fallback when Pro is unavailable, and the profile to pick explicitly for small plans (Pro turns run 10–25 minutes each).
 
 Selecting: the user may say `--planner pro|opus` or "план на Pro" / "обычный план". Without a choice, use `strong` if `orca status` is fine AND the bridge preflight in `orca-recipes.md` passes; otherwise `standard`, and say which one you picked in the Step 1 status line.
 
@@ -75,7 +75,7 @@ Fix rounds after a fallback: the ledger plus the report file carry the context; 
 
 | role | flag |
 |---|---|
-| any Claude judgment role | `--effort max` |
+| any Claude judgment role | `--effort xhigh` |
 | Claude Sonnet frontend tweak | `--effort medium` |
 | Codex Luna / Terra / Sol (plan) | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
 | Codex Sol control review | `--effort xhigh` |

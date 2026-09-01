@@ -4,13 +4,13 @@ A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex
 
 | role | agent / model |
 |---|---|
-| plan (round 1) | GPT Pro via the `codex-chatgpt-web` bridge → reviewed by Claude Fable max |
-| plan revisions / fallback | Claude Opus max → reviewed by Codex Sol max |
+| plan (round 1) | GPT Pro via the `codex-chatgpt-web` bridge → reviewed by Claude Fable xhigh |
+| plan revisions / fallback | Claude Opus xhigh → reviewed by Codex Sol max |
 | implementation | Gemini 3.7 Flash High (Antigravity CLI) → Codex Luna max fallback → Codex Terra max escalation |
-| frontend phases | Claude Opus max (new UI) / Sonnet (tweaks) |
+| frontend phases | Claude Opus xhigh (new UI) / Sonnet (tweaks) |
 | verification gate | `bin/verify-gate` script → Gemini Flash only when red |
-| code review | Claude Opus max (Fable on risky phases), Codex Sol xhigh control review |
-| final branch review | Claude Opus max |
+| code review | Claude Opus xhigh (Fable on risky phases), Codex Sol xhigh control review |
+| final branch review | Claude Opus xhigh |
 
 It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-cc-plugins) from Claude Code to Orca: the same phased plans, authorization ledger, bounded review loops and family rule (writer ≠ reviewer family), with Orca's `worker-start` / `worker_done` replacing two ad-hoc transports.
 
