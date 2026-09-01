@@ -1,16 +1,18 @@
 ---
 slug: todo-cli-edit-csv-export
 created: 2026-09-01
-status: in-progress
+status: done
 orca_run: run_8e4061631412
 phases:
   - id: Ф1
     scope: "Команды remove/edit в spikes/fixture/todo.py и выдача id как max(id)+1"
-    status: in-progress
+    status: done
+    commits: "2843720..04e9abc"
     parallel_group: G1
   - id: Ф2
     scope: "Отдельный модуль экспорта CSV spikes/fixture/todo_export.py с собственным CLI"
-    status: in-progress
+    status: done
+    commits: "2843720..1553c44"
     parallel_group: G1
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
