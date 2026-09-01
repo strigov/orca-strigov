@@ -20,22 +20,34 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 
 | role | step | primary | fallback / escalation | write? | freshness |
 |---|---|---|---|---|---|
-| `coordinator` | all | Codex (the terminal running this skill) — model per user's own config | — | bookkeeping only (Rule 1) | one session |
+| `coordinator` | all | Codex (the terminal running this skill) — any native Codex model launched with an explicit `-m` (never `chatgpt-web/pro`: the bridge is for the planner only) | — | bookkeeping only (Rule 1) | one session |
 | `plan-writer` | 1 (Mode A) | **codex `chatgpt-web/pro`** (opt-in "strong" profile, see below) | claude `opus` `xhigh` | plan file only | fresh |
 | `plan-reviser` | 2 (Mode B) | claude `opus` `xhigh` | — | plan file only | fresh every round |
 | `plan-reviewer` | 2 | round 1: claude `fable` `xhigh` when the writer was Pro; otherwise codex `gpt-5.6-sol` `max` | rounds 2+: codex `gpt-5.6-sol` `max` (the reviser is Opus, so the reviewer must leave the Anthropic family) | no | fresh every round |
-| `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis "needs more reasoning") → codex `gpt-5.6-terra` `max` | yes | same terminal across fix rounds |
-| `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` for simple tweaks | — | yes | same terminal across fix rounds |
-| `gate` | 3.5 | `bin/verify-gate` script (no model) | script red or no `verify:` commands → antigravity `gemini-3.7-flash-high` `high` | no | fresh |
-| `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `xhigh` on SECURITY / DATA_LOSS phases or fused-loop round ≥ 3; Opus fallback if Fable unavailable — announced, never silent | no | fresh every round |
-| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | — | no | fresh every round |
+| `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-5.6-terra` `max` in a FRESH terminal | yes | same terminal across fix rounds; a model change is always a new terminal |
+| `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → codex `gpt-5.6-luna` `max` — announced | yes | same terminal across fix rounds |
+| `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.7-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
+| `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `xhigh` on `risk: SECURITY / DATA_LOSS` phases or fused-loop round ≥ 3; Opus fallback if Fable unavailable — announced, never silent. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
+| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Terra) → claude `fable` `xhigh` (Sol never reviews Codex-written code); Sol unavailable → claude `fable` `xhigh` — announced | no | fresh every round |
 | `synthesizer` | 4.5 | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
-| `review-final` | 5 | claude `opus` `xhigh` | — | no | fresh every round (cap 2) |
-| `diagnosis` | BLOCKED / impasse summaries | claude `fable` `xhigh` | claude `opus` `xhigh` — announced | no | fresh |
+| `review-final` | 5 | claude `opus` `xhigh` | every phase written by Claude (frontend-only plan) → codex `gpt-5.6-sol` `xhigh`; Opus unavailable → claude `fable` `xhigh` — announced | no | fresh every round (cap 2) |
+| `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `fable` `xhigh` | claude `opus` `xhigh` — announced | no | fresh |
 | `quickfix` | trivial path | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `max` | yes | fresh |
 | `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.7-flash-high` `high` | — | no | fresh |
 
 Claude is used **only** in judgment roles (plan revision, reviews, diagnosis) and for frontend implementation. Mechanical work (gate, synthesis, quickfix) stays on Google/OpenAI so the Anthropic quota is spent on judgment.
+
+## Family-rule substitutions
+
+The defaults above assume the code was written by Gemini. When the cascade or the frontend route puts the writer in a reviewer's family, substitute — and say so in the state line:
+
+| code written by | 4.1 primary | 4.2 control | Step 5 final |
+|---|---|---|---|
+| Gemini (Flash) — default | claude `opus` `xhigh` (Fable per the risk rule) | codex `gpt-5.6-sol` `xhigh` | claude `opus` `xhigh` |
+| Codex (Luna / Terra, after a fallback or escalation) | claude `opus` `xhigh` (Fable per the risk rule) | claude `fable` `xhigh` | claude `opus` `xhigh` |
+| Claude (frontend phases) | codex `gpt-5.6-sol` `xhigh` | codex `gpt-5.6-terra` `xhigh` | codex `gpt-5.6-sol` `xhigh` when every phase is Claude-written, else claude `opus` `xhigh` |
+
+Planning is unchanged: the plan-reviewer row already alternates families per profile and round.
 
 ## Planning profiles
 
@@ -53,10 +65,12 @@ antigravity gemini-3.7-flash-high (high)
   │  worker_done for 20 min with an idle terminal → tell the user, then:
   ▼
 codex gpt-5.6-luna (max)          ← fresh terminal; fix rounds continue in THIS terminal
-  │  BLOCKED + diagnosis verdict "needs more reasoning" →
+  │  BLOCKED + diagnosis token NEEDS_MORE_REASONING →
   ▼
-codex gpt-5.6-terra (max)         ← same terminal as Luna when Luna was the implementer
-                                    (thread retained); fresh with the BLOCKED report otherwise
+codex gpt-5.6-terra (max)         ← always a FRESH terminal (the model is fixed at launch —
+                                    `--model` cannot be combined with `--terminal`, and Path B
+                                    bakes it into argv); the fresh-fallback re-brief carries the
+                                    BLOCKED report and the diagnosis report by path
 ```
 
 What does **not** trigger a model change: `BLOCKED` with any other diagnosis, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `NEEDS_AUTHORIZATION`, a `GATE_FAIL`, or a `REVIEW_BLOCKING`. Those are handled by the protocol at the same model.
@@ -79,5 +93,6 @@ Fix rounds after a fallback: the ledger plus the report file carry the context; 
 | Claude Sonnet frontend tweak | `--effort medium` |
 | Codex Luna / Terra / Sol (plan) | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
 | Codex Sol control review | `--effort xhigh` |
+| Codex Luna as synthesizer fallback | `--effort medium` |
 | Antigravity Flash | `--effort high` |
 | Pro | none — the bridge fixes the ChatGPT mode; Codex-side effort flags are ignored |

@@ -34,7 +34,7 @@ orca orchestration worker-start --task <task_id> --worktree current \
 ```
 
 - Works for `claude` and `codex` (model/effort supported at launch). Receipt: `state: ready`, `stage: input_accepted`, `dispatchId`, `launch.effective`.
-- Reuse the same agent for the next attempt (fix rounds, `NEEDS_CONTEXT`, Terra escalation on a Luna thread): `worker-start --task <next_task> --terminal <handle> --json` — read the handle from `worker-show --dispatch <id> --json` → `worker.agent_terminal_handle`. `--model/--effort` cannot be combined with `--terminal`.
+- Reuse the same agent for the next attempt (fix rounds, `NEEDS_CONTEXT` answers, gate-fix rounds): `worker-start --task <next_task> --terminal <handle> --json` — read the handle from `worker-show --dispatch <id> --json` → `worker.agent_terminal_handle`. `--model/--effort` cannot be combined with `--terminal` — a model escalation (Luna → Terra) is therefore always a fresh terminal.
 - New worktree for a parallel track: `--worktree new-child --name <slug>-<phase> --setup run` instead of `current`.
 
 ### Path B — custom argv + `dispatch --inject` (unsupervised lifecycle)
@@ -96,7 +96,7 @@ orca orchestration check --wait --types worker_done,escalation,question --timeou
 
 Decide the terminal's fate **before** acknowledging the Delivery:
 
-- Immediate follow-up on the same agent (fix round, NEEDS_CONTEXT, Terra on Luna's thread): Path A → `worker-start --task <next> --terminal <handle>`; Path B → `dispatch --task <next> --to <handle> --inject`.
+- Immediate follow-up on the same agent (fix round, NEEDS_CONTEXT answer, gate-fix round): Path A → `worker-start --task <next> --terminal <handle>`; Path B → `dispatch --task <next> --to <handle> --inject`.
 - Otherwise: Path A → `orca orchestration worker-release --dispatch <id> --json` (closes the terminal, archives the transcript); Path B → `orca terminal close --terminal <handle> --json`.
 - Keep a terminal alive only when the user asked to inspect it (`worker-retain` for Path A).
 
@@ -108,7 +108,7 @@ Never leave a settled worker open "to look at later" — `worker-read --dispatch
 
 - `worker-show` says `failed`/`stopped` → `worker-start --task <task> --retry-of <dispatch_id> ...` with explicit placement (Path A) or a fresh Path B terminal; retry does not inherit placement.
 - `outcome_unknown` → `worker-stop --dispatch <id>` then inspect; or `worker-abandon` accepting that resources may linger.
-- A `worker_done --outcome failed` whose body names quota / rate limit / auth / launch problems is an **availability** failure → cascade per `roles.md`. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`, `PLAN_FAIL`) → handle per SKILL.md.
+- A `worker_done --outcome failed` whose body names quota / rate limit / auth / launch problems is an **availability** failure → cascade per `roles.md`. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`, `BLOCKED`) → handle per SKILL.md.
 
 ## 7. Bridge preflight (Pro planner)
 
@@ -129,7 +129,7 @@ Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Librar
 | role | path | agent / argv |
 |---|---|---|
 | plan-writer (Pro) | B | `codex ... -m chatgpt-web/pro` |
-| plan-writer (Opus) / plan-reviser / review-primary / review-final / diagnosis / frontend-implementer | A | `--agent claude --model <opus|fable|sonnet> --effort xhigh` |
+| plan-writer (Opus) / plan-reviser / review-primary / review-final / diagnosis / frontend-implementer | A | `--agent claude --model <opus|fable|sonnet> --effort xhigh` (sonnet tweak: `--effort medium`) |
 | plan-reviewer r1 (Fable) | A | `--agent claude --model fable --effort xhigh` |
 | plan-reviewer (Sol) / review-control | A (hooks trusted) or B | `--agent codex --model gpt-5.6-sol --effort max|xhigh` |
 | implementer (Flash) / gate / synthesizer / quickfix | B | `agy --model gemini-3.7-flash-high --effort high --dangerously-skip-permissions` |
