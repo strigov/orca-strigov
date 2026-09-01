@@ -49,11 +49,11 @@ Make a small focused change. There is no plan file — the task below is the who
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`DONE`, `DONE_WITH_CONCERNS`); `--outcome failed` when you could not (`BLOCKED`, `NEEDS_CONTEXT`). Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 
 ## After the quickfix worker reports
 
-The coordinator (Codex) does a quick diff sanity check itself — no two-stage review, no primary review worker, no control review. Scope is too small to justify. If sane and tests are green, auto-commit (unless the user opted out). If the "trivial" task turned out non-trivial (surprises in the diff, touched files outside the listed path, failing tests that need judgment), abandon the quickfix commit, inform the user, and re-run via the full protocol.
+No review workers — scope is too small to justify. The coordinator never reads the diff (Rule 2): it checks only the verdict token, that the report's `## Tests` section names commands and output, and that `--files-modified` stays within the listed path; then it commits those files by name (unless the user opted out). If the "trivial" task turned out non-trivial (surprises in the diff, touched files outside the listed path, failing tests that need judgment), abandon the quickfix commit, inform the user, and re-run via the full protocol.

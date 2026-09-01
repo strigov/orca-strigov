@@ -30,7 +30,7 @@ Do not require new features, flags, diagnostics, guards, dependencies, or broad 
 - regression of an existing public contract;
 - direct failure of the phase Acceptance criteria.
 
-If the issue is a useful hardening idea but does not clear this bar, put it in the `DEFER:` section of your report and return `REVIEW_OK` — there are no material findings.
+If the issue is a useful hardening idea but does not clear this bar, put it in the `DEFER:` section of your report; `REVIEW_OK` is the verdict only when the BLOCKING list is empty.
 Items the coordinator marked `REJECTED_BY_SCOPE` in the AUTHORIZED_CHANGE_LEDGER are out of scope for this control review — do not re-flag them.
 </authorization_boundary>
 
@@ -45,13 +45,14 @@ If the plan or brief explicitly mandates something this review calls a defect (a
 
 ## Phase context
 
+- Working directory / repo root: `<absolute path>`
 - Plan file: `<repo-root>/docs/plans/<slug>.md` (read it, especially `## <id>:` section and the Contracts / Risks sections)
 - Current phase id: `<id>`
 - Base commit: `<base-sha>`
 - Review package: `[DIFF_FILE]` (absolute path)
 - Implementer report: `[IMPL_REPORT_FILE]` — the implementer's full report (unverified claims; see the rationale note above). Read-only input; it is NOT your report file.
 - Verify additionally (handed over from the primary review round): [CANNOT_VERIFY_ITEMS — one `verify additionally: <requirement>` line each, or `none`]
-- Verification gate summary (mechanical checks already run on this tree state): `<gate summary line: lint: … | typecheck: … | tests: …>` — the tree is green; don't re-prove it, hunt for what green tests can miss.
+- Verification gate summary (mechanical checks already run on this tree state): `<gate summary line: lint: … | typecheck: … | tests: …>` — read it for what was skipped or inherited; this review runs no tests, hunt for what green tests can miss.
 
 Global constraints from the spec/design that bind this phase (copied verbatim from the plan's Global Constraints section — not process rules, those are already in this template):
 
@@ -94,14 +95,14 @@ NITS:
 
    If `REVIEW_OK`: after line 1 emit only the `DEFER:` and `NITS:` sections (omit either if empty). Nothing else.
 
-   Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields are treated as DEFER by the coordinator and do not block the phase. BLOCKING items must cite `file:line`. Be sparing — this is a control review, not a style pass. Only raise what the primary review genuinely missed AND matters. If the angle is "looks fine to me", that's `REVIEW_OK`; don't invent findings. A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
+   Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields are treated as DEFER by the coordinator and do not block the phase. BLOCKING items must cite `file:line`. This is a control review, not a style pass: raise what the primary review genuinely missed AND matters — do not invent findings, and do not suppress one because the primary already passed the diff. A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
 
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`REVIEW_OK`, `REVIEW_BLOCKING` — both mean the review itself succeeded); `--outcome failed` when you could not produce a review at all. Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Do NOT write code. Do NOT modify files other than your report file. Read the plan + the review package + any cited files only.
 ```

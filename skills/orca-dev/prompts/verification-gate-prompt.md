@@ -38,7 +38,7 @@ Discover the commands from repo config (package.json scripts, Makefile, pyprojec
 
 ## Inherited-failure rule
 
-If a failure looks pre-existing (unrelated to the touched files), verify by checking whether it also fails at the base commit — e.g. `git stash` + rerun + `git stash pop`, or by reading the failing test's relation to the diff. Inherited failures do NOT fail the gate: report them as a note. Only failures introduced or touched by this phase's diff produce `GATE_FAIL`.
+If a failure looks pre-existing (unrelated to the touched files), verify by running the same command at the base commit in a throwaway checkout: `git worktree add <tmpdir> <base-sha>`, run there, `git worktree remove --force <tmpdir>`. NEVER `git stash`, `git checkout` or `git reset` on this tree — the implementation is uncommitted and would be destroyed (and `stash` would not even give you the base: new files stay in place). If the throwaway checkout is impractical, say so and classify by reading the failing test's relation to the diff. Inherited failures do NOT fail the gate: report them as a note. Only failures introduced or touched by this phase's diff produce `GATE_FAIL`.
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
@@ -58,5 +58,5 @@ orca orchestration send --type worker_done --subject "<the same token>" --body "
 The body must repeat the line-2 summary verbatim.
 
 3. `--outcome succeeded` when you produced the requested artifact (`GATE_OK`, `GATE_FAIL` — both mean the gate itself ran); `--outcome failed` when you could not run the verification at all. Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 ```

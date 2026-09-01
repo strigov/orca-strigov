@@ -101,7 +101,7 @@ STOP and escalate (`BLOCKED`) when:
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
 3. `--outcome succeeded` when you produced the requested artifact (`DONE`, `DONE_WITH_CONCERNS`); `--outcome failed` when you could not (`BLOCKED`, `NEEDS_CONTEXT`). Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
@@ -123,8 +123,8 @@ Path: `<repo-root>/docs/plans/<slug>.md`, phase `<id>`. Read the plan file for s
 
 ## Rules
 
-- Address every blocking item. If you disagree with one, explain in the report — do not silently ignore.
-- Do NOT expand scope beyond fixing these items.
+- Address every blocking item. If you believe one is wrong, still do not skip it silently: fix what is authorized and explain the disagreement in the report.
+- Items not in this list are NOT authorized — no NITs, no refactors, no unrelated cleanups. If a fix needs broader scope, stop: line 1 of the report is the bare token `NEEDS_AUTHORIZATION`, line 2 `<item> requires <extra change> because <reason>`, repeated in the worker_done body.
 - Re-run tests / typecheck / linters after fixes; report results.
 - Do NOT run `git commit` / `git push` — leave all changes uncommitted; the coordinator handles git.
 
@@ -136,14 +136,14 @@ Path: `<repo-root>/docs/plans/<slug>.md`, phase `<id>`. Read the plan file for s
    2. The exact test command(s) you ran
    3. The relevant output
 
-   All three are mandatory — a fix-round report missing any of them is returned to you before re-review; reviewers will not re-run the full suite, so your report is the test evidence.
+   All three are mandatory — a fix-round report missing any of them is returned to you before re-review.
 
-   Then rewrite line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED`, with the same structured fields as the first round right after it (test summary, files changed count, concerns). If NEEDS_AUTHORIZATION or BLOCKED, put the specifics in the worker_done body as well.
+   Then rewrite line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `NEEDS_CONTEXT` | `BLOCKED`, with the same structured fields as the first round right after it (test summary, files changed count, concerns). If NEEDS_AUTHORIZATION, NEEDS_CONTEXT or BLOCKED, put the specifics in the worker_done body as well.
 
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
-3. `--outcome succeeded` when you produced the requested artifact (`DONE`, `DONE_WITH_CONCERNS`); `--outcome failed` when you could not (`NEEDS_AUTHORIZATION`, `BLOCKED`). Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+3. `--outcome succeeded` when you produced the requested artifact (`DONE`, `DONE_WITH_CONCERNS`); `--outcome failed` when you could not (`NEEDS_AUTHORIZATION`, `NEEDS_CONTEXT`, `BLOCKED`). Never encode failure only in prose.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 ```

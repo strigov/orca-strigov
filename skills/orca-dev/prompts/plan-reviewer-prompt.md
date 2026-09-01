@@ -127,11 +127,11 @@ orca orchestration send --type worker_done --subject "<the same token>" --body "
 The body's FIRST sentence must repeat the token and the count of BLOCKING items (e.g. "CHANGES_REQUESTED — 3 BLOCKING items.").
 
 3. `--outcome succeeded` when you produced the requested artifact (`APPROVED`, `CHANGES_REQUESTED` — both mean the review itself succeeded); `--outcome failed` when you could not produce a review at all. Never encode failure only in prose.
-4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 600000 --json` over guessing; the coordinator answers with `reply`.
+4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 
 A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
 
-Be ruthless on BLOCKING; be sparing — only include what truly blocks per the Finding classes definitions above.
+Block on everything that meets the Finding classes above, and on nothing else.
 
 Do not write code. Do not modify files other than your report file. Read the plan and cited files only.
 ```
