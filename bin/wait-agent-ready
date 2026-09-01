@@ -13,9 +13,10 @@
 # exit 1 = timeout (print the last screen lines to stderr); exit 2 = usage.
 set -euo pipefail
 [ $# -ge 2 ] || { echo "usage: wait-agent-ready <handle> <agy|codex|claude|marker> [timeout-s]" >&2; exit 2; }
-h="$1"; case "$2" in
+h="$1"; busy=""; case "$2" in
   agy) marker="Antigravity" ;;      # banner "Antigravity CLI <ver>"
-  codex) marker="Ask Codex" ;;       # persistent composer line "Ask Codex to do anything"
+  codex) marker="Ask Codex"         # persistent composer line "Ask Codex to do anything"
+         busy="Starting MCP servers" ;;   # composer is drawn before MCP startup ends; Enter sent meanwhile is swallowed (observed 2026-09-01, smoke 3: 50 min idle)
   claude) marker="Claude Code" ;;
   *) marker="$2" ;;
 esac
@@ -26,7 +27,8 @@ screen() {
     | python3 -c 'import sys,json;d=json.load(sys.stdin);t=d.get("result",{}).get("terminal",{});print("\n".join(x for x in t.get("tail",[]) if isinstance(x,str)))' 2>/dev/null || true
 }
 while :; do
-  if screen | grep -qF -- "$marker"; then
+  scr="$(screen)"
+  if grep -qF -- "$marker" <<<"$scr" && { [ -z "$busy" ] || ! tail -20 <<<"$scr" | grep -qF -- "$busy"; }; then
     orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1 || true
     echo "ready: $marker on $h"
     exit 0

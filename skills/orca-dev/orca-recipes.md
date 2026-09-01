@@ -48,6 +48,8 @@ orca terminal wait --terminal $H --for tui-idle --timeout-ms 180000 --json
 orca orchestration dispatch --task <task_id> --to $H --inject --json
 ```
 
+**Codex needs it too:** Codex draws the "Ask Codex" composer while it is still `Starting MCP servers (n/9)`; text sent in that window lands in the composer but the Enter is swallowed, and the coordinator (or an operator `terminal send`) then waits on a terminal that never started (observed 2026-09-01, smoke 3: 50 minutes idle). `wait-agent-ready <h> codex` now also waits for that line to leave the screen. After any manual `terminal send … --enter`, read the terminal once: `[Pasted Content N chars]` still in the composer means the Enter was lost — send an empty `--enter` again.
+
 **Why `wait-agent-ready` is mandatory:** `tui-idle` is satisfied by the launching shell's prompt within ~1 s, before a slow-starting agent has drawn its TUI (Antigravity spends 10–20 s on login/experiment refresh). An inject sent into that window is lost, and Orca fails the dispatch as `agent_prompt_stalled` about 30 s later — this is exactly how the phase-2 smoke lost its Flash implementer (2026-09-01). `wait-agent-ready` polls the screen for the agent's banner/composer marker, then waits for `tui-idle` once more; exit 1 = marker never appeared (treat as an availability failure of that agent, not as a stall).
 
 Argv per agent:
