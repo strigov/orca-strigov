@@ -11,7 +11,7 @@ Layout:
 - `skills/orca-dev/orca-recipes.md` — launch, wait, release, blocker fixes
 - `skills/orca-dev/prompts/` — one template per role
 - `bin/` — `review-package`, `sdd-workspace`, `verify-gate`, `wait-agent-ready` (bash, no model)
-- `install.sh` — links the skill into `~/.codex/skills`, pre-trusts a repo for Claude/Antigravity, reports blockers
+- `install.sh` (macOS / Linux / WSL2) and `install.ps1` (native Windows) — link the skill into `~/.codex/skills`, pre-trust a repo and its worktrees for Claude/Antigravity, report blockers; Windows notes in `docs/install-windows.md`
 - `docs/spikes/` — empirical findings the protocol is built on
 
 Working on this repo itself: plain edits are fine (it is documentation and shell); keep `roles.md` the only place that names models.
