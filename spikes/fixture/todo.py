@@ -56,25 +56,29 @@ def _save_items(path: Path, items: list[dict]) -> None:
             except FileNotFoundError:
                 pass
 
-_ITEMS: list[dict] = []
-
-
 def add(text: str) -> dict:
-    item = {"id": len(_ITEMS) + 1, "text": text, "done": False}
-    _ITEMS.append(item)
+    path = _storage_path()
+    items = _load_items(path)
+    item = {"id": len(items) + 1, "text": text, "done": False}
+    items.append(item)
+    _save_items(path, items)
     return item
 
 
 def complete(item_id: int) -> dict:
-    for item in _ITEMS:
+    path = _storage_path()
+    items = _load_items(path)
+    for item in items:
         if item["id"] == item_id:
             item["done"] = True
+            _save_items(path, items)
             return item
     raise KeyError(item_id)
 
 
 def list_items(show_done: bool = True) -> list[dict]:
-    return [i for i in _ITEMS if show_done or not i["done"]]
+    items = _load_items(_storage_path())
+    return [i for i in items if show_done or not i["done"]]
 
 
 def main(argv: list[str] | None = None) -> int:

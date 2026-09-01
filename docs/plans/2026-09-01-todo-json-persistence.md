@@ -1,7 +1,7 @@
 ---
 slug: todo-json-persistence
 created: 2026-09-01
-status: in-progress
+status: done
 orca_run: run_edc41ebcb977
 phases:
   - id: Ф1
@@ -10,7 +10,8 @@ phases:
     commits: "728a4c9.."
   - id: Ф2
     scope: "Подключение add/list/done к хранилищу без изменения CLI-контракта"
-    status: in-progress
+    status: done
+    commits: "15ed8f8.."
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
 ---
