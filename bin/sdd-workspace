@@ -19,20 +19,26 @@
 # Single source of truth for the workspace location, so phase briefs and
 # review-package cannot drift to different directories.
 #
-# Usage: sdd-workspace [PLAN_FILE]
+# Usage: sdd-workspace [PLAN_FILE | --name SLUG]
+#   --name SLUG resolves a plan-less workspace (.superpowers/sdd/<SLUG>/) for
+#   quickfix runs, which have no plan file.
 set -euo pipefail
 
-if [ $# -gt 1 ]; then
-  echo "usage: sdd-workspace [PLAN_FILE]" >&2
-  exit 2
-fi
+usage(){ echo "usage: sdd-workspace [PLAN_FILE | --name SLUG]" >&2; exit 2; }
+[ $# -le 2 ] || usage
 
 root=$(git rev-parse --show-toplevel)
 base="$root/.superpowers/sdd"
 dir="$base"
 
-if [ $# -eq 1 ]; then
+if [ $# -eq 2 ]; then
+  [ "$1" = "--name" ] || usage
+  slug=$2
+  case "$slug" in ""|.|..|*/*) echo "bad workspace name: $slug" >&2; exit 2;; esac
+  dir="$base/$slug"
+elif [ $# -eq 1 ]; then
   plan=$1
+  [ "$plan" != "--name" ] || usage
   [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
   slug=$(basename "$plan" .md)
   [ -n "$slug" ] && [ "$slug" != "." ] && [ "$slug" != ".." ] \
@@ -42,4 +48,4 @@ fi
 
 mkdir -p "$dir"
 printf '*\n' > "$base/.gitignore"
-cd "$dir" && pwd
+cd "$dir" && pwd -P

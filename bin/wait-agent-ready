@@ -10,9 +10,13 @@
 # login/experiment refresh) has drawn anything. A `dispatch --inject` sent in
 # that window is lost, and Orca marks the dispatch `agent_prompt_stalled` after
 # ~30 s (observed 2026-09-01, phase 2 smoke). Exit 0 = marker seen and idle;
-# exit 1 = timeout (print the last screen lines to stderr); exit 2 = usage.
+# exit 1 = timeout (print the last screen lines to stderr); exit 2 = usage;
+# exit 3 = `orca terminal read` failed 5 times in a row (bad handle, Orca down).
+# The marker is looked for in the last 25 screen lines only, so a banner left
+# in scrollback by a previous agent in the same terminal does not count.
 set -euo pipefail
-[ $# -ge 2 ] || { echo "usage: wait-agent-ready <handle> <agy|codex|claude|marker> [timeout-s]" >&2; exit 2; }
+usage() { echo "usage: wait-agent-ready <handle> <agy|codex|claude|marker> [timeout-s]" >&2; exit 2; }
+[ $# -ge 2 ] || usage
 h="$1"; busy=""; case "$2" in
   agy) marker="Antigravity" ;;      # banner "Antigravity CLI <ver>"
   codex) marker="Ask Codex"         # persistent composer line "Ask Codex to do anything"
@@ -21,21 +25,37 @@ h="$1"; busy=""; case "$2" in
   *) marker="$2" ;;
 esac
 timeout="${3:-120}"
+case "$timeout" in ''|*[!0-9]*) echo "wait-agent-ready: timeout-s must be a non-negative integer, got '$timeout'" >&2; usage ;; esac
 deadline=$(( $(date +%s) + timeout ))
-screen() {
-  orca terminal read --terminal "$h" --limit 80 --json 2>/dev/null \
-    | python3 -c 'import sys,json;d=json.load(sys.stdin);t=d.get("result",{}).get("terminal",{});print("\n".join(x for x in t.get("tail",[]) if isinstance(x,str)))' 2>/dev/null || true
+errf=$(mktemp "${TMPDIR:-/tmp}/wait-agent-ready.XXXXXX")
+trap 'rm -f "$errf"' EXIT
+scr=""; read_ok=1; fails=0
+screen() {  # sets scr (screen tail) and read_ok (0 = orca read failed and yielded nothing)
+  local raw rc=0
+  raw=$(orca terminal read --terminal "$h" --limit 80 --json 2>"$errf") || rc=$?
+  scr=$(printf '%s' "$raw" | python3 -c 'import sys,json;d=json.load(sys.stdin);t=d.get("result",{}).get("terminal",{});print("\n".join(x for x in t.get("tail",[]) if isinstance(x,str)))' 2>/dev/null) || scr=""
+  if [ $rc -ne 0 ] && [ -z "$scr" ]; then read_ok=0; else read_ok=1; fi
 }
 while :; do
-  scr="$(screen)"
-  if grep -qF -- "$marker" <<<"$scr" && { [ -z "$busy" ] || ! tail -20 <<<"$scr" | grep -qF -- "$busy"; }; then
+  screen
+  if [ $read_ok -eq 0 ]; then
+    fails=$((fails+1))
+    if [ $fails -ge 5 ]; then
+      echo "terminal read failing: $h ($fails consecutive failures); last stderr:" >&2
+      cat "$errf" >&2
+      exit 3
+    fi
+  else
+    fails=0
+  fi
+  if tail -25 <<<"$scr" | grep -qF -- "$marker" && { [ -z "$busy" ] || ! tail -20 <<<"$scr" | grep -qF -- "$busy"; }; then
     orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1 || true
     echo "ready: $marker on $h"
     exit 0
   fi
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "timeout: '$marker' not on screen of $h after ${timeout}s; last lines:" >&2
-    screen | tail -5 >&2
+    tail -5 <<<"$scr" >&2
     exit 1
   fi
   sleep 2
