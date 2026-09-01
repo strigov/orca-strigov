@@ -6,11 +6,11 @@ orca_run: run_8e4061631412
 phases:
   - id: Ф1
     scope: "Команды remove/edit в spikes/fixture/todo.py и выдача id как max(id)+1"
-    status: pending
+    status: in-progress
     parallel_group: G1
   - id: Ф2
     scope: "Отдельный модуль экспорта CSV spikes/fixture/todo_export.py с собственным CLI"
-    status: pending
+    status: in-progress
     parallel_group: G1
 verify:
   - "python3 -m pytest -q spikes/fixture/tests"
