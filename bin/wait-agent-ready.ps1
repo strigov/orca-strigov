@@ -40,22 +40,27 @@ $scr = @()
 $lastErr = ''
 
 function Read-Screen {
-  # returns @{ ok = $bool; lines = string[] }
+  # returns @{ ok = $bool; lines = string[]; screen = $bool }
+  # `--screen` = the rendered frame. The default read is the accumulated output stream, where a TUI that
+  # repaints comes back as stacked fragments and a banner drops out of the tail within seconds (observed
+  # 2026-09-02 on Windows: 'Antigravity' / 'Ask Codex' never matched in the stream). A host that cannot
+  # render reports source=screen-unavailable and returns the stream instead.
   $errFile = [IO.Path]::GetTempFileName()
   try {
-    $raw = (& orca terminal read --terminal $h --limit 80 --json 2>$errFile | Out-String)
+    $raw = (& orca terminal read --terminal $h --screen --limit 80 --json 2>$errFile | Out-String)
     $rc = $LASTEXITCODE
     $script:lastErr = ''
     try { $script:lastErr = [IO.File]::ReadAllText($errFile) } catch { }
   } finally { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue }
-  $lines = @()
+  $lines = @(); $isScreen = $false
   try {
     $d = $raw | ConvertFrom-Json
     $t = $d.result.terminal
     if ($t -and $t.PSObject.Properties['tail']) { $lines = @($t.tail | Where-Object { $_ -is [string] }) }
+    if ($t -and $t.PSObject.Properties['source']) { $isScreen = ([string]$t.source -eq 'screen') }
   } catch { $lines = @() }
-  if ($rc -ne 0 -and $lines.Count -eq 0) { return @{ ok = $false; lines = @() } }
-  return @{ ok = $true; lines = $lines }
+  if ($rc -ne 0 -and $lines.Count -eq 0) { return @{ ok = $false; lines = @(); screen = $false } }
+  return @{ ok = $true; lines = $lines; screen = $isScreen }
 }
 function Tail([string[]]$a, [int]$n) { if ($a.Count -le $n) { return $a } ; return $a[($a.Count - $n)..($a.Count - 1)] }
 function Contains-Literal([string[]]$lines, [string]$needle) {
@@ -74,7 +79,11 @@ while ($true) {
       exit 3
     }
   } else { $fails = 0 }
-  if ((Contains-Literal (Tail $scr 25) $marker) -and (($busy -eq '') -or -not (Contains-Literal (Tail $scr 20) $busy))) {
+  # rendered frame: the whole frame is current state (a fresh TUI clears it), so search all of it;
+  # stream fallback: last 25 lines only, so a banner left in scrollback by a previous agent does not count
+  $look = if ($r.screen) { $scr } else { Tail $scr 25 }
+  $lookBusy = if ($r.screen) { $scr } else { Tail $scr 20 }
+  if ((Contains-Literal $look $marker) -and (($busy -eq '') -or -not (Contains-Literal $lookBusy $busy))) {
     & orca terminal wait --terminal $h --for tui-idle --timeout-ms 60000 --json *> $null
     Write-Output "ready: $marker on $h"
     exit 0
