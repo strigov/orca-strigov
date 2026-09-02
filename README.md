@@ -9,7 +9,7 @@ A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex
 | implementation | Gemini 3.7 Flash High (Antigravity CLI) → Codex Luna max fallback → Codex Terra max escalation |
 | frontend phases | Claude Opus xhigh (new UI) / Sonnet (tweaks) |
 | verification gate | `bin/verify-gate` script; a Gemini Flash worker only when the script has no commands or cannot classify |
-| code review | Claude Opus xhigh, Codex Sol xhigh control review — reviewers swap families when a Codex or Claude model wrote the code |
+| code review | Claude Opus xhigh (Fable on risky phases and in the last fused round), Codex Sol xhigh control review — reviewers swap families when a Codex or Claude model wrote the code |
 | final branch review | Claude Opus xhigh |
 
 It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-cc-plugins) from Claude Code to Orca: the same phased plans, authorization ledger, bounded review loops and family rule (writer ≠ reviewer family), with Orca's `worker-start` / `worker_done` replacing two ad-hoc transports.

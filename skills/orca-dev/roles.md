@@ -27,8 +27,8 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 | `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-5.6-terra` `max` in a FRESH terminal | yes | same terminal across fix rounds; a model change is always a new terminal |
 | `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → codex `gpt-5.6-luna` `max` — announced | yes | same terminal across fix rounds |
 | `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.7-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
-| `review-primary` | 4.1 | claude `opus` `xhigh` | Opus unavailable → codex `gpt-5.6-sol` `xhigh` — announced, never silent. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
-| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Terra) → claude `opus` `xhigh` (Sol never reviews Codex-written code; 4.1 and 4.2 are then both Opus, in fresh terminals — a deliberate cost decision of 2026-09-03, Fable is reserved for `diagnosis`); Sol unavailable → claude `opus` `xhigh` — announced | no | fresh every round |
+| `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `xhigh` on `risk: SECURITY / DATA_LOSS` phases or in fused-loop round 4 (the last round before the cap; rounds > 4 do not exist); Opus fallback if Fable unavailable; Opus unavailable → codex `gpt-5.6-sol` `xhigh` — announced, never silent. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
+| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Terra) → claude `opus` `xhigh` (Sol never reviews Codex-written code; 4.1 and 4.2 are then both Opus, in fresh terminals — a deliberate cost decision of 2026-09-03; Fable is reserved for `diagnosis` and the 4.1 risk / last-round rule); Sol unavailable → claude `opus` `xhigh` — announced | no | fresh every round |
 | `synthesizer` | 4.5 | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
 | `review-final` | 5 | claude `opus` `xhigh` | every phase written by Claude (frontend-only plan) → codex `gpt-5.6-sol` `xhigh`; Opus unavailable → codex `gpt-5.6-sol` `xhigh` — announced | no | fresh every round (cap 2) |
 | `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `fable` `xhigh` | claude `opus` `xhigh` — announced | no | fresh |
@@ -43,8 +43,8 @@ The defaults above assume the code was written by Gemini. When the cascade or th
 
 | code written by | 4.1 primary | 4.2 control | Step 5 final |
 |---|---|---|---|
-| Gemini (Flash) — default | claude `opus` `xhigh` | codex `gpt-5.6-sol` `xhigh` | claude `opus` `xhigh` |
-| Codex (Luna / Terra, after a fallback or escalation) | claude `opus` `xhigh` | claude `opus` `xhigh` | claude `opus` `xhigh` |
+| Gemini (Flash) — default | claude `opus` `xhigh` (Fable per the 4.1 risk / last-round rule) | codex `gpt-5.6-sol` `xhigh` | claude `opus` `xhigh` |
+| Codex (Luna / Terra, after a fallback or escalation) | claude `opus` `xhigh` (Fable per the 4.1 risk / last-round rule) | claude `opus` `xhigh` | claude `opus` `xhigh` |
 | Claude (frontend phases) | codex `gpt-5.6-sol` `xhigh` | codex `gpt-5.6-terra` `xhigh` | codex `gpt-5.6-sol` `xhigh` when every phase is Claude-written, else claude `opus` `xhigh` |
 
 Planning is unchanged: the plan-reviewer row already alternates families per profile and round.
