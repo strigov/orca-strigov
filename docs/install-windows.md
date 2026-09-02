@@ -9,12 +9,12 @@ Prerequisites, all on `PATH`:
 | tool | how | note |
 |---|---|---|
 | Orca (Windows build) with orchestration enabled | orca.dev | `orca status --json` must report `runtime.state = ready` |
-| Git for Windows | `winget install Git.Git` | provides `git` **and `bash.exe`** — the protocol's `bin/` scripts are bash. Put `C:\Program Files\Git\bin` on `PATH` *before* `System32` (whose `bash.exe` is the WSL launcher) |
+| Git for Windows | `winget install Git.Git` | provides `git`. Bash is **not** needed: the workspace scripts have native PowerShell ports (`bin\*.ps1`). `bash` on a stock Windows `PATH` is the WSL launcher in `System32` — the protocol never calls it |
 | Codex CLI | `npm i -g @openai/codex` | coordinator and Codex workers; `%USERPROFILE%\.codex\` |
 | Claude Code | `npm i -g @anthropic-ai/claude-code` or the native installer | judgment roles; `%USERPROFILE%\.claude.json` |
 | Antigravity CLI (`agy`) | Google's installer | **unverified on native Windows.** Without it the implementer cascade starts at Codex Luna (`roles.md`) — the protocol still runs |
-| Python 3 as `python3` | python.org installer, tick "python3.exe alias", or `winget install Python.Python.3.12` | `bin/verify-gate` / `install.sh` call `python3` |
-| jq | `winget install jqlang.jq` | used by the recipes' one-liners |
+| Python 3 as `python3` | optional | the `.ps1` scripts do not use it; a plan's own `verify:` commands may |
+| jq | optional | the `.ps1` scripts and `install.ps1` parse JSON with `ConvertFrom-Json`; recipes' `jq` one-liners have PowerShell equivalents (`orca-recipes.md` §9) |
 
 Install:
 
@@ -30,12 +30,14 @@ If PowerShell refuses to run the script: `Set-ExecutionPolicy -Scope CurrentUser
 
 What it does differently from `install.sh`:
 
-- The skill link is a **symbolic link** when allowed (Developer Mode or an elevated shell), otherwise a **directory junction**. Git Bash's `readlink -f` does not resolve junctions, so the installer also sets the user environment variable `ORCA_DEV_HOME` to the checkout; `SKILL.md` resolves `bin/` through it. Restart Orca after the first install so its terminals inherit the variable.
+- The skill link is a **symbolic link** when allowed (Developer Mode or an elevated shell), otherwise a **directory junction** (verified: Codex-side directory listing, Git Bash `readlink -f` and PowerShell all follow it). The installer also sets the user environment variable `ORCA_DEV_HOME` to the checkout; `SKILL.md` resolves `bin\` through it. Restart Orca after the first install so its terminals inherit the variable.
+- The workspace scripts are native PowerShell ports: `bin\sdd-workspace.ps1`, `bin\review-package.ps1`, `bin\verify-gate.ps1`, `bin\wait-agent-ready.ps1` (PowerShell 5.1 and 7; no bash, python3 or jq). Same arguments, exit codes and stdout shape as the bash originals. `verify-gate.ps1` runs each `verify:` command in a child PowerShell with stdin closed (write them as PowerShell / native commands), junctions `node_modules` / `.venv` / `venv` into the BASE worktree instead of symlinking, and copies git output to review packages as raw bytes so the console code page never re-encodes a diff.
+- Per-repo trust: under pwsh 7 the installer parses `.claude.json` with `ConvertFrom-Json -AsHashtable`, because real files contain project keys that differ only in case (`D:/x` vs `d:/x`) and the default PSCustomObject form rejects them (Windows PowerShell 5.1 does too — run `install.ps1 -Repo` under pwsh if you hit that WARN). Claude Code on Windows keys `projects[]` with forward slashes (`C:/repo`); older builds used backslashes — the installer accepts either as trusted and writes the forward-slash key. Antigravity's `trustedWorkspaces` uses backslashes (verified on a real settings.json).
 - Codex is not upgraded automatically (no Homebrew); an "Update available" prompt blocks worker input — keep Codex current yourself.
 - The GPT Pro bridge (`codex-chatgpt-web`) is macOS-only: the planning profile is always `standard` (Opus → Sol).
 - Repo paths with spaces produce a WARN: the bash scripts quote paths, but Orca argv and agy's trust matching are unverified with spaces.
 
-Coordinator usage is the same (`$orca-dev <task>` in a Codex terminal inside Orca) with the differences listed in `skills/orca-dev/orca-recipes.md` §9: bash-prefixed script calls, quoted `--types` lists, absolute Windows paths in worker prompts.
+Coordinator usage is the same (`$orca-dev <task>` in a Codex terminal inside Orca) with the differences listed in `skills/orca-dev/orca-recipes.md` §9: `.ps1` script calls, quoted `--types` lists, `ConvertFrom-Json` instead of `jq`, absolute Windows paths in worker prompts.
 
 ## B. WSL2
 

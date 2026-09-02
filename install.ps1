@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   install.ps1 — Windows installer for the orca-dev skill (native Windows, no WSL).
@@ -13,13 +13,16 @@
 
   What it writes (install mode only):
     %USERPROFILE%\.codex\skills\orca-dev   symbolic link (Developer Mode / admin) or directory junction
-    user environment variable ORCA_DEV_HOME = this checkout (the protocol resolves bin/ through it)
+    user environment variable ORCA_DEV_HOME = this checkout (the protocol resolves bin\ through it)
     %USERPROFILE%\.claude.json             projects[<path>].hasTrustDialogAccepted = true
     %USERPROFILE%\.gemini\antigravity-cli\settings.json   trustedWorkspaces += <path>
   All JSON edits are atomic (temp file + rename) and preserve unrelated keys.
 
-  Windows notes (see docs/install-windows.md): the protocol's bin/ scripts are bash — Git for Windows
-  provides bash.exe; the coordinator runs them as `bash "$env:ORCA_DEV_HOME/bin/verify-gate" ...`.
+  Windows notes (see docs/install-windows.md): the protocol's workspace scripts have native PowerShell
+  ports (bin\*.ps1, PowerShell 5.1+, no bash / python3 / jq needed); the coordinator runs them as
+  `& "$env:ORCA_DEV_HOME\bin\verify-gate.ps1" ...`. The bash originals stay for macOS / Linux / WSL.
+  Claude Code on Windows keys projects[] with forward slashes (C:/repo); older builds used backslashes —
+  both spellings count as trusted, the forward-slash one is written.
 #>
 [CmdletBinding()]
 param(
@@ -115,18 +118,20 @@ if (-not (Test-Path -LiteralPath $src -PathType Container)) {
 }
 
 # ---- 2. CLIs -----------------------------------------------------------------------------
-# bash + git come from Git for Windows; the protocol's bin/ scripts need bash.
-foreach ($c in 'orca','codex','claude','agy','git','bash','jq','python3') {
+# The workspace scripts are PowerShell (bin\*.ps1): git is the only runtime dependency. python3 / jq
+# are optional on Windows (plans' own verify: commands may still want them).
+foreach ($c in 'orca','codex','claude','agy','git') {
   $cmd = Get-Command $c -ErrorAction SilentlyContinue
   if ($cmd) { Write-Ok "${c}: $($cmd.Source)" }
-  elseif ($c -eq 'python3' -and (Get-Command python -ErrorAction SilentlyContinue)) { Write-Warn2 "python3 not on PATH (python is) — the bin/ scripts call python3; add an alias or install Python 3 with the py launcher's python3.exe" }
   elseif ($c -eq 'agy') { Write-Warn2 "agy (Antigravity CLI) not on PATH — the implementer cascade starts at Luna (roles.md); native Windows support of agy is unverified" }
   else { Write-Warn2 "$c not on PATH" }
 }
-$bashCmd = Get-Command bash -ErrorAction SilentlyContinue
-if ($bashCmd -and $bashCmd.Source -match 'System32\\bash\.exe') {
-  Write-Warn2 "bash on PATH is the WSL launcher ($($bashCmd.Source)); the protocol needs Git for Windows bash — put <Git>\bin before System32 on PATH or use the WSL install path (docs/install-windows.md)"
+foreach ($c in 'python3','jq') {
+  $cmd = Get-Command $c -ErrorAction SilentlyContinue
+  if ($cmd) { Write-Ok "${c}: $($cmd.Source)" } else { Write-Info "$c not on PATH (optional on Windows: the bin\*.ps1 scripts do not need it)" }
 }
+$pw = Get-Command pwsh -ErrorAction SilentlyContinue
+if ($pw) { Write-Ok "pwsh: $($pw.Source)" } else { Write-Info "pwsh (PowerShell 7) not on PATH — the scripts also run on Windows PowerShell 5.1" }
 if (Get-Command orca -ErrorAction SilentlyContinue) {
   try {
     $st = (orca status --json 2>$null | ConvertFrom-Json).result.runtime.state
@@ -165,35 +170,57 @@ if ((Test-Path -LiteralPath $cfg) -and (Select-String -LiteralPath $cfg -Pattern
 }
 
 # ---- 5. per-repo trust ------------------------------------------------------------------------
+# PowerShell 7: ConvertFrom-Json -AsHashtable (case-sensitive keys — real .claude.json files contain
+# project keys that differ only in case, which the PSCustomObject form rejects). Windows PowerShell 5.1:
+# PSCustomObject; such a file is reported as WARN "fix by hand / run under pwsh".
+# Claude Code on Windows keys projects[] with forward slashes (C:/repo); older builds used backslashes —
+# either spelling counts as trusted, the forward-slash one is written.
+function Get-Prop($o, [string]$k) {
+  if ($o -is [System.Collections.IDictionary]) { if ($o.Contains($k)) { return $o[$k] } ; return $null }
+  if ($o -and $o.PSObject.Properties[$k]) { return $o.$k } ; return $null
+}
+function Set-Prop($o, [string]$k, $v) {
+  if ($o -is [System.Collections.IDictionary]) { $o[$k] = $v } else { $o | Add-Member -Force -NotePropertyName $k -NotePropertyValue $v }
+}
+function Is-Obj($o) { return ($o -is [System.Collections.IDictionary]) -or ($o -is [PSCustomObject]) }
+function New-Obj { if ($PSVersionTable.PSVersion.Major -ge 7) { return [ordered]@{} } ; return [PSCustomObject]@{} }
 function Set-TrustJson {
   param([ValidateSet('claude','agy')][string]$Kind, [string]$File, [string]$Mode, [string[]]$Paths)
   if (-not (Test-Path -LiteralPath $File)) {
     $hint = if ($Kind -eq 'claude') { 'run claude once in the repo, then re-run' } else { 'run agy once, then re-run' }
     Write-Warn2 "${Kind}: $File missing → $hint"; return
   }
-  try { $d = Get-Content -Raw -LiteralPath $File -Encoding UTF8 | ConvertFrom-Json }
-  catch { Write-Warn2 "${Kind}: $File is not valid JSON ($($_.Exception.Message)) → skipped, fix it by hand"; return }
-  if ($null -eq $d -or $d -isnot [PSCustomObject]) { Write-Warn2 "${Kind}: $File top-level value is not an object → skipped"; return }
+  try {
+    $raw = Get-Content -Raw -LiteralPath $File -Encoding UTF8
+    $d = if ($PSVersionTable.PSVersion.Major -ge 7) { $raw | ConvertFrom-Json -AsHashtable } else { $raw | ConvertFrom-Json }
+  } catch { Write-Warn2 "${Kind}: $File is not valid JSON for this PowerShell ($($_.Exception.Message)) → skipped; re-run under pwsh 7 or fix it by hand"; return }
+  if ($null -eq $d -or -not (Is-Obj $d)) { Write-Warn2 "${Kind}: $File top-level value is not an object → skipped"; return }
   $changed = $false
   foreach ($r in $Paths) {
+    $rf = $r.Replace('\', '/')   # current Claude Code key spelling
     $isTrusted = $false
     if ($Kind -eq 'claude') {
-      $projects = if ($d.PSObject.Properties['projects']) { $d.projects } else { $null }
-      $entry = if ($projects -and $projects.PSObject.Properties[$r]) { $projects.$r } else { $null }
-      $isTrusted = ($entry -and $entry.PSObject.Properties['hasTrustDialogAccepted'] -and [bool]$entry.hasTrustDialogAccepted)
+      $projects = Get-Prop $d 'projects'
+      foreach ($k in @($rf, $r)) {
+        $entry = if (Is-Obj $projects) { Get-Prop $projects $k } else { $null }
+        if ((Is-Obj $entry) -and [bool](Get-Prop $entry 'hasTrustDialogAccepted')) { $isTrusted = $true }
+      }
     } else {
-      $tw = if ($d.PSObject.Properties['trustedWorkspaces']) { @($d.trustedWorkspaces) } else { @() }
-      $isTrusted = ($tw -contains $r)
+      $tw = Get-Prop $d 'trustedWorkspaces'
+      $isTrusted = ($tw -and (@($tw) -contains $r))
     }
     if ($isTrusted) { Write-Ok "${Kind}: $r trusted"; continue }
     if ($Mode -ne 'install') { Write-Warn2 "${Kind}: $r not trusted → trust dialog will block the worker"; continue }
     if ($Kind -eq 'claude') {
-      if (-not $d.PSObject.Properties['projects'] -or $d.projects -isnot [PSCustomObject]) { $d | Add-Member -Force -NotePropertyName projects -NotePropertyValue ([PSCustomObject]@{}) }
-      if (-not $d.projects.PSObject.Properties[$r] -or $d.projects.$r -isnot [PSCustomObject]) { $d.projects | Add-Member -Force -NotePropertyName $r -NotePropertyValue ([PSCustomObject]@{}) }
-      $d.projects.$r | Add-Member -Force -NotePropertyName hasTrustDialogAccepted -NotePropertyValue $true
+      $projects = Get-Prop $d 'projects'
+      if (-not (Is-Obj $projects)) { $projects = New-Obj; Set-Prop $d 'projects' $projects }
+      $entry = Get-Prop $projects $rf
+      if (-not (Is-Obj $entry)) { $entry = New-Obj; Set-Prop $projects $rf $entry }
+      Set-Prop $entry 'hasTrustDialogAccepted' $true
     } else {
-      $tw = if ($d.PSObject.Properties['trustedWorkspaces']) { @($d.trustedWorkspaces) } else { @() }
-      $d | Add-Member -Force -NotePropertyName trustedWorkspaces -NotePropertyValue (@($tw) + $r)
+      $tw = Get-Prop $d 'trustedWorkspaces'
+      $list = if ($tw) { @($tw) } else { @() }
+      Set-Prop $d 'trustedWorkspaces' (@($list) + $r)
     }
     $changed = $true
     Write-Ok "${Kind}: trust set for $r"

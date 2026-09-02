@@ -18,7 +18,8 @@ set -euo pipefail
 usage() { echo "usage: wait-agent-ready <handle> <agy|codex|claude|marker> [timeout-s]" >&2; exit 2; }
 [ $# -ge 2 ] || usage
 h="$1"; busy=""; case "$2" in
-  agy) marker="Antigravity" ;;      # banner "Antigravity CLI <ver>"
+  agy) marker="Antigravity"         # banner "Antigravity CLI <ver>"
+       busy="not signed in" ;;      # the TUI draws a login menu when its first frame beats the keyring auth (~2-3 s, observed 2026-09-02); an inject into that menu is lost
   codex) marker="Ask Codex"         # persistent composer line "Ask Codex to do anything"
          busy="Starting MCP servers" ;;   # composer is drawn before MCP startup ends; Enter sent meanwhile is swallowed (observed 2026-09-01, smoke 3: 50 min idle)
   claude) marker="Claude Code" ;;

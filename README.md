@@ -34,7 +34,7 @@ git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov; cd $HOME\o
 .\install.ps1 -Check C:\path\to\repo      # read-only report; exit 1 on any WARN
 ```
 
-Windows needs Git for Windows on `PATH` (its `bash.exe` runs the protocol's `bin/` scripts); the GPT Pro bridge is macOS-only, so Windows always plans on the `standard` profile.
+On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq); the GPT Pro bridge is macOS-only, so Windows always plans on the `standard` profile.
 
 Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI; unverified on native Windows — without it the implementer cascade starts at Codex Luna), `git`, `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
 
@@ -53,6 +53,7 @@ bin/verify-gate                 deterministic gate from the plan's `verify:` lis
 bin/review-package              reviewer package: commits + stat + -U10 diff
 bin/sdd-workspace               per-plan scratch workspace
 bin/wait-agent-ready            waits for an agent's TUI before an inject (mandatory in Path B)
+bin/*.ps1                       native PowerShell ports of the four scripts for Windows (same CLI, exit codes, output)
 install.sh / install.ps1        macOS (Linux/WSL2) and Windows installers: link the skill, pre-trust repos, report blockers
 docs/spikes/                    what was measured before this was designed
 ```

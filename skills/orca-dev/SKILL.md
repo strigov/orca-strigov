@@ -95,7 +95,13 @@ WS="$BIN/sdd-workspace"; RPKG="$BIN/review-package"; GATE="$BIN/verify-gate"
 echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 ```
 
-On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) the same three paths are `$env:ORCA_DEV_HOME\bin\…` and every call is prefixed with `bash` (Git for Windows): `bash "$env:ORCA_DEV_HOME/bin/verify-gate" <plan> <base>`.
+On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) use the native PowerShell ports instead — same names with a `.ps1` suffix, same arguments, exit codes and output shape, no bash / python3 / jq involved:
+
+```powershell
+$BIN = "$env:ORCA_DEV_HOME\bin"   # set by install.ps1; restart Orca once after the first install
+$WS = "$BIN\sdd-workspace.ps1"; $RPKG = "$BIN\review-package.ps1"; $GATE = "$BIN\verify-gate.ps1"
+& $GATE <plan-file> <base-sha>    # e.g. & $GATE docs\plans\x.md a1b2c3d
+```
 
 - `"$WS" <plan-file>` prints the plan-scoped scratch directory (`.superpowers/sdd/<plan-basename>/`, self-ignoring) — home of prompt files, report files, review packages. Run it with cwd inside a track's worktree for parallel tracks. `"$WS" --name quickfix-<slug>` does the same for a plan-less quickfix.
 - `"$RPKG" BASE HEAD [OUTFILE]` (committed range) or `"$RPKG" BASE WORKTREE OUTFILE` (working tree vs BASE) writes the review package; only its `wrote <path>: N commit(s), M bytes` line enters your context.
@@ -139,7 +145,7 @@ Look for `docs/plans/*.md` (or the repo's plan dir) with top-level `status: in-p
 
 ### Step 1 — plan (writer)
 
-0. `install.sh --check <repo>` (from the skill's repo, `$BIN/../install.sh`); a WARN about trust or hooks → `install.sh --repo <repo>` or ask the user — a blocked worker costs a dispatch attempt.
+0. `install.sh --check <repo>` (from the skill's repo, `$BIN/../install.sh`; on Windows `& "$env:ORCA_DEV_HOME\install.ps1" -Check <repo>`); a WARN about trust or hooks → `install.sh --repo <repo>` (Windows: `install.ps1 -Repo <repo>`) or ask the user — a blocked worker costs a dispatch attempt.
 1. Choose the planning profile per `roles.md` (`strong` / `standard`). Run the bridge preflight from `orca-recipes.md`; say which profile you picked.
 2. `orca orchestration run-create --objective "<slug>" --json`; keep the run id — you write it into the plan frontmatter as `orca_run:` at the plan commit.
 3. Fill `prompts/plan-writer-prompt.md` Mode A (user request verbatim, repo root, known constraints, `[REPORT_FILE]`), `task-create`, attach per recipes. Required frontmatter includes `verify:` — the writer lists the repo's lint/typecheck/test commands the gate will run.
@@ -288,4 +294,4 @@ One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, mo
 - `./roles.md` — who runs what (models, efforts, cascades, family rule, planning profiles)
 - `./orca-recipes.md` — launch paths A/B, blockers, waiting, release, retries
 - `./prompts/plan-writer-prompt.md` (Mode A / Mode B), `plan-reviewer-prompt.md`, `implementer-prompt.md`, `frontend-implementer-prompt.md`, `verification-gate-prompt.md`, `review-primary-prompt.md`, `review-control-prompt.md`, `synthesize-review-prompt.md`, `final-review-prompt.md`, `quickfix-prompt.md`, `diagnosis-prompt.md`
-- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`
+- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready` (+ their `.ps1` ports for Windows)
