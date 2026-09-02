@@ -46,7 +46,7 @@ Do not guess.
 
 1. Implement exactly what the plan specifies — nothing more.
 2. Write tests that verify behavior (not that mirror the implementation).
-3. Run tests / typecheck / linters; confirm they pass.
+3. Run tests / typecheck / linters; confirm they pass. Long-running commands (full test suites, builds, staging scripts): run them in ONE shell call with a generous timeout and let it block. If your tool forces a background run, wait inside a single shell command (`Start-Sleep 300` / `sleep 300`, then check whether the process is still alive) — never with your own timer/schedule tool and never with repeated short reads of the log: every wake-up is a full-context model call. Observed 2026-09-02: an Antigravity worker "waiting" for `cargo test --workspace` with a 90 s timer made ~13 model calls per minute for 40 minutes (the timer pings every 30 s; each ping and each log read is a call) and burned the five-hour quota to 10 % while doing nothing.
 4. Self-review (see below) and fix issues before reporting.
 5. Write your full report to [REPORT_FILE], then send exactly one `worker_done` (see Reporting below).
 

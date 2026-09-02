@@ -86,6 +86,11 @@ Fix rounds after a fallback: the ledger plus the report file carry the context; 
 - Telling the two apart: `grep 'valid=false' ~/Library/Application\ Support/Codex\ Web\ GPT/logs/launcher.jsonl` (Windows: `Select-String valid=false "$env:APPDATA\Codex Web GPT\logs\launcher.jsonl"`) shows the rejected claims with their `retiredTurn`; a worker report claiming the token was rejected "before the first command" with no `valid=false` line at that time is the model giving up, not the bridge.
 - Every Codex launch in this protocol passes an explicit `--model`: the user's `~/.codex/config.toml` defaults to `chatgpt-web/pro`, and an unqualified `codex` would route the role through the bridge by accident.
 
+## Antigravity (`agy`) — operational notes
+
+- **Its timer ("Schedule") is a quota sink, not a wait.** A `Schedule(90s: …)` one-shot timer pings the model every 30 s ("Still waiting. Remaining time …"), and Flash answers each ping with a log read and a new timer. Observed 2026-09-02 on Windows: a worker waiting for `cargo test --workspace` made ~13 `streamGenerateContent` calls per minute for 40 minutes (360 timers in an hour) and drained the five-hour quota from full to 10 % without producing anything. The implementer prompts now tell workers to block inside one shell call (long timeout, or `Start-Sleep`/`sleep` inside the command) instead. If you see a worker's screen cycling `Schedule → Read(task log) → Waiting…`, steer it once with `orca terminal send`: "Stop using the timer; wait for the test with a single blocking shell command (`Start-Sleep 300` then check the process), then continue." A quota exhaustion mid-phase is an availability failure → Codex fallback per the cascade.
+- Login race: see `orca-recipes.md` ("Antigravity's login menu is a race, not a logout").
+
 ## Effort cheat-sheet
 
 | role | flag |
