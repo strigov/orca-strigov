@@ -49,6 +49,10 @@ function Read-Screen {
   try {
     $raw = (& orca terminal read --terminal $h --screen --limit 80 --json 2>$errFile | Out-String)
     $rc = $LASTEXITCODE
+    if ($rc -ne 0 -and -not $raw.Trim()) {   # host too old for --screen → plain (stream) read
+      $raw = (& orca terminal read --terminal $h --limit 80 --json 2>$errFile | Out-String)
+      $rc = $LASTEXITCODE
+    }
     $script:lastErr = ''
     try { $script:lastErr = [IO.File]::ReadAllText($errFile) } catch { }
   } finally { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue }

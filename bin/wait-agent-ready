@@ -37,6 +37,9 @@ screen() {  # sets scr (rendered frame, or stream tail), is_screen, read_ok (0 =
   # 2026-09-02 on Windows). A host that cannot render reports source=screen-unavailable and returns the stream.
   local raw rc=0 src
   raw=$(orca terminal read --terminal "$h" --screen --limit 80 --json 2>"$errf") || rc=$?
+  if [ $rc -ne 0 ] && [ -z "$raw" ]; then   # host too old for --screen → plain (stream) read
+    rc=0; raw=$(orca terminal read --terminal "$h" --limit 80 --json 2>"$errf") || rc=$?
+  fi
   scr=$(printf '%s' "$raw" | python3 -c 'import sys,json;d=json.load(sys.stdin);t=d.get("result",{}).get("terminal",{});print("\n".join(x for x in t.get("tail",[]) if isinstance(x,str)))' 2>/dev/null) || scr=""
   src=$(printf '%s' "$raw" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("result",{}).get("terminal",{}).get("source",""))' 2>/dev/null) || src=""
   [ "$src" = "screen" ] && is_screen=1 || is_screen=0
