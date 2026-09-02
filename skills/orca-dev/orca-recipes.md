@@ -122,9 +122,21 @@ pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null && echo bridge-up || echo 
 V=$(ls -d ~/.codex-chatgpt-web/versions/*-darwin-arm64 | tail -1); "$V/runtime/bun" "$V/app/cli.js" status | tail -1   # → "Doctor result: ready"
 ```
 
+On Windows (PowerShell; the bridge ships a `win32-x64` build — 4.0.8 verified 2026-09-02, full mode, Pro available):
+
+```powershell
+$up = @(Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | Where-Object { $_.CommandLine -match 'codex-chatgpt-web.*cli\.js serve' }).Count -gt 0
+if ($up) { 'bridge-up' } else { 'bridge-down' }
+# optional, ~2 s: the doctor. Run it with CODEX_HOME cleared: Orca sets CODEX_HOME to its own Codex home
+# (%APPDATA%\orca\codex-runtime-home\home) and the doctor then reports "Codex integration is inconsistent ...
+# Doctor result: not ready" although that config carries the same bridge route — a false negative.
+$V = (Get-ChildItem "$HOME\.codex-chatgpt-web\versions" -Directory | Where-Object Name -like '*-win32-*' | Sort-Object Name | Select-Object -Last 1).FullName
+pwsh -NoProfile -Command "Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue; & '$V\runtime\bun.exe' '$V\app\cli.js' status | Select-Object -Last 1"   # → "Doctor result: ready" (powershell.exe works too)
+```
+
 Bridge down or doctor not `ready` → `standard` profile without asking. Bridge up but the Pro attempt fails twice (see roles.md; the retry is a fresh terminal) → `standard`, tell the user in one line.
 
-Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Library/Application Support/Codex Web GPT/logs/launcher.jsonl` — `browser.turn_ended` with `status`, and `broker claim received (... valid=false, retiredTurn=<trace>)` lines mark the token race from `roles.md`; `~/.codex-chatgpt-web/diagnostics/browser-turns/<trace>-*/` holds the per-checkpoint DOM captures.
+Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Library/Application Support/Codex Web GPT/logs/launcher.jsonl` (Windows: `%APPDATA%\Codex Web GPT\logs\launcher.jsonl`) — `browser.turn_ended` with `status`, and `broker claim received (... valid=false, retiredTurn=<trace>)` lines mark the token race from `roles.md`; `~/.codex-chatgpt-web/diagnostics/browser-turns/<trace>-*/` holds the per-checkpoint DOM captures.
 
 ## 8. Cheat-sheet: role → recipe
 
@@ -145,6 +157,6 @@ Installed with `install.ps1` (see `docs/install-windows.md`). Differences from m
 - `orca orchestration check --types "worker_done,escalation,question"` — quote comma-separated lists in PowerShell. Where a recipe pipes `--json` into `jq -r .result.terminal.handle`, use `(… --json | ConvertFrom-Json).result.terminal.handle` instead.
 - Path A works unchanged (`worker-start --agent claude|codex`). Path B argv is the same text; Antigravity (`agy`) on native Windows is unverified — if `agy` is missing, the implementer cascade starts at Luna (roles.md) and the gate/synthesizer fallbacks apply; say so once.
 - The skill is linked into `%USERPROFILE%\.codex\skills\orca-dev` (symlink or junction); always locate `bin\` through `ORCA_DEV_HOME` (set by `install.ps1`), never by resolving the skill link.
-- The GPT Pro bridge (`codex-chatgpt-web`) is macOS-only: the planning profile is always `standard`.
+- The GPT Pro bridge (`codex-chatgpt-web`) has a native Windows build (4.0.8 verified 2026-09-02, installed under `%USERPROFILE%\.codex-chatgpt-web`): the `strong` planning profile is available. Run the Windows preflight from §7 — the doctor must be called with `CODEX_HOME` cleared, otherwise it reports `not ready` inside Orca. Bridge log: `%APPDATA%\Codex Web GPT\logs\launcher.jsonl`.
 - Trust files live in the same places under `%USERPROFILE%` (`.claude.json`, `.gemini\antigravity-cli\settings.json`, `.codex\config.toml`); Claude Code keys `projects[]` with forward slashes (`C:/repo`), Antigravity's `trustedWorkspaces` with backslashes — `install.ps1` handles both. `install.ps1 -Repo <path>` handles the repo and its git worktrees; a parallel track's child worktree still needs `install.ps1 -Repo <track-path>` before the first dispatch (same rule as macOS).
 

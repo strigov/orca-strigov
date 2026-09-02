@@ -34,7 +34,7 @@ git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov; cd $HOME\o
 .\install.ps1 -Check C:\path\to\repo      # read-only report; exit 1 on any WARN
 ```
 
-On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq); the GPT Pro bridge is macOS-only, so Windows always plans on the `standard` profile.
+On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq); the GPT Pro bridge has a Windows build too, so the `strong` planning profile is available whenever its daemon is running (`orca-recipes.md` §7 has the Windows preflight).
 
 Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI; unverified on native Windows — without it the implementer cascade starts at Codex Luna), `git`, `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
 

@@ -267,8 +267,12 @@ if ($repos.Count -gt 0) {
   }
 }
 
-# ---- 6. bridge (optional, Pro planner) — the codex-chatgpt-web launcher is macOS-only today ----------
-Write-Info "codex-chatgpt-web bridge (GPT Pro planner) is not available on Windows → planning profile 'standard' (Opus → Sol)"
+# ---- 6. bridge (optional, Pro planner) -------------------------------------------------------------
+# codex-chatgpt-web ships a win32-x64 build (4.0.8 verified 2026-09-02); its daemon is `bun.exe … cli.js serve`.
+$bridgeUp = $false
+try { $bridgeUp = @(Get-CimInstance Win32_Process -Filter "Name='bun.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -match 'codex-chatgpt-web.*cli\.js serve' }).Count -gt 0 } catch { }
+if ($bridgeUp) { Write-Ok "codex-chatgpt-web bridge running (Pro planner available; preflight per orca-recipes.md §7 — run its doctor with CODEX_HOME cleared)" }
+else { Write-Info "codex-chatgpt-web bridge not running → planning profile 'standard' (Opus → Sol)" }
 
 if ($script:nwarn -gt 0) { Write-Host "install.ps1: $($script:nwarn) warning(s)"; exit 1 }
 Write-Host "done."
