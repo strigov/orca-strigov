@@ -272,7 +272,7 @@ Fixers receive only open ACCEPTED / PARTIALLY_ACCEPTED items; reviewers receive 
 
 ## Reporting cadence
 
-One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, model per roles.md)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and Fable→Opus substitutions are always stated.
+One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, model per roles.md)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and family-rule substitutions are always stated.
 
 ## Red flags — never
 

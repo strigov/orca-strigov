@@ -6,7 +6,7 @@ Use when the coordinator needs the primary review of the implementer's work on a
 
 Role: `review-primary` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-Per `../roles.md`: Claude Opus xhigh by default, Claude Fable xhigh on SECURITY / DATA_LOSS phases or from round 3 onwards. The template stays model-agnostic.
+Per `../roles.md`: Claude Opus xhigh (Codex Sol xhigh only when Claude wrote the code, or when Opus is unavailable). The template stays model-agnostic.
 
 **A fresh Orca worker terminal every round — never re-inject into a previous reviewer's terminal.** A reviewer that remembers its own prior rounds anchors on them; the AUTHORIZED_CHANGE_LEDGER carries the round history instead.
 

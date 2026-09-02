@@ -146,7 +146,7 @@ Post-mortem of a Pro failure (read-only, allowed for the coordinator): `~/Librar
 |---|---|---|
 | plan-writer (Pro) | B | `codex ... -m chatgpt-web/pro` |
 | plan-writer (Opus) / plan-reviser / review-primary / review-final / diagnosis / frontend-implementer | A | `--agent claude --model <opus|fable|sonnet> --effort xhigh` (sonnet tweak: `--effort medium`) |
-| plan-reviewer r1 (Fable) | A | `--agent claude --model fable --effort xhigh` |
+| plan-reviewer r1 (Opus, `strong` profile) | A | `--agent claude --model opus --effort xhigh` |
 | plan-reviewer (Sol) / review-control | A (hooks trusted) or B | `--agent codex --model gpt-5.6-sol --effort max|xhigh` |
 | implementer (Flash) / gate / synthesizer / quickfix | B | `agy --model gemini-3.7-flash-high --effort high --dangerously-skip-permissions` |
 | implementer fallback (Luna) / escalation (Terra) | A or B | `--agent codex --model gpt-5.6-luna|gpt-5.6-terra --effort max` |

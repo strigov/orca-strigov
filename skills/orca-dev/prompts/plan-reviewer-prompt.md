@@ -8,7 +8,7 @@ Role: `plan-reviewer` — launch recipe, model and effort come from `../roles.md
 
 **Read-only: no writes.** The reviewer must not touch the plan file. Revisions go back to the plan writer (`./plan-writer-prompt.md` Mode B) through the ledger — that separation is what makes the review independent. The only file this worker writes is `[REPORT_FILE]`.
 
-**Every round is a FRESH Orca worker terminal — never re-inject into a previous reviewer's terminal.** Reviewer freshness is a bias decision, exactly as for the Step 4.2 control review: a reviewer that remembers its own prior rounds anchors on them. The AUTHORIZED_CHANGE_LEDGER, not thread memory, carries the round history. Rounds 2+ use the follow-up template below. Round 1 may be served by Claude Fable xhigh and rounds 2+ by Codex Sol max (see `../roles.md`) — the template is model-agnostic and must work for either.
+**Every round is a FRESH Orca worker terminal — never re-inject into a previous reviewer's terminal.** Reviewer freshness is a bias decision, exactly as for the Step 4.2 control review: a reviewer that remembers its own prior rounds anchors on them. The AUTHORIZED_CHANGE_LEDGER, not thread memory, carries the round history. Rounds 2+ use the follow-up template below. Round 1 may be served by Claude Opus xhigh (`strong` profile) or Codex Sol max, and rounds 2+ by Codex Sol max (see `../roles.md`) — the template is model-agnostic and must work for either.
 
 **Effort is never `ultra` unless the user EXPLICITLY asked for ultra in their own words.** Do not propose ultra yourself — not as a question, not as a recommendation.
 
