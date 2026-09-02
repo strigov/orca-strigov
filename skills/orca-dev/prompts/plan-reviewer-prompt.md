@@ -93,6 +93,10 @@ If the frontmatter marks phases with a shared `parallel_group`, additionally ver
 
 If a Stage B suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the coordinator treats the item as `DEFER`.
 
+## Tooling
+
+Everything you need is a shell command (read files, `rg`, `git show`, `git status`, and the `orca` CLI for reporting) plus writing your report file. Do not enumerate or search a tool registry / tool inventory looking for `orca`, a file writer, or anything else — use the shell directly. Long chains of discovery calls with no work between them are the single known way this stage fails. This spec is complete: do not look for the orca-dev skill, its SKILL.md, roles or prompt files — they live outside the working tree, your tool layer may refuse the path, and nothing in them applies to you beyond what is written here. If a large file does not come back whole, read it in ranges (`sed -n`, `Get-Content -TotalCount`) rather than grepping for fragments.
+
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `APPROVED` | `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold. If `CHANGES_REQUESTED`, after line 1 emit:
