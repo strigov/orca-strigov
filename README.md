@@ -4,7 +4,7 @@ A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex
 
 | role | agent / model |
 |---|---|
-| plan (round 1) | GPT Pro via the `codex-chatgpt-web` bridge → reviewed by Claude Opus xhigh |
+| plan (round 1) | GPT Pro via the `codex-chatgpt-web` bridge → reviewed by Claude Fable xhigh |
 | plan revisions / fallback | Claude Opus xhigh → reviewed by Codex Sol max |
 | implementation | Gemini 3.7 Flash High (Antigravity CLI) → Codex Luna max fallback → Codex Terra max escalation |
 | frontend phases | Claude Opus xhigh (new UI) / Sonnet (tweaks) |

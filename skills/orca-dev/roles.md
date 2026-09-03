@@ -23,12 +23,12 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 | `coordinator` | all | Codex (the terminal running this skill) — any native Codex model launched with an explicit `-m` (never `chatgpt-web/pro`: the bridge is for the planner only) | — | bookkeeping only (Rule 1) | one session |
 | `plan-writer` | 1 (Mode A) | **codex `chatgpt-web/pro`** (opt-in "strong" profile, see below) | claude `opus` `xhigh` | plan file only | fresh |
 | `plan-reviser` | 2 (Mode B) | claude `opus` `xhigh` | — | plan file only | fresh every round |
-| `plan-reviewer` | 2 | round 1: claude `opus` `xhigh` when the writer was Pro; otherwise codex `gpt-5.6-sol` `max` | rounds 2+: codex `gpt-5.6-sol` `max` (the reviser is Opus, so the reviewer must leave the Anthropic family) | no | fresh every round |
+| `plan-reviewer` | 2 | round 1: claude `fable` `xhigh` when the writer was Pro; otherwise codex `gpt-5.6-sol` `max` | rounds 2+: codex `gpt-5.6-sol` `max` (the reviser is Opus, so the reviewer must leave the Anthropic family) | no | fresh every round |
 | `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-5.6-terra` `max` in a FRESH terminal | yes | same terminal across fix rounds; a model change is always a new terminal |
 | `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → codex `gpt-5.6-luna` `max` — announced | yes | same terminal across fix rounds |
 | `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.7-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
 | `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `xhigh` on `risk: SECURITY / DATA_LOSS` phases or in fused-loop round 4 (the last round before the cap; rounds > 4 do not exist); Opus fallback if Fable unavailable; Opus unavailable → codex `gpt-5.6-sol` `xhigh` — announced, never silent. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
-| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Terra) → claude `opus` `xhigh` (Sol never reviews Codex-written code; 4.1 and 4.2 are then both Opus, in fresh terminals — a deliberate cost decision of 2026-09-03; Fable is reserved for `diagnosis` and the 4.1 risk / last-round rule); Sol unavailable → claude `opus` `xhigh` — announced | no | fresh every round |
+| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Terra) → claude `opus` `xhigh` (Sol never reviews Codex-written code; 4.1 and 4.2 are then both Opus, in fresh terminals — a deliberate cost decision of 2026-09-03; Fable is reserved for `diagnosis`, the `strong` plan review r1 and the 4.1 risk / last-round rule); Sol unavailable → claude `opus` `xhigh` — announced | no | fresh every round |
 | `synthesizer` | 4.5 | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
 | `review-final` | 5 | claude `opus` `xhigh` | every phase written by Claude (frontend-only plan) → codex `gpt-5.6-sol` `xhigh`; Opus unavailable → codex `gpt-5.6-sol` `xhigh` — announced | no | fresh every round (cap 2) |
 | `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `fable` `xhigh` | claude `opus` `xhigh` — announced | no | fresh |
@@ -51,7 +51,7 @@ Planning is unchanged: the plan-reviewer row already alternates families per pro
 
 ## Planning profiles
 
-- **`strong` (default when the bridge is healthy):** round 1 = Pro writes → Opus xhigh reviews. Rounds 2+ = Opus xhigh revises → Sol max reviews. Pro is used for the initial plan only — never for revisions.
+- **`strong` (default when the bridge is healthy):** round 1 = Pro writes → Fable xhigh reviews. Rounds 2+ = Opus xhigh revises → Sol max reviews. Pro is used for the initial plan only — never for revisions.
 - **`standard`:** Opus xhigh writes → Sol max reviews, all rounds. This is the automatic fallback when Pro is unavailable, and the profile to pick explicitly for small plans (Pro turns run 10–25 minutes each).
 
 Selecting: the user may say `--planner pro|opus` or "план на Pro" / "обычный план". Without a choice, use `strong` if `orca status` is fine AND the bridge preflight in `orca-recipes.md` passes; otherwise `standard`, and say which one you picked in the Step 1 status line.
