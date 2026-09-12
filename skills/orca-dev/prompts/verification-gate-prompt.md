@@ -44,6 +44,10 @@ If a failure looks pre-existing (unrelated to the touched files), verify by runn
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Keep both gate verdict lines. GATE_OK needs canonical EVIDENCE references to sealed C4 results (and proven BASE signatures for inherited failures); unavailable checks and required independent replay remain explicit.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `GATE_OK` | `GATE_FAIL` — no preamble, no markdown. Line 2 is the one-line summary in exactly this shape (write `skipped — <reason>` for a missing stage):
 
    `lint: <clean|N issues|skipped — reason> | typecheck: <clean|fail|skipped — reason> | tests: <N passed[, M new]|fail>`

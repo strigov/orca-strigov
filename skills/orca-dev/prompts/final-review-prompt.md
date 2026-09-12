@@ -66,6 +66,10 @@ Do not re-raise items with decision `REJECTED_BY_SCOPE` or `ESCALATED_TO_HUMAN`,
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Emit canonical FINDINGS and COVERAGE for assigned files/parts and both sides of each contract. Complementary independent reports belong to this same final round; REVIEW_OK still leaves delivery and the separate completion commit pending.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `REVIEW_OK` | `REVIEW_BLOCKING` — no preamble, no markdown heading, no bold. `REVIEW_BLOCKING` if and only if the BLOCKING list is non-empty OR any ledger item is triaged `MUST_FIX_BEFORE_MERGE` (a failed suite or typecheck is itself a BLOCKING item).
 
    After line 1, always emit all four sections:

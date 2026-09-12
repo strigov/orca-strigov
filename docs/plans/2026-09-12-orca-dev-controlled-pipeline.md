@@ -29,19 +29,21 @@ phases:
     base: d85f09dae366ae5b254290e8613e4fbee883fab0
     scope: "Доказательства проверок для точного снимка и полный манифест пакета ревью"
     status: done
-    commits: 'd85f09dae366ae5b254290e8613e4fbee883fab0..HEAD'
+    commits: 'd85f09dae366ae5b254290e8613e4fbee883fab0..a3e4dc854474243cf77de9fbd85e2e4605ff315a'
     risk: REGRESSION
     verify:
       - 'python -B -m unittest discover -s tests -p test_verification.py'
       - 'python -B -m unittest discover -s tests -p test_review_package.py'
       - 'git diff --check'
   - id: Ф4
+    base: a3e4dc854474243cf77de9fbd85e2e4605ff315a
     scope: "Детерминированная валидация отчётов, переходов, независимости и возобновления"
-    status: pending
+    status: done
+    commits: 'a3e4dc854474243cf77de9fbd85e2e4605ff315a..'
     risk: REGRESSION
     verify:
-      - 'python -B -m unittest discover -s tests -p test_protocol_state.py'
-      - 'git diff --check'
+      - {"id":"protocol-state","command":"python -B -m unittest discover -s tests -p test_protocol_state.py","checkpoint":"integration","timeout_seconds":175,"hermetic":false,"independent_replay":true}
+      - {"id":"diff-check","command":"git diff --check","checkpoint":"integration","timeout_seconds":10,"hermetic":false,"independent_replay":true}
   - id: Ф5
     scope: "Безопасная установка, совместимость и ограниченная сквозная приёмка"
     status: pending
@@ -52,9 +54,8 @@ phases:
       - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
       - 'git diff --check'
 verify:
-  - "python -B -m unittest discover -s tests -p test_verification.py"
-  - "python -B -m unittest discover -s tests -p test_review_package.py"
-  - "git diff --check"
+  - {"id":"protocol-state","command":"python -B -m unittest discover -s tests -p test_protocol_state.py","checkpoint":"integration","timeout_seconds":175,"hermetic":false,"independent_replay":true}
+  - {"id":"diff-check","command":"git diff --check","checkpoint":"integration","timeout_seconds":10,"hermetic":false,"independent_replay":true}
 ---
 
 ## Goal

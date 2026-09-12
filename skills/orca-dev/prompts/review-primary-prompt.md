@@ -114,6 +114,10 @@ Every round: assess warnings in test output for new material issues or violated 
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Keep SPEC/QUALITY on lines 2/3. Emit canonical FINDINGS and COVERAGE; CANNOT_VERIFY includes an executable check and literal expected result and remains unresolved.
+
 1. Write your full report to `[REPORT_FILE]` (your own review report — distinct from the implementer's `[IMPL_REPORT_FILE]`). Its FIRST line must be exactly one bare token from: `REVIEW_OK` | `REVIEW_BLOCKING` — no preamble, no markdown heading, no bold. Line 2 exactly `SPEC: OK` or `SPEC: FAIL` (the 4a verdict); line 3 exactly `QUALITY: OK` or `QUALITY: FAIL` (the 4b verdict); line 1 is `REVIEW_BLOCKING` if and only if at least one of lines 2–3 is `FAIL`. `CANNOT_VERIFY` items never flip line 1 on their own. A report missing either the `SPEC:` or the `QUALITY:` line is invalid — the coordinator will re-dispatch the review.
 
    After line 3, include each section below that has content, in this order:
@@ -145,7 +149,7 @@ Verification run:
 - ...
 ```
 
-   If `REVIEW_OK`, include only `CANNOT_VERIFY` (if any), `DEFER` (if any), `NITS` (if any), and the Verification run section after line 3.
+   If `REVIEW_OK`, include required binding/FINDINGS/COVERAGE, then `CANNOT_VERIFY` (if any), `DEFER` (if any), `NITS` (if any), and the Verification run section after line 3.
 
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 

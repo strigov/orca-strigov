@@ -1,0 +1,258 @@
+"""C6 bounded deterministic protocol inputs and real owned Git commit barriers."""
+import copy
+import json
+from pathlib import Path
+import unittest
+
+from support import ProtocolFixture, read_json, write_json
+
+
+class ProtocolTests(unittest.TestCase):
+    def setUp(self): self.f = ProtocolFixture(quickfix=self._testMethodName.startswith('test_quickfix'))
+    def tearDown(self): self.f.close()
+
+    def valid(self, data=None, **kwargs):
+        r = self.f.validate(data, **kwargs)
+        self.assertEqual(r[:2], (0, 'VALID'), r)
+        return r[2]
+
+    def reject(self, data=None, code=1, contains='', **kwargs):
+        f = self.f; output = f.workspace / 'preserved-resume.json'
+        output.write_bytes(b'previous complete record')
+        r = f.validate(data, output=output, **kwargs)
+        self.assertEqual(r[0], code, r)
+        self.assertIn(contains, r[2]['reason'])
+        self.assertEqual(output.read_bytes(), b'previous complete record')
+        return r[2]
+
+    def case(self, data=None, action='resume', **fields):
+        return copy.deepcopy(data or dict(schema_version=1, action=action, state=self.f.state, **fields))
+
+    def batch(self, cases, previous=False):
+        # Each rejection still exercises RESUME_OUT preservation through the real CLI.
+        outputs=[Path(self.f.save('previous complete record')['path']) if code else None for _,code,_ in cases]
+        results=self.f.validate_many([data for data,_,_ in cases], previous=previous, outputs=outputs)
+        for result,(_,code,why),output in zip(results,cases,outputs):
+            self.assertEqual(result[:2],(code,['VALID','INVALID','UNVERIFIABLE'][code]),result)
+            if code:
+                self.assertIn(why,result[2]['reason'])
+                self.assertEqual(output.read_bytes(),b'previous complete record')
+        return [r[2] for r in results]
+
+    def test_accept_resume_binding_hash_and_stale_source(self):
+        f = self.f; data = f.report_input(); out = f.workspace / 'resume.json'
+        result = self.valid(data, output=out)
+        self.assertEqual(result['state'], read_json(out))
+        self.assertEqual(f.state['barrier'], 'awaiting_gate')
+        self.assertEqual(len(f.state['accepted']), 1)
+        bad = copy.deepcopy(data)
+        report = Path(bad['report']['path']); text = report.read_text()
+        report.write_text(text.replace('"role": "implementer"', '"role": "gate"'))
+        stale=copy.deepcopy(bad)
+        bad['report'] = f.reference(report)
+        for r,why in zip(f.validate_many([stale,bad]),['hash mismatch','binding']):
+            self.assertEqual(r[0],1,r);self.assertIn(why,r[2]['reason'])
+        report.write_text(text); bad['report'] = f.reference(report)
+        (f.git.root / 'tracked.txt').write_text('late hook mutation')
+        self.reject(bad, contains='stale snapshot')
+
+    def test_duplicate_stale_heartbeat_empty_wait_and_whole_delivery(self):
+        f = self.f; data = f.report_input(); good = read_json(data['event']['path'])['result']['message']
+        old = copy.deepcopy(good); old['id'] = 'old'; old['payload'] = json.dumps(dict(taskId='old', dispatchId='old'))
+        beat = dict(id='beat', type='heartbeat', payload=None)
+        data['event'] = f.save(dict(ok=True, result=dict(deliveryId='delivery-fixture', messages=[old, beat, good])))
+        cases=[dict(data,message_id=x) for x in ['old','beat',good['id'],good['id']]]
+        cases.append(dict(data,event=f.save(dict(ok=True,result=dict(messages=[],timedOut=True)))))
+        results=f.validate_many(cases,previous=True)
+        self.assertTrue(all(r[0]==0 for r in results),results)
+        self.assertEqual([r[2]['decision'] for r in results],['stale','not-completion','accepted','duplicate','not-completion'])
+        self.assertEqual(results[0][2]['state']['accepted'],[])
+        self.assertEqual(results[1][2]['state']['processed']['deliveries'],[])
+        self.assertEqual(results[2][2]['state']['processed']['deliveries'],['delivery-fixture'])
+        self.assertEqual(len(f.state['accepted']),1)
+
+    def test_role_format_fields_risk_and_single_correction(self):
+        f = self.f; art, coverage = f.package_ref()
+        data = f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
+        p = Path(data['report']['path']); p.write_text(p.read_text().replace('SPEC: OK\n', ''))
+        data['report'] = f.reference(p)
+        defective=self.case(data)
+        proposed = f.assignment('review-primary', 'Anthropic'); proposed['dispatch_id'] = None
+        fix = dict(schema_version=1, action='format-correction', state=f.state, proposed=proposed,
+                   artifact=art, report=data['report'], observation=data['observation'], outcome='succeeded', files_modified=[], fleet=f.fleet())
+        bound = dict(proposed, dispatch_id='corrected-dispatch')
+        results=self.batch([(defective,1,'SPEC/QUALITY'),(self.case(fix),0,''),
+                           (self.case(action='bind-dispatch', observation=f.observation(bound)),0,'')],previous=True)
+        self.assertEqual(results[0]['next_action'],'format-correction')
+        self.assertEqual(f.state['rounds']['fused_review'], 0)
+        data = f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
+        f.state['format_corrections'][f.state['active']['dispatch_id']] = 1
+        p = Path(data['report']['path']); p.write_text(p.read_text().replace('QUALITY: OK\n', '')); data['report'] = f.reference(p)
+        repeated=self.case(data)
+        finding = dict(id='F', kind='blocking', issue='defect', location='tracked.txt:1',
+                       authorization_relation='outside plan', why_now='breaks contract', minimal_fix='remove')
+        data = f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding])
+        f.state.pop('format_lock', None)
+        missing=self.case(data)
+        finding['risk'] = 'SECURITY'
+        data = f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding])
+        results=self.batch([(repeated,1,'SPEC/QUALITY'),(missing,1,'finding fields'),(self.case(data),0,'')])
+        self.assertEqual(results[0]['next_action'],'protocol-blocker')
+        self.assertEqual(results[2]['decision'],'risk-escalation')
+
+    def test_plan_simplicity_risk_contracts_legacy_and_fix_evidence(self):
+        f = self.f
+        data = f.report_input('implementer', round=2)
+        cases=[(self.case(data),1,'FIX_EVIDENCE')]
+        f.state['phase'] = None; f.state['step'] = 'plan'
+        data = f.report_input('plan-reviewer', 'Anthropic', artifact=dict(f.state['plan'], kind='plan'))
+        p = Path(data['report']['path']); p.write_text(p.read_text().replace('SIMPLICITY: OK', ''))
+        data['report'] = f.reference(p); cases.append((self.case(data),1,'SIMPLICITY'))
+        original = f.plan.read_text()
+        for old, new, code, reason in [('risk: none', 'risk: mystery', 1, 'risk'),
+                                      ('consumes: []', 'consumes: ["C1"]', 1, 'earlier producer'),
+                                      ('protocol_version: 2', 'protocol_version: 1', 2, 'legacy')]:
+            s=copy.deepcopy(f.state);s['plan']=f.save(original.replace(old,new),'.md')
+            cases.append((dict(schema_version=1,action='resume',state=s),code,reason))
+        s=copy.deepcopy(f.state);s['active']=None;s['plan']=f.save(original.replace('    risk: none\n',''),'.md')
+        cases.append((dict(schema_version=1,action='resume',state=s),1,'risk'))
+        self.assertEqual(self.batch(cases)[-1]['next_action'],'format-correction')
+
+    def test_all_caps_and_unverified_done_barrier(self):
+        f = self.f
+        cases=[]
+        for key, cap in [('plan_review',4), ('fused_review',4), ('final_review',2), ('gate_fix',2)]:
+            s=copy.deepcopy(f.state);s['rounds'][key]=cap+1
+            cases.append(dict(schema_version=1,action='resume',state=s))
+            f.state['rounds'][key]=cap
+        s=copy.deepcopy(f.state);s['format_corrections']['bad']=2
+        cases.append(dict(schema_version=1,action='resume',state=s))
+        f.state['format_corrections'] = {}
+        art=f.snapshot_ref(); p=f.assignment('plan-reviewer', 'Anthropic', round=5);p['dispatch_id']=None
+        self.batch([(d,1,'cap') for d in cases]+[(self.case(action='dispatch',proposed=p,artifact=art,fleet=f.fleet()),1,'round cap/sequence')])
+        f.plan.write_text(f.plan.read_text().replace('status: implementing', 'status: done'))
+        f.state['plan'] = f.reference(f.plan); f.state['step'] = 'completion'
+        pending=self.case()
+        f.state['commit_barrier'] = dict(confirmed_sha=f.git.base)
+        results=self.batch([(pending,0,''),(self.case(),2,'unverified commit barrier')])
+        self.assertEqual(results[0]['state']['barrier'],'awaiting_completion_commit')
+
+    def test_fleet_live_unknown_external_retained_pages_and_pending(self):
+        f = self.f; artifact = f.snapshot_ref(); proposed = f.assignment(family='Anthropic'); proposed['dispatch_id'] = None
+        w = dict(dispatchId='prior', dispatchStatus='running', terminalState='retained', resource=dict(ownershipState='owned'),
+                 projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='live')))
+        cases=[]
+        for change, why in [({}, 'prior writer'), ({'dispatchStatus':'unknown'}, 'prior writer'),
+                            ({'terminalState':'release_unknown'}, 'release'), ({'resource':dict(ownershipState='external')}, 'external')]:
+            cases.append((dict(schema_version=1,action='dispatch',state=f.state,proposed=proposed,artifact=artifact,fleet=f.fleet([dict(w,**change)])),why))
+        cases.append((dict(schema_version=1,action='dispatch',state=f.state,proposed=proposed,artifact=artifact,
+                          fleet=f.fleet([],total=1,hasMore=True,nextCursor='next')),'incomplete fleet'))
+        no_workspace=dict(w,projection=dict(w['projection'],workspace=None))
+        cases.append((self.case(action='dispatch',proposed=proposed,artifact=artifact,fleet=f.fleet([no_workspace])),'unknown fleet workspace'))
+        self.batch([(self.case(d),2,why) for d,why in cases])
+        cases=[]
+        for status in ['completed','failed']:
+            cases.append((self.case(action='dispatch',proposed=proposed,artifact=artifact,
+                                   fleet=f.fleet([dict(no_workspace,dispatchStatus=status)])),0,''))
+        for change in [dict(dispatchStatus='unknown'),dict(dispatchStatus='completed',terminalState='release_pending'),
+                       dict(dispatchStatus='failed',resource=dict(ownershipState='user_owned'))]:
+            cases.append((self.case(action='dispatch',proposed=proposed,artifact=artifact,
+                                   fleet=f.fleet([dict(no_workspace,**change)])),2,'unknown fleet workspace'))
+        original=copy.deepcopy(f.state);self.batch(cases);f.state=original
+        fleet = f.fleet([dict(w, dispatchStatus='completed')])
+        actual = dict(proposed, dispatch_id='new-bound');start=f.start_receipt(actual)
+        observed=f.observation(actual,'running',model=None,start=start)
+        bind=self.case(action='bind-dispatch',observation=observed)
+        results=self.batch([(self.case(action='dispatch',proposed=proposed,artifact=artifact,fleet=fleet),0,''),
+                            (self.case(action='dispatch',proposed=proposed,artifact=artifact,fleet=f.fleet()),2,'unbound writer intent'),
+                            (bind,0,'')],previous=True)
+        self.assertEqual(f.state['write_ownership'], ['new-bound'])
+        bind['state']=results[0]['state'];cases=[]
+        for key in ['runId','taskId','dispatchId']:
+            wrong=read_json(start['path']);wrong['result'][key]='stale-fixture-id'
+            cases.append((dict(bind,observation=dict(observed,start=f.save(wrong))),1,'worker-start identity mismatch'))
+        cases.append((dict(bind,observation=dict(observed,start=dict(start,sha256='0'*64))),1,'hash mismatch'))
+        cases.append((dict(bind,observation=f.observation(actual,'running',model=None)),2,'unknown actual model family'))
+        cases.append((dict(bind,observation=f.observation(actual,'running',model=f.model('OpenAI'),start=start)),1,'conflicting actual model facts'))
+        self.batch(cases)
+        missing=read_json(start['path']);missing['result']['launch']['requested']=dict(model=actual['model']);missing['result']['launch']['effective']['model']=None
+        cases=[(dict(bind,observation=dict(observed,start=f.save(missing))),2,'missing effective launch model')]
+        data=f.report_input(artifact=artifact);data['observation']=f.observation(f.state['active'], model='unrecognized-fixture-model')
+        cases.append((self.case(data),2,'unknown actual model family'));self.batch(cases)
+
+    def test_mixed_family_and_contract_sides_require_independent_coverage(self):
+        f = self.f; art, coverage = f.package_ref({'OpenAI':['tracked.txt','plan.md'], 'Anthropic':['tracked.txt']}, start_families=['Anthropic'])
+        data = f.report_input('review-final', 'Anthropic', artifact=art, coverage=coverage)
+        f.state['step'] = 'final-review'
+        same_family=self.case(data)
+        data = f.report_input('review-final', 'Google', artifact=art, coverage=coverage)
+        self.batch([(same_family,1,'same-family'),(self.case(data),0,'')])
+        # Real phase commit binds the staged bytes; no prepared metadata can replace it.
+        fact = f.commit(art); f.state['phase_commits'] = [dict(fact, phase='F1')]
+        # Check historical accepted artifact after commit via prepare snapshot's equal files.
+        current, current_coverage = f.package_ref({'OpenAI':['tracked.txt','plan.md'], 'Anthropic':['tracked.txt']}, start_families=['Anthropic'])
+        coverage = current_coverage; coverage['contracts'][0]['consumer'] = []
+        data = f.report_input('review-final', 'Google', artifact=current, coverage=coverage, round=2)
+        self.batch([(self.case(data),0,''),
+                    (self.case(action='finish-checkpoint',artifact=current,fleet=f.fleet()),2,'incomplete contract')],previous=True)
+
+    def test_gate_requires_durable_logs_and_actual_snapshot(self):
+        f = self.f; records = f.gate_evidence(); art = f.gate_snapshot
+        data = f.report_input('gate', artifact=art, extra='EVIDENCE: ' + json.dumps(records))
+        self.valid(data)
+        st = read_json(records[0]['path']); Path(st['stdout_log']).write_bytes(b'tampered')
+        data = f.report_input('gate', artifact=art, extra='EVIDENCE: ' + json.dumps(records))
+        self.reject(data, contains='runner evidence')
+
+    def test_quickfix_exact_file_actual_commit_recovery_and_hook_change(self):
+        f = self.f
+        art = f.snapshot_ref(); data = f.report_input('quickfix', artifact=art)
+        event=read_json(data['event']['path']); payload=json.loads(event['result']['message']['payload'])
+        payload['filesModified']=['tracked.txt','outside.txt'];event['result']['message']['payload']=json.dumps(payload)
+        bad=dict(data,event=f.save(event))
+        self.batch([(self.case(bad),1,'exactly one file'),(self.case(data),0,''),
+                    (self.case(action='prepare-commit',artifact=art,fleet=f.fleet()),0,''),
+                    (self.case(action='confirm-commit',artifact=art,commit=dict(sha='f'*40,base=f.git.base,artifact=art),fleet=f.fleet()),2,'commit')],previous=True)
+        self.assertEqual(f.state['barrier'], 'awaiting_commit')
+        fact = f.commit(art)
+        cases=[dict(schema_version=1,action='confirm-commit',state=f.state,artifact=art,commit=fact,fleet=f.fleet()),
+               dict(schema_version=1,action='resume',state=f.state),
+               dict(schema_version=1,action='confirm-commit',state=f.state,artifact=art,commit=fact,fleet=f.fleet())]
+        results=f.validate_many(cases,previous=True)
+        self.assertTrue(all(r[0]==0 for r in results),results)
+        self.assertEqual(results[1][2]['state']['barrier'],'complete')
+        self.assertEqual(len(f.state['phase_commits']), 1)
+        (f.git.root/'tracked.txt').write_text('hook changed source')
+        self.reject(action='confirm-commit', contains='hook/working-tree', artifact=art, commit=fact, fleet=f.fleet())
+
+    def test_final_checkpoint_requires_phase_commit_and_delivery_proof(self):
+        f = self.f; f.state['step'] = 'final-review'; art, coverage = f.package_ref()
+        data=f.report_input('review-final','Anthropic',artifact=art,coverage=coverage)
+        data['observation']=f.observation(f.state['active'],model=None,start=f.start_receipt(f.state['active']))
+        self.batch([(self.case(data),0,''),
+                    (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),2,'uncommitted phases')],previous=True)
+        fact = f.commit(art); f.state['phase_commits'] = [dict(fact, phase='F1')]
+        art, coverage = f.package_ref()
+        data=f.report_input('review-final','Anthropic',artifact=art,coverage=coverage,round=2)
+        self.batch([(self.case(data),0,''),
+                    (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),0,''),
+                    (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),2,'required report')],previous=True)
+        self.assertEqual(f.state['barrier'], 'awaiting_delivery')
+        proofs=f.gate_evidence(); delivered=f.gate_snapshot
+        data=f.report_input('gate',artifact=delivered,extra='EVIDENCE: '+json.dumps(proofs))
+        self.batch([(self.case(data),0,''),
+                    (self.case(action='finish-checkpoint',artifact=delivered,fleet=f.fleet()),0,'')],previous=True)
+        self.assertEqual(f.state['barrier'],'awaiting_completion_commit')
+        f.plan.write_text(f.plan.read_text().replace('status: implementing','status: done'))
+        f.git.git('add','plan.md');f.state['plan']=f.reference(f.plan)
+        proofs=f.gate_evidence(); completed=f.gate_snapshot
+        self.valid(f.report_input('gate', artifact=completed, extra='EVIDENCE: '+json.dumps(proofs)))
+        completion=f.commit(completed)
+        cases=[dict(schema_version=1,action='complete',state=f.state,artifact=completed,commit=completion,fleet=f.fleet()),
+               dict(schema_version=1,action='resume',state=f.state)]
+        results=f.validate_many(cases,previous=True)
+        self.assertTrue(all(r[0]==0 for r in results),results)
+        self.assertEqual(results[1][2]['state']['barrier'],'complete')
+
+
+if __name__ == '__main__': unittest.main()

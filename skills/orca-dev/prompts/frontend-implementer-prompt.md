@@ -87,6 +87,10 @@ STOP and escalate (`BLOCKED`) when:
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line test summary (e.g. "14/14 passing"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the full detail:
    - What you implemented (or attempted, if blocked)
    - What you tested and results (commands + output summary)
@@ -129,6 +133,10 @@ Path: `<repo-root>/docs/plans/<slug>.md`, phase `<id>`. Read the plan file for s
 - Do NOT run `git commit` / `git push` — leave all changes uncommitted; the coordinator handles git.
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
+
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
 1. Append a section `## Fix round <N>` to `[REPORT_FILE]` (the same report file from the first round — do not overwrite it, do not create a new one) containing ALL THREE of:
 

@@ -40,6 +40,10 @@ Make a small focused change. There is no plan file — the task below is the who
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Bind the completed source snapshot, list exactly the one authorized modified file and actual checks; fix rounds include canonical FIX_EVIDENCE.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line diff summary, one-line test summary (commands + result, or "no tooling for this file"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the detail: what you changed, what you ran, self-review findings, anything unexpected.
 
    If BLOCKED or NEEDS_CONTEXT, put the specifics in the worker_done body as well — the coordinator acts on it directly.

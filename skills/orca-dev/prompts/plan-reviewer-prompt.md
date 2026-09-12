@@ -114,6 +114,10 @@ Everything you need is a shell command (read files, `rg`, `git show`, `git statu
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Emit canonical FINDINGS (including an empty array), the existing Simplicity verdict and all plan criterion/materiality/risk fields; inspect the declared consumes/produces IDs semantically.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `APPROVED` | `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold.
 2. The report MUST contain a mandatory `## Simplicity` section:
 ```

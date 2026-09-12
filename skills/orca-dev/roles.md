@@ -6,6 +6,20 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 
 ## Families
 
+C6 validates actual launch model families and the minimum independent coverage
+against [runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume).
+All author families for each changed unit survive fallback/fix waves; a reviewer
+must be outside every author family for its assigned files and both contract
+sides. Complementary final assignments share one capped round. Unknown origin
+cannot establish independence; agent CLI family does not override its actual model.
+
+The C6 validator reads the following exact model-to-family facts for saved launch
+receipts. Unknown model identities remain unverifiable; this record grants no
+new role assignment or fallback. Compare the actual model, including when an
+agent CLI can launch a model from another family.
+
+FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","claude-opus-4-6-thinking":"Anthropic","claude-sonnet-4-6":"Anthropic","gemini-3.7-flash-high":"Google"}
+
 | family | agent CLI | Orca agent id | models used here |
 |---|---|---|---|
 | OpenAI | `codex` | `codex` | `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-astra`, `chatgpt-web/pro` (GPT Pro via the codex-chatgpt-web bridge — opt-in planning alternative only) |

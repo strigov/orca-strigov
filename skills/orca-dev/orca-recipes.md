@@ -119,6 +119,13 @@ orca orchestration check --wait --types worker_done,escalation,question --timeou
 
 ## 5. After a `worker_done`
 
+Before accepting it, save the exact accepted send/check receipt and a current
+`orca orchestration worker-show --dispatch <id> --json` observation. Pass their
+paths/raw hashes, the selected message ID, report and frozen artifact to C6
+`accept-report`; only then store the returned resume and acknowledge a complete
+Delivery with `check --ack <delivery_id> --json`. Stale/duplicate/heartbeat results
+do not create a second completion or consume another substantive round.
+
 Decide the terminal's fate **before** acknowledging the Delivery:
 
 - **Explicit retention:** To preserve a terminal across review/fix rounds or handoffs, tell Orca to retain it: `orca orchestration worker-retain --dispatch <id> --json` (record the expected next action).
@@ -183,3 +190,33 @@ Installed with `install.ps1` (see `docs/install-windows.md`). Differences from m
 
 
 For phase/checkpoint selection and exact reuse, load [runtime-contracts.md](runtime-contracts.md#c4--exact-inputs-and-verification-evidence) C4 on demand. Pass runner evidence paths and snapshot/origin ids; preserve required independent replay and record each new hypothesis. For review packages, C5 defines manifest validation, bounded part reads, real write-receipt provenance and producer/consumer coverage. Freeze identity before dispatch and verify it again before accepting a report; missing/stale/incomplete artifacts remain unresolved.
+
+## C6 validation before lifecycle effects
+
+Read [runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume)
+for the single input schema and Report binding. Save current
+`orca orchestration worker-list --json --limit 100` output, then each additional
+`--cursor <nextCursor>` page until `hasMore:false`, without filtering to one run.
+Use actual workspace IDs and all relevant live/unknown/release observations.
+Each new proposal needs a new complete observation; no timer or guessed process
+API. Settled retained terminals do not hold write ownership.
+
+After task creation, `dispatch` validates the proposed role/model/coverage with
+`dispatch_id:null`. Only after VALID use the existing launch recipe; immediately
+save `worker-show --dispatch <actual-id> --json` and `bind-dispatch`. An interrupted
+unbound intent stays locked until reconciled. Collect actual author observations
+for C5 provenance and plan revisions; model family comes from roles.md, including
+cross-family CLI launches. Do not invent missing facts or upgrade an old run.
+
+```sh
+"$ORCA_DEV_HOME/bin/protocol-state" validate "$dir/proposal.json" "$dir/resume.json"
+```
+
+Native Windows uses `& "$env:ORCA_DEV_HOME/bin/protocol-state.ps1" validate ...`.
+Check exit 0 **and** the returned decision/barrier before the exact proposed
+effect. Stage only authorized paths before the gate/package freeze, then use
+`prepare-commit` on that accepted snapshot; after Git, `confirm-commit` with the full actual
+SHA and original artifact. Crash recovery confirms that existing commit before
+`advance`; skipped/failed commits stay pending. Final review, delivery and the
+separate verified completion commit are distinct barriers. The helper never
+runs any lifecycle or commit action itself.

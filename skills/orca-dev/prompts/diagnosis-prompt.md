@@ -54,6 +54,10 @@ Then `## Evidence` — the commands you ran and the lines that support the diagn
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Keep the token-specific Context/Split/Plan defect/Summary section and the exact observed evidence. Bind the artifact actually diagnosed; no guessed model/process facts.
+
 From your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble. `orca` is a plain shell command on PATH — run it through your shell tool; there is no `orca` tool in any tool registry.
 
 orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the same token>" --body "<the root-cause sentence + the action you recommend>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome succeeded --report-path "[REPORT_FILE]" --json

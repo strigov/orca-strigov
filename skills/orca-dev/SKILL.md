@@ -55,6 +55,21 @@ If you cannot fill a field, you have lost protocol state: re-read the plan front
 
 ## Durable progress
 
+Use the deterministic C6 `protocol-state validate` barrier for every dispatch,
+report acceptance, commit/advance and resume; read its input/receipt contract in
+[runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume)
+on demand. Keep the compact JSON resume in the existing plan workspace. VALID
+permits only the proposed action; INVALID/UNVERIFIABLE never permits completion.
+Supply fresh complete fleet receipts before new ownership/review/commit, actual
+Task/Dispatch observations, report bindings, C4/C5 artifacts and Git commit facts.
+Stage only authorized candidate paths before the gate/package freeze so the
+reviewed source and semantic index are the actual commit candidate. Later index
+or source changes invalidate that acceptance and require refreshed evidence.
+Preserve old artifacts by hash and give each correction/fix report a new path.
+Only the common [Report binding](runtime-contracts.md#report-binding) defines the
+machine fields; pass its absolute `[RUNTIME_CONTRACTS_PATH]` and frozen assignment
+to each worker. This mechanical check adds no semantic research to the coordinator.
+
 Conversation memory does not survive compaction. Reconcile these durable records; frontmatter records intent and never overrides missing commit or acceptance evidence:
 
 1. **Plan frontmatter** — per-phase `status`, `base:` (full BASE sha recorded before phase begins), `risk:`, `commits:` ranges, top-level `status`, `orca_run:` (the Orca Run id), `plan_base:` (the full commit SHA directly before the first plan commit — Step 5's merge base), `verify:` (the gate commands the writer recorded).
@@ -86,7 +101,14 @@ Every worker ends with exactly one `worker_done`. You read three things from it:
 
 Any review, gate or synthesis worker that could not produce its artifact at all returns the bare token `BLOCKED` with `--outcome failed` (its report's `## Reason` says why): one fresh re-dispatch of the same role, then escalate to the user.
 
-Procedure: take `subject`, strip whitespace/emphasis, exact-match against the step's set. No match, or a report missing mandatory fields (`SPEC:`/`QUALITY:` for 4.1, `SIMPLICITY:` for plan review, or a BLOCKING item missing its required fields) → malformed: re-dispatch ONCE into the same terminal with a format-correction Dispatch: "Your previous worker_done did not carry a valid verdict token or required structured fields. Re-send worker_done with subject exactly one of: <tokens>, and fix required fields in the report." Prior findings remain unresolved. Still malformed after one correction → escalate to the user with the report path. Never infer a verdict from prose; never treat a missing token as approval; never silently DEFER format errors.
+Procedure: exact-match `subject`, outcome and report line 1 through C6. Missing
+mandatory binding/role fields → one format-correction Task/Dispatch, normally in
+the retained terminal, with the same role/artifact/snapshot/round. Write a new
+report and send one worker_done for that new Dispatch; never resend completion
+for the settled Dispatch. Prior findings stay unresolved. A repeated defect is a
+protocol blocker; conflicting identities or changed artifacts require corrected
+facts/fresh substantive review, not a format-only waiver. Never infer approval
+from prose or silently DEFER format errors.
 
 A `worker_done` that Orca **rejects** (missing `--from` / `--dispatch-capability`, sender not the dispatch assignee) is not a verdict and not a reason to close the terminal: read the report's line 1 for the token, then re-inject into the same worker terminal "Resend your worker_done with the `--from` and `--dispatch-capability` values from the Orca preamble at the top of your task" — once Orca accepts it, proceed to settlement. Orca's own rule: never release on a rejected/stale `worker_done`, never substitute `terminal close` for release. `outcome: failed` with a valid token is a protocol verdict (`BLOCKED`, `NEEDS_*`); `outcome: failed` whose body names quota / rate limit / auth / launch / bridge errors is an **availability** failure → cascade per `roles.md`.
 
@@ -125,7 +147,10 @@ $WS = "$BIN\sdd-workspace.ps1"; $RPKG = "$BIN\review-package.ps1"; $GATE = "$BIN
 7. Round 2+: ledger path present and open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
 8. Review dispatches (4.1 / 4.2 / 5 / plan review): this round's freshly generated package path as `[DIFF_FILE]`, the implementer's report as `[IMPL_REPORT_FILE]` (read-only input), `[GLOBAL_CONSTRAINTS]` copied verbatim from the plan.
 9. Anti-coaching scan on every reviewer spec: delete any sentence containing "do not flag", "don't treat", "not a defect", "at most Minor", "Minor at most", "the plan chose", "ignore the". Referencing settled ledger ids (`REJECTED_BY_SCOPE` / `DEFER`) is the only allowed form.
-10. `[REPORT_FILE]` is always the worker's OWN report: `$("$WS" <plan-file>)/<role>-<phase>-r<k>.md` for reviewers, gate, synthesizer, diagnosis and plan roles; `phase-<id>-report.md` for implementers (fix rounds — review, gate-fix and NEEDS_CONTEXT follow-ups alike — append to the same file and rewrite its line 1).
+10. `[REPORT_FILE]` is always the worker's OWN report in the plan workspace, with
+    a distinct path per Task/Dispatch. An implementer fix report includes the
+    previous report as read-only context and its new `## Fix round <N>` evidence;
+    do not overwrite bytes already referenced by an accepted hash.
 11. Prompts are loaded on demand: read each template only when dispatching that specific role.
 
 ## Triage

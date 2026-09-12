@@ -53,6 +53,10 @@ YAML frontmatter + markdown body:
 
 ```yaml
 ---
+protocol_version: 2
+orca_run: <coordinator-supplied actual Run>
+plan_base: <coordinator-supplied full SHA>
+contracts: ["C1", "C2"]
 slug: <short-kebab-slug>
 created: YYYY-MM-DD
 status: in-progress          # in-progress | done | abandoned
@@ -64,18 +68,27 @@ phases:
     scope: "<one-line>"
     status: in-progress       # pending | in-progress | done
     risk: none
+    base: <recorded full SHA before this phase launch>
+    consumes: []
+    produces: ["C1"]
   - id: Ф2
     scope: "..."
     status: pending
     risk: none
+    consumes: ["C1"]
+    produces: ["C2"]
     parallel_group: G1        # optional — see "Parallel groups" in decomposition rules
   - id: Ф3
     scope: "..."
     status: pending
     risk: none
+    consumes: ["C1"]
+    produces: []
     parallel_group: G1
 ---
 ```
+The one-line JSON `contracts`, `consumes` and `produces` lists must mirror the body contract IDs; empty sides use `[]`. The coordinator records future phase bases only when their actual predecessor commits exist.
+
 `risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly. Every phase MUST have a declared `risk:` value.
 
 `verify:` is a deterministic check list; top-level remains the legacy default, and `--phase ID` selects `phases[].verify` without falling back from an empty list. Read `../runtime-contracts.md` C4 on demand for one-line JSON declarations, phase/checkpoint selection, deadlines, declared inputs/tools/environment, hermetic defaults and required independent replay. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
@@ -138,7 +151,11 @@ The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is wri
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `PLAN_WRITTEN` | `BLOCKED`. After line 1 the report contains exactly two things: the path to the plan file, and a 1-paragraph summary of the plan's shape — number of phases, main risks, any decisions you made where the request was ambiguous. Keep the plan file itself clean — the report never goes into it.
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Bind the resulting plan hash; preserve every actual author observation across revisions. The coordinator supplies Run/plan_base before writing and records each phase base before launch.
+
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `PLAN_WRITTEN` | `BLOCKED`. After the verdict and binding, the report contains: the path to the plan file, and a 1-paragraph summary of the plan's shape — number of phases, main risks, any decisions you made where the request was ambiguous. Keep the plan file itself clean — the report never goes into it.
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
@@ -208,7 +225,11 @@ Preserve the existing frontmatter structure; update only what this revision actu
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `REVISED` | `NEEDS_AUTHORIZATION` | `BLOCKED`. After line 1 the report contains, in order: the updated plan file path (same file); per ledger item one line `<id>: fixed | rejected | already_fixed | needs_authorization — <one-line note + sections_changed list>`; `no_nits_applied: true|false` (MUST be `true` unless the coordinator explicitly authorized a NIT in the ledger); `deferred_observations: [<unrelated issue you noticed but did NOT edit>, ...]` — empty list if none; and a one-sentence summary of the revision shape (e.g., "fixed Ф2 contract gap; deferred two cosmetic observations"). Keep the plan file itself clean.
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Bind the resulting plan hash; preserve every actual author observation across revisions. The coordinator supplies Run/plan_base before writing and records each phase base before launch.
+
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `REVISED` | `NEEDS_AUTHORIZATION` | `BLOCKED`. After the verdict and binding, the report contains, in order: the updated plan file path (same file); per ledger item one line `<id>: fixed | rejected | already_fixed | needs_authorization — <one-line note + sections_changed list>`; `no_nits_applied: true|false` (MUST be `true` unless the coordinator explicitly authorized a NIT in the ledger); `deferred_observations: [<unrelated issue you noticed but did NOT edit>, ...]` — empty list if none; and a one-sentence summary of the revision shape (e.g., "fixed Ф2 contract gap; deferred two cosmetic observations"). Keep the plan file itself clean.
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json

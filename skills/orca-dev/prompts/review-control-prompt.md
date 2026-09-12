@@ -72,6 +72,10 @@ Read `../runtime-contracts.md` C5 on demand, then `[DIFF_FILE].manifest.json` an
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+
+Emit canonical FINDINGS and COVERAGE, including empty arrays when applicable. Every blocker retains authorization relation, why now, minimal fix and risk; no executable checks are introduced for this read-only role.
+
 1. Write your full report to `[REPORT_FILE]` (your own review report — distinct from the implementer's `[IMPL_REPORT_FILE]`). Its FIRST line must be exactly one bare token from: `REVIEW_OK` | `REVIEW_BLOCKING` — no preamble, no markdown heading, no bold.
 
    If `REVIEW_BLOCKING`, after line 1 emit:
@@ -93,7 +97,7 @@ NITS:
 - ...
 ```
 
-   If `REVIEW_OK`: after line 1 emit only the `DEFER:` and `NITS:` sections (omit either if empty). Nothing else.
+   If `REVIEW_OK`, include required binding/FINDINGS/COVERAGE and unresolved CANNOT_VERIFY, then DEFER/NITS when present.
 
    Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields make the report malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER. BLOCKING items must cite `file:line`. This is a control review, not a style pass: raise what the primary review genuinely missed AND matters — do not invent findings, and do not suppress one because the primary already passed the diff. A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
 
