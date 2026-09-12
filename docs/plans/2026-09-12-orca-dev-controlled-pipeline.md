@@ -1,7 +1,7 @@
 ---
 slug: orca-dev-controlled-pipeline
 created: 2026-09-12
-status: in-progress
+status: done
 protocol_version: 2
 plan_base: 16df3ef0f2cbbcdab8e091cb473ab96ffb3577d3
 orca_run: run_8930e295fe81
@@ -48,7 +48,7 @@ phases:
     base: 21d544b211333888cf8fc2921dccb2aa6fbccf9b
     scope: "Безопасная установка, совместимость и ограниченная сквозная приёмка"
     status: done
-    commits: '21d544b211333888cf8fc2921dccb2aa6fbccf9b..'
+    commits: '21d544b211333888cf8fc2921dccb2aa6fbccf9b..c5ae59c7e9e1a1cc61b756e70f08f64170b03c4b'
     risk: DATA_LOSS
     verify:
       - {"id":"final-suite","command":"python -B -m unittest discover -s tests -p 'test_*.py' -v -f","checkpoint":"final","timeout_seconds":1050,"environment":["ORCA_TEST_SHELL","ORCA_DEV_HOME","ORCA_TEST_ARTIFACTS",{"tool":"python","version_args":["--version"]}],"hermetic":false,"independent_replay":true}
