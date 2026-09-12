@@ -78,7 +78,7 @@ phases:
 ```
 `risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly. Every phase MUST have a declared `risk:` value.
 
-`verify:` is a top-level list of deterministic lint / typecheck / test commands that `bin/verify-gate` executes to validate the repository after each phase. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
+`verify:` is a deterministic check list; top-level remains the legacy default, and `--phase ID` selects `phases[].verify` without falling back from an empty list. Read `../runtime-contracts.md` C4 on demand for one-line JSON declarations, phase/checkpoint selection, deadlines, declared inputs/tools/environment, hermetic defaults and required independent replay. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
 
 
 Body must have these H2 sections, in order:

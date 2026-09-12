@@ -7,10 +7,12 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8
+$script:VNativeTogether=$true # compile the two required interop types in one native assembly
+. (Join-Path $PSScriptRoot 'lib/verification.ps1')
 
 # OS interop stays local to this entry point. At CreateProcess the job-list
 # attribute binds ownership atomically (Windows 10+), before any code can run.
-Add-Type -TypeDefinition @'
+$checkNativeSource = @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -128,6 +130,7 @@ public sealed class CheckJob : IDisposable {
   }
 }
 '@
+Add-Type -TypeDefinition ($checkNativeSource + "`n" + $VNativeSource)
 
 function Safe-Path([string]$path) {
   $full = [IO.Path]::GetFullPath($path)
@@ -189,6 +192,7 @@ function Observe([string]$runDir) {
   return $state
 }
 function Result-Code($state) {
+  if ($state.state -eq 'exited' -and (V-Get $state 'evidence') -and -not (V-EvidenceValid $state)) { return 125 }
   if ($state.state -eq 'exited' -and $state.cleanup_verified -and $state.logs_complete) {
     return [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$state.exit_code), 0)
   }
@@ -199,7 +203,7 @@ function Validate-Spec($spec) {
   $required = @('schema_version','run_id','owner','cwd','command','shell','run_dir','timeout_seconds','cancel_grace_seconds','no_progress_seconds')
   $names = @($spec.PSObject.Properties.Name)
   foreach ($name in $required) { if ($name -notin $names) { throw "missing $name" } }
-  foreach ($name in $names) { if ($name -notin ($required + @('progress_file','resource_key'))) { throw "unexpected $name" } }
+  foreach ($name in $names) { if ($name -notin ($required + @('progress_file','resource_key','verification'))) { throw "unexpected $name" } }
   if ($spec.schema_version -ne 1 -or $spec.run_id -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$') { throw 'invalid schema or run_id' }
   $ownerFields = if ($spec.owner.kind -eq 'local') { @('kind','id') } elseif ($spec.owner.kind -eq 'orca') { @('kind','orca_run_id','task_id','dispatch_id','terminal_handle') } else { throw 'invalid owner kind' }
   if ((@($spec.owner.PSObject.Properties.Name | Sort-Object) -join '|') -cne (($ownerFields | Sort-Object) -join '|')) { throw 'invalid owner fields' }
@@ -290,6 +294,7 @@ function Run($spec) {
   $lock = $null; $claimed = $false; $job = $null; $reason = $null; $stopAt = $null; $forcedAt = $null
   $progress = $null; $lastProgress = 0; $rootExitAt = $null
   $binding = [pscustomobject]@{ run_id=$spec.run_id; run_dir=$r; owner=$spec.owner }
+  $before=$null; $origin=$null; $repeatReason='legacy-no-reuse'
   try {
     $lock = Resource-Path $spec; $st.resource_lock = $lock
     while ($true) {
@@ -299,6 +304,14 @@ function Run($spec) {
       if ($null -ne $spec.timeout_seconds -and $elapsed -ge $spec.timeout_seconds -and -not $reason) { $reason = 'deadline' }
       if (-not $claimed -and -not $reason) { $claimed = Claim $lock $binding }
       if ($claimed -and -not $job -and -not $reason) {
+        if (V-Get $spec 'verification') {
+          $before=V-Context $spec; $reuse=V-FindReuse $spec $before; $origin=$reuse.origin; $repeatReason=$reuse.reason
+          if ($null -ne $spec.timeout_seconds -and $watch.Elapsed.TotalSeconds -ge $spec.timeout_seconds) { $reason='deadline'; continue }
+          if ($origin) {
+            $st.exit_code=$origin.exit_code; $st.cleanup_verified=$true; $st.stdout_log=$origin.stdout_log; $st.stderr_log=$origin.stderr_log
+            break
+          }
+        }
         $jobName = 'Local\orca-check-tree-' + [guid]::NewGuid().ToString('N')
         $job = New-Object CheckJob($jobName)
         $st.tree = @{kind='windows-job'; name=$jobName; leader=$null}
@@ -352,6 +365,12 @@ function Run($spec) {
   $st.state = if (-not $reason -and $st.cleanup_verified) { 'exited' } elseif ($st.cleanup_verified) { 'interrupted' } else { 'unknown' }
   if (-not $st.reason) { $st.reason = if ($reason) { $reason } else { 'exit' } }
   $st.logs_complete = $st.cleanup_verified
+  if (V-Get $spec 'verification') {
+    try { $st.evidence=V-FinishEvidence $spec $st $before $repeatReason $origin }
+    catch { $st.evidence=@{schema_version=1; valid=$false; reusable=$false; invalidation_reasons=@('evidence-error: '+$_.Exception.Message)} }
+    # Seal the exact durable serialization, including numeric/timestamp bytes.
+    Write-Json (Join-Path $r 'result.sha256') (V-Hash $utf8.GetBytes((Json $st)))
+  }
   Write-Json (Join-Path $r 'status.json') $st
   Write-Json (Join-Path $r 'result.json') $st
   if ($claimed -and $lock -and $st.cleanup_verified -and (Equal-Json (Read-Json $lock) $binding)) { [IO.File]::Delete((Safe-Path $lock)) }

@@ -45,10 +45,10 @@ Read the plan file first — YAML frontmatter + the `## <id>:` section at minimu
 
 This is a phase-scoped gate, not a merge review — a broad whole-branch review happens separately after all phases are complete.
 
-1. Read `[DIFF_FILE]` in ONE read call. It contains the commit list, a stat summary, and the full diff with -U10 context — it is your view of the change.
-2. Do NOT re-run git commands to re-fetch the change: no `git diff`, no `git log`, no `git show`.
-3. The diff's context lines ARE the changed files: do not read a changed file separately unless a hunk you must judge is cut off mid-function — and say so explicitly in your report.
-4. Fallback — only if the package file is missing: fetch the diff yourself with `git diff --stat <base-sha>` and `git diff -U10 <base-sha>`, plus `git status --porcelain` — files the phase CREATED are untracked, invisible to `git diff` against a commit; read them directly — and note the missing package in your report.
+1. Read `../runtime-contracts.md` C5 on demand, then `[DIFF_FILE].manifest.json` and all assigned parts in bounded ranges. Record package id/hash, snapshot and coverage of every assigned part/file and both sides of every contract.
+2. Check the frozen package identity before reading and before acceptance. Missing/stale/changed parts or incomplete coverage are `CANNOT_VERIFY`; request a fresh complete package through the live lifecycle.
+3. Read extra source context only for a named risk or required binary/oversize inspection; record the check. Diff context may suffice for ordinary hunks.
+4. A missing package cannot be replaced by an ad hoc diff that omits untracked files. Unknown authorship or insufficient independent family coverage is unresolved.
 5. Do not crawl the broader codebase. Inspect code outside the diff only to evaluate a concrete risk you can name — one focused check per named risk — and record each check in your report as `Risk: <X> — Checked: <file:line>`. Cross-cutting changes are legitimate named risks: if the diff changes lock ordering, a function or API contract, or shared mutable state, checking the call sites is the right method.
 
 ## Two-stage review
@@ -59,7 +59,7 @@ Do BOTH 4a and 4b, every round — 4a findings do NOT stop the review. Your repo
 
 Determine whether the diff implements the current phase **and only the authorized review fixes**.
 
-Do NOT trust the implementer's self-report — treat the implementer's report (`[IMPL_REPORT_FILE]`) as unverified claims about the code. It may be incomplete, inaccurate, or optimistic. Verify the claims against the diff. Design rationales in the report are claims too: "left it per YAGNI," "kept it simple deliberately," or any other justification is the implementer grading its own work. Judge the code on its merits — a stated rationale never downgrades a finding's severity. One exception: the report's test evidence (TDD Evidence sections with commands and output) is accepted as the test record — see "Verification you actually ran".
+Do NOT trust the implementer's self-report — treat the implementer's report (`[IMPL_REPORT_FILE]`) as unverified claims about the code. It may be incomplete, inaccurate, or optimistic. Verify the claims against the diff. Design rationales in the report are claims too: "left it per YAGNI," "kept it simple deliberately," or any other justification is the implementer grading its own work. Judge the code on its merits — a stated rationale never downgrades a finding's severity. Test summaries are claims too: accept execution only through valid C4 runner evidence bound to the exact snapshot; see "Verification you actually ran".
 
 Use this classification:
 
@@ -102,7 +102,7 @@ Issues must cite `file:line`. Separate true blockers from nits — nits don't tr
 What you run depends on the review round (given in Phase context):
 
 **Round 1** — before concluding, run and record outputs:
-- The phase's own tests, plus any test the gate summary marked skipped or that your review put in doubt — you need not re-run the full suite the gate already passed
+- The agreed directed/integration checkpoint and checks for a named doubt or missing evidence. Valid C4 evidence may satisfy ordinary unchanged checks; required independent replay still executes physically. Do not repeat the phase suite just because review started.
 - Typecheck / linter only if the gate summary marked them skipped
 - Skip verification only if the repo has no such tooling (say so explicitly)
 
@@ -165,3 +165,5 @@ For round 2+ in Step 4, first verify each ACCEPTED ledger item from the AUTHORIZ
 - Do not rewrite the reviewer checklist into the report — stick to findings.
 - Do not fix code yourself. You are reviewing, not implementing.
 ```
+
+Verification checkpoints and reuse follow `../runtime-contracts.md` C4. Use directed checks for a named change/risk, integration for changed contracts, and preserve required independent replay. Record evidence paths/origin ids and every physical repeat reason; a role change alone does not require rerunning an unchanged suite.

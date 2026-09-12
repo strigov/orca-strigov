@@ -5,11 +5,52 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import sys
+import tempfile
 import time
 import unittest
+from unittest import mock
 
-from support import ROOT, WINDOWS, RunnerFixture, command, read_json, until, write_json
+from support import ROOT, WINDOWS, RunnerFixture, command, read_json, selected_shell, until, write_json
+
+
+class FixtureCleanupTests(unittest.TestCase):
+    def test_readonly_objects_and_foreign_links(self):
+        with tempfile.TemporaryDirectory(prefix="runner-foreign-") as foreign, mock.patch.dict(os.environ):
+            os.environ.pop("ORCA_TEST_ARTIFACTS",None)
+            fixture=RunnerFixture(selected_shell()); closed=False
+            target=Path(foreign); sentinel=target/"keep.txt"; sentinel.write_bytes(b"untouched")
+            mode=sentinel.stat().st_mode; link=fixture.base/"foreign-link"
+            try:
+                objects=list((fixture.git.root/".git/objects").glob("[0-9a-f][0-9a-f]/*"))
+                self.assertTrue(objects)
+                if WINDOWS:
+                    self.assertTrue(any(p.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY for p in objects))
+                    import base64
+                    script="New-Item -ItemType Junction -Path '"+str(link).replace("'","''")+"' -Target '"+str(target).replace("'","''")+"' | Out-Null"
+                    result=command([fixture.shell,"-NoProfile","-NonInteractive","-EncodedCommand",
+                                    base64.b64encode(script.encode("utf-16le")).decode()],fixture.base)
+                    self.assertEqual(result[0],0,result)
+                else:
+                    link.symlink_to(target,target_is_directory=True)
+                fixture.close(); closed=True
+                self.assertFalse(fixture.base.exists())
+                self.assertEqual(sentinel.read_bytes(),b"untouched")
+                self.assertEqual(sentinel.stat().st_mode,mode)
+                self.assertEqual(list(target.iterdir()),[sentinel])
+                print("cleanup-proof: owned Git tree removed; foreign link target bytes/mode preserved")
+            finally:
+                if not closed: fixture.close()
+            # Opt-in evidence retention still works; clear it to clean our fixture.
+            os.environ["ORCA_TEST_ARTIFACTS"]=foreign
+            retained=RunnerFixture(selected_shell())
+            try:
+                retained.close(); self.assertTrue(retained.base.exists())
+            finally:
+                os.environ.pop("ORCA_TEST_ARTIFACTS",None)
+                retained.close()
+            self.assertFalse(retained.base.exists())
 
 
 class RunnerBehavior:
@@ -278,11 +319,14 @@ class RunnerBehavior:
     def test_gate_integration_verdicts_and_logs(self):
         root = self.fx.git.root
         plan = root / "gate-plan.md"
-        success = self.fx.python("print('PASS')")
-        failure = self.fx.python("import pathlib,sys;print('tail-marker');sys.exit(7 if pathlib.Path('new-source.txt').exists() else 0)")
+        success = "[Console]::WriteLine('PASS')" if WINDOWS else "printf 'PASS\\n'"
+        failure = ("[Console]::WriteLine('tail-marker'); if ([IO.File]::Exists('new-source.txt')) { exit 7 }; exit 0" if WINDOWS
+                   else "printf 'tail-marker\\n'; if [ -f new-source.txt ]; then exit 7; fi; exit 0")
         (root / "new-source.txt").write_text("changed")
         plan.write_text("---\nverify:\n- |\n    " + success + "\n- |\n    " + failure + "\n---\n", encoding="utf-8")
-        rc, out, err = command(self.fx.argv("verify-gate", plan, self.fx.git.base, root), root)
+        # Three sequential checks share one aggregate parent watchdog; individual
+        # short checks retain the <=15s bound (coordinator's Phase3 clarification).
+        rc, out, err = command(self.fx.argv("verify-gate", plan, self.fx.git.base, root), root, timeout=45)
         self.assertEqual(rc, 1, (out, err))
         self.assertEqual(out.splitlines()[:2], ["GATE_FAIL", "verify: 2 cmd(s) | passed: 1 | failed: 1 | inherited: 0 | judgment: 0"])
         self.assertIn("tail-marker", out)
@@ -291,8 +335,14 @@ class RunnerBehavior:
         self.assertEqual(len(runs), 3)
         results = [read_json(p) for p in runs]
         self.assertTrue(all(r["cleanup_verified"] and r["logs_complete"] for r in results))
+        self.assertTrue(all(r["duration_seconds"] <= 15 for r in results))
         self.assertEqual(sum(r["cwd"] != str(root) for r in results), 1)
         self.assertTrue(all(Path(r["stdout_log"]).exists() for r in results))
+        self.assertTrue(all(r["evidence"]["valid"] and not r["evidence"]["reusable"] for r in results))
+        self.assertTrue(all((Path(r["run_dir"]) / "result.sha256").exists() for r in results))
+        base_result = next(r for r in results if r["cwd"] != str(root))
+        self.assertEqual(base_result["evidence"]["key"]["provenance"]["kind"], "BASE")
+        self.assertEqual(base_result["evidence"]["key"]["provenance"]["base_sha"], self.fx.git.base)
         self.assertEqual(len(self.fx.git.git("worktree", "list", "--porcelain").split("worktree ")) - 1, 2)
         plan.write_text("---\nverify: []\n---\n", encoding="utf-8")
         rc, out, err = command(self.fx.argv("verify-gate", plan, self.fx.git.base, root), root)
@@ -306,12 +356,14 @@ class RunnerBehavior:
         self.assertEqual(r["state"], "exited")
 
     def test_gate_legacy_pass_inherited_and_missing_tool(self):
-        root = self.fx.git.root
-        plan = root / "legacy-gate.md"
-        success = self.fx.python("print('legacy pass')")
-        failure = self.fx.python("import sys;print('legacy failure');sys.exit(3)")
+        root = self.fx.git.other
+        plan = self.fx.git.workspaces[root] / "legacy-gate.md"
+        clean = command(["git", "-C", str(root), "status", "--porcelain"], root)
+        self.assertEqual(clean, (0, "", ""), clean)
+        success = "[Console]::WriteLine('legacy pass')" if WINDOWS else "printf 'legacy pass\\n'"
+        failure = "[Console]::WriteLine('legacy failure'); exit 3" if WINDOWS else "printf 'legacy failure\\n'; exit 3"
         plan.write_text("---\nverify:\n- |\n    " + success + "\n- |\n    " + failure + "\n---\n", encoding="utf-8")
-        rc, out, err = command(self.fx.argv("verify-gate", plan, self.fx.git.base, root), root)
+        rc, out, err = command(self.fx.argv("verify-gate", plan, self.fx.git.base, root), root, timeout=45)
         self.assertEqual(rc, 0, (out, err))
         self.assertEqual(out.splitlines()[:2], ["GATE_OK", "verify: 2 cmd(s) | passed: 1 | failed: 0 | inherited: 1 | judgment: 0"])
         plan.write_text("---\nverify:\n- orca_test_missing_tool_529917\n---\n", encoding="utf-8")
@@ -324,6 +376,33 @@ class RunnerBehavior:
         self.assertEqual(rc, 4294967295 if WINDOWS else 255, (out, err))
         self.assertEqual(r["exit_code"], rc)
         self.assertEqual(r["state"], "exited")
+
+    def test_gate_zero_pass_signatures_shared_dependencies_and_bad_base(self):
+        root = self.fx.git.root
+        plan = self.fx.git.workspaces[root] / "guards.md"
+        good = "[Console]::WriteLine('pass')" if WINDOWS else "printf 'pass\\n'"
+        bad = "[Console]::WriteLine('stable-failure'); exit 3" if WINDOWS else "printf 'stable-failure\\n'; exit 3"
+        def gate(commands, base=None):
+            plan.write_text("---\nverify:\n" + "".join("- |\n    " + c + "\n" for c in commands) + "---\n", encoding="utf-8")
+            return command(self.fx.argv("verify-gate", plan, base or self.fx.git.base, root), root,
+                           timeout=45 if len(commands) > 1 else 14)
+        rc, out, err = gate([bad])
+        self.assertEqual(rc, 4, (out, err)); self.assertIn("0 commands passed", out)
+        (root / "source.py").write_text("source change")
+        (root / "node_modules").mkdir()
+        try:
+            rc, out, err = gate([good, bad])
+            self.assertEqual(rc, 4, (out, err)); self.assertIn("shared .venv/node_modules", out)
+        finally:
+            (root / "node_modules").rmdir()
+            (root / "source.py").unlink()
+        # Differing failure signatures cannot inherit even when no changed path is named.
+        different = ("if ([Environment]::CurrentDirectory.EndsWith('repository with space')) { [Console]::WriteLine('head-error') } else { [Console]::WriteLine('base-error') }; exit 4" if WINDOWS
+                     else "case \"$PWD\" in *'repository with space') printf 'head-error\\n';; *) printf 'base-error\\n';; esac; exit 4")
+        rc, out, err = gate([good, different])
+        self.assertEqual(rc, 4, (out, err)); self.assertIn("different failure", out)
+        rc, out, err = gate([bad], "not-a-base")
+        self.assertIn(rc, (1, 4), (out, err)); self.assertNotEqual(out.splitlines()[0], "GATE_OK")
 
 
 if WINDOWS:

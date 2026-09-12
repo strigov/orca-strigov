@@ -55,7 +55,18 @@
 # FAIL/JUDGMENT, the last 40 lines of its output indented.
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
-plan="${1:-}"; base="${2:-}"; root="${3:-$(pwd)}"
+phase=""; checkpoint=""; positional=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --phase|--checkpoint)
+      [ $# -ge 2 ] || { echo "missing option value" >&2; exit 3; }
+      if [ "$1" = --phase ]; then phase=$2; else checkpoint=$2; fi; shift 2;;
+    --*) echo "unknown option: $1" >&2; exit 3;;
+    *) positional+=("$1"); shift;;
+  esac
+done
+[ ${#positional[@]} -le 3 ] || exit 3
+plan="${positional[0]:-}"; base="${positional[1]:-}"; root="${positional[2]:-$(pwd)}"
 [ -z "$plan" ] || [ -z "$base" ] && { echo "usage: verify-gate <plan-file> <base-sha> [repo-root]" >&2; exit 3; }
 [ -f "$plan" ] || { echo "plan file not found: $plan" >&2; exit 3; }
 command -v python3 >/dev/null 2>&1 || { echo "verify-gate: python3 is required (frontmatter parsing) but not found in PATH" >&2; exit 3; }
@@ -63,76 +74,9 @@ case "$plan" in /*) ;; *) plan="$(pwd)/$plan" ;; esac   # resolve before cd into
 cd "$root" || { echo "verify-gate: cannot cd to repo root: $root" >&2; exit 3; }
 root=$(pwd -P)
 
-# --- extract `verify:` list from frontmatter (block or flow style) -------------
-# (function + heredoc, not heredoc inside $(...): macOS bash 3.2 cannot parse that)
-# Writes the commands NUL-separated to $2 (a literal block scalar may contain
-# newlines). Exits 3 on an item the script refuses to guess about.
+# Shared limited parser; commands remain JSON until the exact shell launch.
 extract_verify() {
-python3 - "$1" "$2" <<'PY'
-import sys,re
-src,dst=sys.argv[1],sys.argv[2]
-text=open(src,encoding='utf-8').read()
-m=re.match(r'^---\r?\n(.*?)\r?\n---(?:\r?\n|$)',text,re.S)
-if not m: sys.exit(0)
-lines=m.group(1).splitlines()
-def indent(s): return len(s)-len(s.lstrip(' \t'))
-def strip_comment(v):  # drop a trailing " # ..." that is outside quotes
-    q=None; i=0
-    while i<len(v):
-        ch=v[i]
-        if q:
-            if q=='"' and ch=='\\': i+=2; continue
-            if ch==q: q=None
-        elif ch in ('"',"'"): q=ch
-        elif ch=='#' and (i==0 or v[i-1] in ' \t'): return v[:i].rstrip()
-        i+=1
-    return v.rstrip()
-def unquote(v):
-    if len(v)>=2 and v[0]=='"' and v[-1]=='"': return v[1:-1].replace('\\"','"').replace('\\\\','\\')
-    if len(v)>=2 and v[0]=="'" and v[-1]=="'": return v[1:-1].replace("''","'")
-    return v
-def die(msg): sys.stderr.write('verify-gate: '+msg+'\n'); sys.exit(3)
-out=[]; kind=None; k=0; mf=None
-for k,l in enumerate(lines):
-    if re.match(r'^verify:[ \t]*(#.*)?$',l): kind='block'; break
-    mf=re.match(r'^verify:[ \t]*\[(.*)\][ \t]*(#.*)?$',l)
-    if mf: kind='flow'; break
-if kind=='flow':
-    for g in re.findall(r'\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\[\]]+))',mf.group(1)):
-        v=next((x for x in g if x),'').strip()
-        if v: out.append(v)
-elif kind=='block':
-    i=k+1; n=len(lines)
-    while i<n:
-        l=lines[i]
-        if l.strip()=='' or l.lstrip().startswith('#'): i+=1; continue
-        md=re.match(r'^([ \t]*)-(?:[ \t]+(.*))?$',l)
-        if not md: break                      # next key (or anything that is not an item)
-        ind=len(md.group(1)); v=(md.group(2) or '').strip(); i+=1
-        ms=re.match(r'^([>|])[-+]?[0-9]*[ \t]*(#.*)?$',v)
-        if ms:                                # block scalar: body = following more-indented lines
-            body=[]
-            while i<n:
-                b=lines[i]
-                if b.strip()=='': body.append(''); i+=1; continue
-                if indent(b)<=ind: break
-                body.append(b); i+=1
-            while body and body[-1]=='': body.pop()
-            if not body: die('empty block scalar (%s) in verify: item %d' % (ms.group(1),len(out)+1))
-            bi=min(indent(b) for b in body if b.strip())
-            body=[b[bi:] if b.strip() else '' for b in body]
-            v='\n'.join(body) if ms.group(1)=='|' else ' '.join(b.strip() for b in body if b.strip())
-        else:                                 # plain/quoted scalar, possibly continued on indented lines
-            while i<n:
-                b=lines[i]
-                if b.strip()=='' or re.match(r'^[ \t]*-([ \t]|$)',b) or indent(b)<=ind: break
-                v=v+' '+b.strip(); i+=1
-            v=unquote(strip_comment(v))
-        v=v.strip()
-        if v: out.append(v)
-with open(dst,'w',encoding='utf-8') as fh:
-    for v in out: fh.write(v+'\0')
-PY
+  python3 -B "$BIN/lib/verification.py" parse "$1" "$2" "$phase" "$checkpoint"
 }
 cmdfile=$(mktemp "${TMPDIR:-/tmp}/verify-gate-cmds.XXXXXX") || exit 3
 trap 'rm -f "$cmdfile"' EXIT
@@ -157,27 +101,45 @@ run_command() {
   return $?
 }
 make_spec() {
-python3 - "$workspace" "$1" "$2" <<'PY'
+python3 -B - "$BIN/lib" "$workspace" "$check_json" "$2" "$root" "$base" "$deps_linked" <<'PY'
 import json, os, shutil, sys, uuid
-ws,command,cwd=sys.argv[1:]
-rid='gate-'+uuid.uuid4().hex
+sys.path.insert(0,sys.argv[1])
+import verification as v
+ws,raw,cwd,root,base,linked=sys.argv[2:]
+c=json.loads(raw); rid='gate-'+uuid.uuid4().hex
 checks=os.path.join(ws,'checks'); os.makedirs(checks,exist_ok=True)
 rd=os.path.join(checks,rid); path=rd+'.json'
-s=dict(schema_version=1, run_id=rid, owner=dict(kind='local',id=rid),
-       cwd=cwd,command=command,shell=shutil.which('bash'),run_dir=rd,
-       timeout_seconds=None,cancel_grace_seconds=2,no_progress_seconds=None)
-with open(path,'x',encoding='utf-8') as f: json.dump(s,f,ensure_ascii=False)
+try: base=v.text_git(root,'rev-parse','--verify',base+'^{commit}')
+except Exception: base='unverifiable:'+base
+provenance=dict(kind='HEAD' if cwd==root else 'BASE',base_sha=base,
+                preparation='current-worktree' if cwd==root else 'git-worktree-add-detach',
+                linked_dependencies=[dict(path=os.path.join(root,d),target=os.path.realpath(os.path.join(root,d)))
+                  for d in ('node_modules','.venv','venv') if cwd!=root and os.path.exists(os.path.join(root,d))])
+s=dict(schema_version=1,run_id=rid,owner=dict(kind='local',id=rid),cwd=cwd,command=c['command'],
+       shell=shutil.which('bash'),run_dir=rd,verification=dict(check=c,provenance=provenance))
+for field in ('timeout_seconds','cancel_grace_seconds','no_progress_seconds','resource_key','progress_file'): s[field]=c[field]
+if provenance['linked_dependencies']: s['verification']['repeat_reason']='linked-dependencies-unverifiable'
+v.save(path,s)
 print(path)
 PY
 }
 read_result() {
-python3 - "$1" "$2" <<'PY'
+python3 -B - "$1" "$2" "$BIN/lib" <<'PY'
 import json,os,sys
-rd,mode=sys.argv[1:]
+sys.path.insert(0,sys.argv[3])
+import verification
+rd,mode=sys.argv[1:3]
 try:
     with open(os.path.join(rd,'result.json'),encoding='utf-8') as f: s=json.load(f)
 except (OSError,ValueError): sys.exit(125)
-valid=s['state']=='exited' and s['cleanup_verified'] and s['logs_complete'] and s['exit_code'] is not None
+valid=verification.evidence_valid(s,verification.load(os.path.join(rd,'request.json')))
+if mode=='provenance':
+    print('evidence: '+os.path.join(rd,'result.json')+' | repeat_reason: '+str(s.get('evidence',{}).get('repeat_reason'))+' | origin_run_id: '+str(s.get('evidence',{}).get('origin_run_id'))); sys.exit(0)
+if mode=='cleanup':
+    req=verification.load(os.path.join(rd,'request.json'))
+    sealed=verification.file_digest(os.path.join(rd,'result.json'))==verification.load(os.path.join(rd,'result.sha256'))
+    bound=s.get('evidence',{}).get('request_sha256')==verification.digest(verification.encoded(req))
+    sys.exit(0 if sealed and bound and s['run_dir']==req['run_dir'] and s['cleanup_verified'] else 125)
 if mode=='valid': sys.exit(0 if valid else 125)
 if mode=='code':
     rc=s['exit_code'] if valid else 125
@@ -193,13 +155,27 @@ PY
 n=0; p=0; f=0; i=0; j=0; status=0; report=""
 # paths the phase changed (tracked + untracked), used to decide whether a base
 # failure can honestly be called inherited
-changed=$( { git diff --name-only "$base" 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sed '/^$/d' | sort -u)
+changed_file=$(mktemp "${TMPDIR:-/tmp}/verify-gate-paths.XXXXXX") || exit 3
+trap 'rm -f "$cmdfile" "$changed_file"' EXIT
+changed_unknown=0
+python3 -B - "$BIN/lib" "$root" "$base" "$changed_file" <<'PY'
+import pathlib,sys
+sys.path.insert(0,sys.argv[1])
+from verification import git
+names=set(git(sys.argv[2],'diff','--name-only','-z',sys.argv[3]).split(b'\0'))
+names.update(git(sys.argv[2],'ls-files','--others','--exclude-standard','-z').split(b'\0'))
+pathlib.Path(sys.argv[4]).write_bytes(b''.join(p+b'\0' for p in sorted(names) if p))
+PY
+[ $? -eq 0 ] || changed_unknown=1
+changed_paths=()
+while IFS= read -r -d '' pth; do changed_paths+=("$pth"); done < "$changed_file"
 mentions_changed() {  # $1 = text ; true if any changed path (or its basename) appears in it
   local pth
-  while IFS= read -r pth; do
+  [ "$changed_unknown" -eq 1 ] && return 0
+  for pth in ${changed_paths[@]+"${changed_paths[@]}"}; do
     [ -z "$pth" ] && continue
     case "$1" in *"$pth"*|*"$(basename "$pth")"*) return 0;; esac
-  done <<< "$changed"
+  done
   return 1
 }
 is_test_path() {  # $1 = repo-relative path ; true if it lives in a test dir or is a test file
@@ -208,10 +184,10 @@ is_test_path() {  # $1 = repo-relative path ; true if it lives in a test dir or 
   return 1
 }
 source_changed=0   # any changed path outside the test dirs
-while IFS= read -r pth; do
+for pth in ${changed_paths[@]+"${changed_paths[@]}"}; do
   [ -z "$pth" ] && continue
   is_test_path "$pth" || { source_changed=1; break; }
-done <<< "$changed"
+done
 missing_tool() {  # $1 = rc, $2 = output, $3 = command ; true if the command itself could not run
   [ "$1" -eq 126 ] || [ "$1" -eq 127 ] && return 0
   local cmd word; cmd="${3#"${3%%[![:space:]]*}"}"; word="${cmd%%[[:space:]]*}"
@@ -223,11 +199,14 @@ missing_tool() {  # $1 = rc, $2 = output, $3 = command ; true if the command its
 }
 deps_linked=0  # set when a dependency dir was symlinked into a BASE worktree
 base_out=""    # stdout+stderr of the last run_at_base call
+base_prepared=0; base_verified=0
 run_at_base() {  # $1 = command ; returns the command's exit code at BASE (125 = no usable base worktree)
   local wt; wt=$(mktemp -d "${TMPDIR:-/tmp}/verify-gate-base.XXXXXX")
   base_out=""
+  base_prepared=0; base_verified=0
   git worktree add -q --detach "$wt" "$base" 2>/dev/null || {
     echo "verify-gate: cannot create a worktree for base ${base:0:7}" >&2; rm -rf "$wt"; return 125; }
+  base_prepared=1
   # share the environment: dependency dirs are not part of the commit
   local dep
   for dep in node_modules .venv venv; do
@@ -238,11 +217,16 @@ run_at_base() {  # $1 = command ; returns the command's exit code at BASE (125 =
     git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"; return 125
   fi
   run_command "$1" "$wt"; local rc=$?
+  base_verified=$runner_ok
   base_out=$run_out
-  report+="    BASE logs: $run_dir"$'\n'
+  report+="    BASE logs: $run_dir"$'\n'"    $(read_result "$run_dir" provenance)"$'\n'
   if [ "$runner_ok" -ne 1 ]; then
-    # An unknown tree may still use this worktree. Preserve it for diagnosis.
-    report+="    BASE runner incomplete; retained worktree: $wt"$'\n'
+    if read_result "$run_dir" cleanup; then
+      git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+    else
+      # Unknown ownership/cleanup still preserves the worktree for diagnosis.
+      report+="    BASE runner incomplete; retained worktree: $wt"$'\n'
+    fi
     return 125
   fi
   git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"
@@ -254,28 +238,20 @@ signature() {  # $1 = output ; last 8 non-empty lines, ANSI/paths/durations/numb
   sig_normalize "$root" "$tmpf"
   rm -f "$tmpf"
 }
-sig_normalize() {  # $1 = root, $2 = file with the output → stdout ; counts on test-runner
-                   # summary lines are kept verbatim ("12 failed" != "11 failed")
-python3 - "$1" "$2" <<'PY'
-import sys,re
-root=sys.argv[1]
-esc=re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
-summary=re.compile(r'\b(passed|failed|errors?|skipped)\b')
-out=[]
-for l in open(sys.argv[2],encoding='utf-8',errors='replace').read().splitlines():
-    l=esc.sub('',l).replace(root,'ROOT')
-    l=re.sub(r'/[^ ]*verify-gate-base\.[A-Za-z0-9]*','ROOT',l)
-    l=re.sub(r'[0-9]+(\.[0-9]+)?s\b','Ns',l)          # durations vary run to run
-    if not summary.search(l): l=re.sub(r'[0-9]{2,}','N',l)
-    if l.strip(): out.append(l)
-sys.stdout.write('\n'.join(out[-8:])+'\n')
+sig_normalize() {
+python3 -B - "$BIN/lib" "$1" "$2" <<'PY'
+import pathlib,sys
+sys.path.insert(0,sys.argv[1])
+from verification import signature
+print(signature(sys.argv[2],pathlib.Path(sys.argv[3]).read_text(encoding='utf-8',errors='replace')))
 PY
 }
-while IFS= read -r -d '' c || [ -n "$c" ]; do
-  [ -z "$c" ] && continue
+while IFS= read -r -d '' check_json || [ -n "$check_json" ]; do
+  [ -z "$check_json" ] && continue
+  c=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["command"])' "$check_json")
   n=$((n+1)); label=$(printf '%s' "$c" | tr '\n' ' ')
   run_command "$c" "$root"; rc=$?; out=$run_out
-  report+="    HEAD logs: $run_dir"$'\n'
+  report+="    HEAD logs: $run_dir"$'\n'"    $(read_result "$run_dir" provenance)"$'\n'
   if [ "$runner_ok" -ne 1 ]; then
     j=$((j+1)); [ $status -eq 0 ] && status=4
     report+="JUDGMENT $label  (runner incomplete; inspect durable status/result)"$'\n'
@@ -289,10 +265,16 @@ while IFS= read -r -d '' c || [ -n "$c" ]; do
     continue
   fi
   run_at_base "$c"; brc=$?
-  if [ $brc -eq 0 ]; then
+  if [ "$base_prepared" -eq 1 ] && [ "$base_verified" -ne 1 ]; then
+    j=$((j+1)); [ $status -eq 0 ] && status=4
+    report+="JUDGMENT $label  (BASE evidence incomplete)"$'\n'"$tail_out"$'\n'
+    if [ $deps_linked -eq 1 ] && [ $source_changed -eq 1 ]; then
+      report+="    inherited classification unreliable: shared .venv/node_modules may execute HEAD sources"$'\n'
+    fi
+  elif [ $brc -eq 0 ]; then
     f=$((f+1)); status=1
     report+="FAIL $label"$'\n'"$tail_out"$'\n'
-  elif [ $brc -eq 125 ]; then
+  elif [ "$base_prepared" -ne 1 ]; then
     f=$((f+1)); status=1
     report+="FAIL $label  (base ${base:0:7} could not be checked out — treated as a new failure)"$'\n'"$tail_out"$'\n'
   elif mentions_changed "$c"$'\n'"$(printf '%s\n' "$out" | tail -200)"; then

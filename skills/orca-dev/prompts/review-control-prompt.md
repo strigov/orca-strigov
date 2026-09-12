@@ -58,7 +58,7 @@ Global constraints from the spec/design that bind this phase (copied verbatim fr
 
 [GLOBAL_CONSTRAINTS]
 
-Read `[DIFF_FILE]` once — it contains the commit list, a stat summary, and the full diff with -U10 context, and it is your view of the change. The diff's context lines ARE the changed files: do not re-run git commands, and do not read a changed file separately unless a hunk you must judge is cut off mid-function — say so in your report if you do. If the package file is missing, fetch the diff yourself: `git diff --stat <base-sha>` and `git diff -U10 <base-sha>` (un-committed working tree against base), plus `git status --porcelain` — files the phase CREATED are untracked, invisible to `git diff` against a commit; read them directly. Inspect code outside the diff only to evaluate a concrete risk you can name — one focused check per named risk.
+Read `../runtime-contracts.md` C5 on demand, then `[DIFF_FILE].manifest.json` and every assigned part in bounded ranges. Verify frozen identity and report package id/hash, snapshot and coverage of parts/files and both sides of each contract. Missing/stale parts, incomplete coverage or unknown independent authorship require `CANNOT_VERIFY`; request a fresh complete package, never an ad hoc diff. Read source only for a named risk or binary/oversize inspection and record that check. This role remains read-only and runs no tests; executable C4 evidence and required replay are handled by the assigned verification role.
 
 ## Your review angles (what the primary review often misses)
 
@@ -116,7 +116,7 @@ Send the FULL first-round prompt again (all sections: authorization boundary, fi
 ```
 CONTROL REVIEW, round <k> of a fix loop. Read-only, do not modify code.
 
-An earlier control review of this diff produced blocking findings; the implementer has since applied authorized fixes. You are a fresh worker with no memory of prior rounds. Read the review package at `[DIFF_FILE]` — it was freshly generated for this round and reflects the working tree after the fixes. The package rules from the phase context apply: read it once, do not re-run git commands, the diff's context lines ARE the changed files.
+An earlier control review of this diff produced blocking findings; the implementer has since applied authorized fixes. You are a fresh worker with no memory of prior rounds. Read the review package at `[DIFF_FILE]` — it was freshly generated for this round and reflects the working tree after the fixes. The package rules from the phase context apply: read its manifest and assigned bounded parts, preserve frozen identity, and report full C5 coverage.
 
 Verify first that each open ACCEPTED item in the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`) is fixed correctly. Then check the fix delta for new problems. Do NOT block on pre-existing issues unrelated to the authorized fixes unless they clear the high-materiality bar (data loss/corruption, security/trust-boundary failure, guaranteed build/test/runtime failure, regression of an existing public contract, direct failure of the phase acceptance criteria) — latent issues outside that bar belong in DEFER/NITS.
 ```

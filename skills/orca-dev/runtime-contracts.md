@@ -112,8 +112,8 @@ Both verify-gate entry points create unique HEAD/BASE runs in the existing plan
 workspace, keeping the legacy invocation, verdict lines and exit meanings.
 They classify only confirmed exits, reading at most 64 KiB / 200 trailing lines
 per stream; displayed failure tails remain bounded. Reports include log paths.
-Unknown BASE trees retain their worktree for diagnosis. No snapshot/evidence
-reuse is implemented by C3.
+Unknown BASE trees retain their worktree for diagnosis. C4 below adds explicit
+snapshot/evidence policy; C3-only requests retain their original behavior.
 
 The owner normally blocks in one shell call. If its harness requires a command
 terminal, use the same runner there and the current, verified Orca
@@ -132,3 +132,137 @@ each shell's module has its own three-minute bound. POSIX uses `python3` and
 the actual Bash entry point. Test helpers use Python only as a driver and put
 all synthetic children under a parent watchdog; they never run installation
 fixtures or change user configuration.
+
+## C4 — exact inputs and verification evidence
+
+Both gates preserve `PLAN BASE [ROOT]` and accept `--phase ID` and
+`--checkpoint directed|integration|final`. No phase selects top-level `verify`;
+an explicit phase selects only its own list, including an empty list. Directed
+selects directed checks; integration includes directed and integration; final
+includes all three. With no checkpoint, all checks in the selected list run.
+Legacy block/flow lists, quoted strings, comments and `|`/`>` scalars still work.
+Unsupported YAML structures fail parsing; they never become shell commands.
+
+A new list item is a single-line JSON object, also valid YAML:
+
+```json
+{"id":"unit","command":"python -B -m unittest","checkpoint":"directed","timeout_seconds":120,"cancel_grace_seconds":2,"no_progress_seconds":30,"resource_key":null,"progress_file":null,"inputs":[],"environment":["LANG",{"tool":"python","version_args":["--version"]}],"hermetic":false,"independent_replay":false}
+```
+
+`command` is required. Defaults: id `legacy-N`, checkpoint `directed`, timeout
+and no-progress null, grace 2, resource/progress null, inputs/environment empty,
+hermetic/replay false. IDs must be unique in the selected list. Commands are
+written for the actual shell; there is no translation between Bash/PowerShell.
+`inputs` names additional files or recursive directories (absolute, or relative
+to cwd), including ignored inputs. `environment` contains variable names and
+tool objects with exactly `tool` and `version_args`; tools resolve to an actual
+executable, with binary identity and successful bounded version output. Shell
+identity is automatic. Variable values are hashed, never published. Unknown
+tools, inputs or versions prohibit reusable evidence.
+
+`hermetic:true` is an explicit assertion that all inputs/tools/environment are
+declared, there is no concurrent external writer, and the command has no
+untracked network/time/database dependency or unobservable temporary mutation.
+An absent assertion means false. Do not assert it for an unknown environment.
+This is an observability contract, not a sandbox or authentication boundary.
+The local owner and single-writer rule still apply. Required independent replay
+always executes under the selected verifier's new owner, with a recorded reason;
+it cannot be satisfied by the implementer's report or a reused run. A named new
+hypothesis likewise forces a physical run. Risk decisions are not inferred from
+missing metadata and remain the plan/reviewer's responsibility.
+
+For a C4 runner request add `verification` with normalized `check`, `provenance`
+and optional nonempty `repeat_reason`. The check is the object above with all
+defaults filled and C3 policy/command identical to the request. Provenance records
+`kind` (`HEAD` or `BASE`), full `base_sha`, `preparation` and
+`linked_dependencies`. The gates produce this binding themselves. BASE uses the
+actual detached worktree, its checked files and shell/environment; shared
+dependencies force a new run. Different physical BASE worktrees have different
+identity, so the gate conservatively re-executes there. Reuse is available only
+when the entire recorded BASE provenance and snapshot really match, never by
+matching the command string to a HEAD result.
+
+The runner captures stable before/after snapshots, actual tracked working bytes,
+index entries and index digest, file types/modes, deletions and all nonignored
+untracked paths, using NUL-safe Git enumeration. Snapshot manifests explicitly
+list the known plan workspace exclusion; tracked source is included even there.
+Declared inputs are never excluded. Unresolved links/submodules, unreadable files,
+unmerged or unsupported case-colliding paths and Git errors remain unknown.
+Content and file-set hashes are accompanied by change metadata and incarnation
+witnesses (POSIX inode/ctime, Windows file identity/ChangeTime). A detectable
+write and restoration invalidates evidence even when final bytes and mtime match.
+Arbitrary hostile writes restoring every observable fact are outside this contract.
+
+`result.json` contains `evidence` with schema, exact request digest, check and
+provenance key, source before/after, environment/tools fingerprints, log paths,
+sizes/hashes, normalized failure signature, validity, invalidation reasons, `reusable`, `repeat_reason` and
+`origin_run_id`. The enclosing C3 record supplies owner, command, timestamps,
+duration and actual exit. `result.sha256` seals its exact durable bytes. Mutation
+or incomplete evidence yields runner 125, retaining the actual command exit in
+JSON. Gate validates request binding, seal and full logs before classification.
+
+Reuse searches only `checks/*/result.json` in this plan workspace. Matching
+eligible evidence avoids a new command process. A new atomic result binds the
+new owner to the physical origin, its result path/hash and original full logs;
+the original request/result/logs must remain intact. No reuse chain, global
+cache, daemon or dependency inference is introduced. Nonhermetic valid execution
+can pass, but cannot be reused. Broken evidence is rerun, never accepted as PASS.
+Timeout, mutation and unknown completion go to judgment. Existing missing-tool,
+changed-path, failure-signature, shared-dependency and zero-pass safeguards apply
+to HEAD/BASE classification. Gate's first two lines and codes 0/1/2/3/4 are stable;
+evidence/log paths and repeat/origin reasons follow the summary.
+
+## C5 — complete frozen review package
+
+`review-package BASE HEAD [OUTFILE]` and `BASE WORKTREE OUTFILE` retain their
+positional interface, full `.diff`, `wrote`/`EMPTY` stdout and exit meanings.
+`OUTFILE.manifest.json` adds schema, package id, full BASE/head/mode, snapshot,
+complete flag, changed/untracked file statuses, bytes/hash, exclusions, limitations,
+parts and coverage. Untracked files are staged only in a temporary index copy;
+the real index bytes are checked before/after, including an error path. All Git
+exits are checked. Binary patches are retained. Known SDD storage and the exact
+output family are excluded only for untracked service data; actual tracked source
+and source outside SDD remain included.
+
+A small package uses the original diff as its only part. Larger packages have
+`OUTFILE.parts/NNNN.diff`, at most 65536 bytes each; `[start,end)` ranges cover the
+entire package exactly once. A long line can cross parts. Oversize/binary input
+requires named source inspection and stays uncovered until that check is recorded.
+No byte tail, ignored declared input or new file can be discarded for a size cap.
+
+The optional `OUTFILE.provenance.json` carries saved write receipts and the plan's
+producer/consumer contracts. Its shape is `{schema_version:1, writes:[], contracts:[], inputs:[]}`
+(`inputs` is optional). Each write has `family`, `files`, `receipt_path`,
+`receipt_sha256`, `run_id`, `task_id`, `dispatch_id`; saved receipt bytes and all
+three IDs must match. Each contract has `id`, `producer` and `consumer` path lists.
+The manifest accumulates every recorded family per file, with status
+`requires-family-validation`: receipt identity alone does not prove the claimed
+family or completeness of the author list. Review/acceptance checks that against
+actual launches and role mappings. Absent authorship remains unknown. Preserve all
+actual author families per file/unit across fallback and fix waves, using write
+Dispatch/launch receipts and file/commit ranges, never coordinator commit trailers.
+Unknown authorship does not establish independence. Declared ignored/external
+review inputs enter the snapshot and `declared_inputs` manifest with raw hashes
+and required source inspection; they are not silently lost because Git ignores
+them. Range packages also record both immutable reviewed Git tree identities;
+the working snapshot guards the local frozen review context.
+
+Freeze the package for review. Before dispatch and acceptance check the manifest
+identity, all part hashes/ranges and current snapshot using the shared helper's
+`validate-package MANIFEST` operation (`python3 -B bin/lib/verification.py` or
+native `bin/lib/verification.ps1`). Zero verifies artifact integrity, not review
+approval. A reviewer reads the manifest and every assigned part in bounded ranges,
+then reports package id/hash, snapshot and explicit coverage of parts/files and
+both producer and consumer of every contract, including compatibility. Missing,
+changed, stale or incompletely covered artifacts require `CANNOT_VERIFY` and a
+fresh complete package; ad hoc diffs do not substitute for missing untracked data.
+
+Usually one final reviewer suffices. Mixed authorship can use complementary
+reports in the same final round: each unit needs a verdict from a family outside
+all its authors. Each reviewer sees whole-branch context. An indivisible unit
+without an eligible independent route stays blocked for explicit assignment.
+No new role or review loop; the combined final round cap remains 2. Primary/final
+review executes only its agreed checkpoint, required risk replay or named new
+hypothesis, not an unchanged suite merely because the role/step changed. Warnings
+matter when they reveal a material problem or violated requirement, not simply
+because stdout is nonempty.

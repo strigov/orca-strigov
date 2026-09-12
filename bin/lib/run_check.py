@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import uuid
+import verification
 
 
 def now():
@@ -126,7 +127,7 @@ def owner_valid(owner):
 def spec_valid(s):
     required = {"schema_version", "run_id", "owner", "cwd", "command", "shell", "run_dir",
                 "timeout_seconds", "cancel_grace_seconds", "no_progress_seconds"}
-    if set(s) - required - {"progress_file", "resource_key"} or required - set(s):
+    if set(s) - required - {"progress_file", "resource_key", "verification"} or required - set(s):
         raise ValueError("unexpected or missing spec fields")
     if s["schema_version"] != 1 or not owner_valid(s["owner"]):
         raise ValueError("invalid schema or owner")
@@ -244,6 +245,7 @@ def run(s):
     old_handlers = {sig: signal.signal(sig, lambda n, f: interrupted.append(n))
                     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     binding = {"run_id": s["run_id"], "run_dir": str(r), "owner": s["owner"]}
+    before = None; origin = None; repeat_reason = "legacy-no-reuse"
     try:
         lock = resource_path(s)
         st["resource_lock"] = str(lock) if lock else None
@@ -259,6 +261,15 @@ def run(s):
             if not claimed and not reason:
                 claimed = claim(lock, binding)
             if claimed and child is None and not reason:
+                if s.get("verification"):
+                    before = verification.context(s)
+                    if s["timeout_seconds"] is not None and time.monotonic() - started >= s["timeout_seconds"]:
+                        reason = "deadline"; continue
+                    origin, repeat_reason = verification.find_reuse(s, before)
+                    if origin:
+                        st.update(exit_code=origin["exit_code"], cleanup_verified=True,
+                                  stdout_log=origin["stdout_log"], stderr_log=origin["stderr_log"])
+                        break
                 # The fork cannot execute the command before durable group binding.
                 ready_r, ready_w = os.pipe()
                 go_r, go_w = os.pipe()
@@ -356,6 +367,14 @@ def run(s):
               state="exited" if not reason and st["cleanup_verified"] else
                     "interrupted" if st["cleanup_verified"] else "unknown",
               reason=st["reason"] or reason or "exit", logs_complete=st["cleanup_verified"])
+    if s.get("verification"):
+        try:
+            st["evidence"] = verification.finish_evidence(s, st, before, repeat_reason, origin)
+        except Exception as e:
+            st["evidence"] = {"schema_version": 1, "valid": False, "reusable": False,
+                              "invalidation_reasons": ["evidence-error: " + str(e)]}
+        serialized = json.dumps(st, ensure_ascii=False, sort_keys=True) + "\n"
+        atomic(r / "result.sha256", verification.digest(serialized.encode("utf-8")))
     atomic(r / "status.json", st)
     atomic(r / "result.json", st)
     if claimed and lock and st["cleanup_verified"] and read(lock) == binding:
@@ -365,6 +384,8 @@ def run(s):
 
 
 def code(st):
+    if st.get("state") == "exited" and st.get("evidence") and not verification.evidence_valid(st):
+        return 125
     if st.get("state") == "exited" and st.get("cleanup_verified") and st.get("logs_complete"):
         rc = st["exit_code"]
         return min(255, rc if rc >= 0 else 128 - rc)

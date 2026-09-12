@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -116,7 +117,9 @@ class RunnerFixture:
         artifact_root = os.environ.get("ORCA_TEST_ARTIFACTS")
         if artifact_root:
             Path(artifact_root).mkdir(parents=True, exist_ok=True)
-        self.base = Path(tempfile.mkdtemp(prefix="runner-", dir=artifact_root))
+        self.base = Path(os.path.abspath(tempfile.mkdtemp(prefix="runner-", dir=artifact_root)))
+        created = self.base.lstat()
+        self.base_identity = (created.st_dev, created.st_ino)
         self.git = TwoWorktrees(self.base)
         self.processes = []
 
@@ -165,5 +168,90 @@ class RunnerFixture:
         for p in self.processes:
             p.close()
         if not os.environ.get("ORCA_TEST_ARTIFACTS"):
-            # Fixtures create no junctions; symlink tests explicitly remove links.
-            shutil.rmtree(self.base)
+            def owned_regular_path(path):
+                path = Path(path)
+                if not path.is_absolute() or not path.is_relative_to(self.base):
+                    raise ValueError("cleanup outside owned fixture: " + str(path))
+                for ancestor in (path, *path.parents):
+                    info = ancestor.lstat()
+                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                        raise ValueError("cleanup through symlink/reparse point: " + str(ancestor))
+                return path.lstat()
+
+            def readonly_unlink(function, path, error):
+                exc = error[1]
+                info = owned_regular_path(path)
+                if (not WINDOWS or function is not os.unlink or not isinstance(exc, PermissionError)
+                        or exc.winerror != 5 or not stat.S_ISREG(info.st_mode)
+                        or not info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY):
+                    raise exc
+                os.chmod(path, info.st_mode | stat.S_IWRITE)
+                function(path)
+
+            info = owned_regular_path(self.base)
+            if (info.st_dev, info.st_ino) != self.base_identity:
+                raise ValueError("fixture directory identity changed")
+            # stdlib rmtree unlinks symlinks/junctions without traversing targets.
+            # Retry only access-denied deletion of an owned read-only regular file.
+            shutil.rmtree(self.base, onerror=readonly_unlink)
+
+
+def selected_shell():
+    if WINDOWS:
+        return os.environ.get("ORCA_TEST_SHELL", os.path.join(os.environ["SystemRoot"], "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+    return shutil.which("bash")
+
+
+class VerificationFixture(RunnerFixture):
+    """C4/C5 drivers share the existing bounded two-worktree fixture."""
+    def __init__(self):
+        super().__init__(selected_shell())
+        self.workspace = self.git.workspaces[self.git.root]
+
+    def helper(self, operation, *args):
+        if WINDOWS:
+            argv = [self.shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-File", str(ROOT / "bin/lib/verification.ps1"), operation, *map(str, args)]
+        else:
+            argv = [sys.executable, "-B", str(ROOT / "bin/lib/verification.py"), operation, *map(str, args)]
+        return command(argv, self.git.root)
+
+    def snapshot(self, inputs=(), exclusions=None):
+        spec = self.base / "snapshot-input.json"; out = self.base / "snapshot-output.json"
+        write_json(spec, dict(root=str(self.git.root), inputs=list(inputs), exclusions=exclusions or [str(self.workspace)]))
+        result = self.helper("snapshot", spec, out)
+        if result[0]: raise AssertionError(result)
+        return read_json(out)
+
+    def verified_spec(self, code="print('OK')", declaration=None, provenance=None, repeat_reason=None):
+        sys.path.insert(0, str(ROOT / "bin/lib"))
+        from verification import check
+        path, spec = self.spec(code)
+        c = check(dict(command=spec["command"], timeout_seconds=spec["timeout_seconds"],
+                       cancel_grace_seconds=spec["cancel_grace_seconds"], **(declaration or {})))
+        for name in ("command", "timeout_seconds", "cancel_grace_seconds", "no_progress_seconds", "resource_key", "progress_file"):
+            spec[name] = c[name]
+        spec["verification"] = dict(check=c, provenance=provenance or dict(kind="HEAD", base_sha=self.git.base,
+                                                                         preparation="current-worktree", linked_dependencies=[]))
+        if repeat_reason: spec["verification"]["repeat_reason"] = repeat_reason
+        write_json(path, spec)
+        return path, spec
+
+    def verified_run(self, **kwargs):
+        path, spec = self.verified_spec(**kwargs)
+        rc, out, err = self.start(path).finish()
+        result_path = Path(spec["run_dir"]) / "result.json"
+        if not result_path.exists(): raise AssertionError((rc, out, err, spec))
+        return rc, read_json(result_path)
+
+    def counter_code(self):
+        counter = self.workspace / "physical-executions.txt"
+        code = ("from pathlib import Path; p=Path(" + repr(str(counter)) + "); "
+                "p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); print('OK')")
+        return counter, code
+
+    def gate(self, declarations, *options, base=None):
+        plan = self.workspace / "plan.md"
+        plan.write_text("---\nslug: runner-fixture\nverify:\n" +
+                        "".join("  - " + json.dumps(c, ensure_ascii=False) + "\n" for c in declarations) + "---\n", encoding="utf-8")
+        return command(self.argv("verify-gate", plan, base or self.git.base, self.git.root, *options), self.git.root)

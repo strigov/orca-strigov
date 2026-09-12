@@ -20,14 +20,16 @@ phases:
     base: 9f2e95b8a6abb489a02cce1a698c3aa2e07b7934
     scope: "Один владелец длительной команды, полные логи, остановка и общая блокировка ресурса"
     status: done
-    commits: '9f2e95b..'
+    commits: '9f2e95b8a6abb489a02cce1a698c3aa2e07b7934..d85f09dae366ae5b254290e8613e4fbee883fab0'
     risk: DATA_LOSS
     verify:
       - 'python -B -m unittest discover -s tests -p test_runner.py'
       - 'git diff --check'
   - id: Ф3
+    base: d85f09dae366ae5b254290e8613e4fbee883fab0
     scope: "Доказательства проверок для точного снимка и полный манифест пакета ревью"
-    status: pending
+    status: done
+    commits: 'd85f09dae366ae5b254290e8613e4fbee883fab0..HEAD'
     risk: REGRESSION
     verify:
       - 'python -B -m unittest discover -s tests -p test_verification.py'
@@ -50,7 +52,8 @@ phases:
       - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
       - 'git diff --check'
 verify:
-  - "python -B -m unittest discover -s tests -p test_runner.py"
+  - "python -B -m unittest discover -s tests -p test_verification.py"
+  - "python -B -m unittest discover -s tests -p test_review_package.py"
   - "git diff --check"
 ---
 

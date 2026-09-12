@@ -207,7 +207,7 @@ Never re-run the same model on the same input unchanged.
 
 In the main tree, prepare the phase commit candidate's frontmatter intent per Auto-commit before its concluding gate/package, keeping top-level `in-progress`; parallel tracks leave the plan untouched and use the group bookkeeping rules. On resume, check whether this preparation is already present; it never substitutes for accepted review or positive commit evidence.
 
-1. `"$GATE" <plan-file> <base-sha> <repo-root>` (cwd = repo or track worktree).
+1. `"$GATE" <plan-file> <base-sha> <repo-root> --phase <id> --checkpoint directed` (cwd = repo or track worktree; omit selectors for a legacy plan, select integration at contract boundaries and final for full acceptance). Load `runtime-contracts.md` C4 on demand; retain exact runner evidence/log paths and physical repeat reasons, require risk replay, and accept reuse only after artifact/input validation.
    - `GATE_OK` → record line 2 as the gate summary; → Step 4.
    - `GATE_FAIL` → gate-fix round: ledger item `G<r>-B1` (reviewer `gate`, decision `ACCEPTED`, authorized change "make the listed verify commands pass without changing what they test"), then the implementer's fix-round template with that single item and the full script output pasted under it (does not increment the fused-review counter). Cap 2 consecutive gate-fix rounds → escalate.
    - `NO_COMMANDS` or `NEEDS_JUDGMENT` (a command fails at HEAD and at BASE while touching paths this phase changed — a new test, or an environment gap in the base worktree) → dispatch the `gate` worker (model per `roles.md`, `prompts/verification-gate-prompt.md`, script output in `[VERIFY_GATE_OUTPUT]`); its `GATE_OK/GATE_FAIL` is handled the same way. If it discovered commands, add them to `verify:` yourself — frontmatter is yours.
@@ -216,7 +216,7 @@ In the main tree, prepare the phase commit candidate's frontmatter intent per Au
 
 ### Step 4 — fused review (primary + control, cap 4)
 
-**4.0 package** — every round: `dir=$("$WS" <plan-file>)`; `"$RPKG" <BASE> WORKTREE "$dir/review-<phase>-r<round>-<base7>.diff"`.
+**4.0 package** — every round (C5 in `runtime-contracts.md`: freeze and validate the manifest/parts/snapshot before dispatch and acceptance, supply actual write receipts and producer/consumer contracts, require complete independent coverage; missing data is unresolved): `dir=$("$WS" <plan-file>)`; `"$RPKG" <BASE> WORKTREE "$dir/review-<phase>-r<round>-<base7>.diff"`.
 
 **4.1 primary review** — `review-primary` (model and effort per `roles.md`, including risk escalations and family substitutions). Fresh worker every round. Spec: base, plan, phase, round, gate summary, `[DIFF_FILE]`, `[IMPL_REPORT_FILE]`, `[REPORT_FILE]` (the reviewer's own), `[GLOBAL_CONSTRAINTS]`, ledger path (round 2+). Report lines 1–3 mandatory. Warnings are judged by material impact (not mere clean stdout). Then process `CANNOT_VERIFY` items mechanically: run the literal `CHECK:` (always a shell command); match → ledger `verified-by-controller`; mismatch → `ACCEPTED`, joins this round's BLOCKING list (skip 4.2 this round); not executable → ledger `open` + `handed-to-4.2`, carried as "verify additionally" into the next 4.2. A phase is never done with an open CANNOT_VERIFY.
 

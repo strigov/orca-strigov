@@ -28,7 +28,17 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Continue'
 
 function Die([string]$m, [int]$code = 3) { [Console]::Error.WriteLine("verify-gate: $m"); exit $code }
-$Args = @($Args | Where-Object { $null -ne $_ })
+$phase=''; $checkpoint=''; $positional=@()
+for ($argIndex=0; $argIndex -lt $Args.Count; $argIndex++) {
+  $arg=$Args[$argIndex]
+  if ($arg -in @('--phase','--checkpoint')) {
+    $argIndex++; if ($argIndex -ge $Args.Count) { Die 'missing option value' }
+    if ($arg -eq '--phase') { $phase=$Args[$argIndex] } else { $checkpoint=$Args[$argIndex] }
+  } elseif ($arg.StartsWith('--')) { Die "unknown option: $arg" }
+  else { $positional += $arg }
+}
+$Args=$positional; if ($Args.Count -gt 3) { Die 'too many positional arguments' }
+. (Join-Path $PSScriptRoot 'lib/verification.ps1')
 if ($Args.Count -lt 2) { [Console]::Error.WriteLine('usage: verify-gate.ps1 <plan-file> <base-sha> [repo-root]'); exit 3 }
 $plan = $Args[0]; $base = $Args[1]
 $root = if ($Args.Count -ge 3) { $Args[2] } else { (Get-Location).Path }
@@ -40,86 +50,7 @@ Set-Location -LiteralPath $root
 $base7 = if ($base.Length -gt 7) { $base.Substring(0, 7) } else { $base }
 $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { (Get-Command powershell).Source }
 
-# --- extract `verify:` list from frontmatter (block or flow style) ------------------------
-function Get-Indent([string]$s) { return $s.Length - $s.TrimStart(" `t").Length }
-function Strip-Comment([string]$v) {  # drop a trailing " # ..." that is outside quotes
-  $q = $null; $i = 0
-  while ($i -lt $v.Length) {
-    $ch = $v[$i]
-    if ($q) {
-      if ($q -eq '"' -and $ch -eq '\') { $i += 2; continue }
-      if ($ch -eq $q) { $q = $null }
-    } elseif ($ch -eq '"' -or $ch -eq "'") { $q = $ch }
-    elseif ($ch -eq '#' -and ($i -eq 0 -or $v[$i - 1] -eq ' ' -or $v[$i - 1] -eq "`t")) { return $v.Substring(0, $i).TrimEnd() }
-    $i++
-  }
-  return $v.TrimEnd()
-}
-function Unquote([string]$v) {
-  if ($v.Length -ge 2 -and $v[0] -eq '"' -and $v[-1] -eq '"') { return $v.Substring(1, $v.Length - 2).Replace('\"', '"').Replace('\\', '\') }
-  if ($v.Length -ge 2 -and $v[0] -eq "'" -and $v[-1] -eq "'") { return $v.Substring(1, $v.Length - 2).Replace("''", "'") }
-  return $v
-}
-function Extract-Verify([string]$file) {
-  $text = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8)
-  $m = [regex]::Match($text, '^---\r?\n(.*?)\r?\n---(?:\r?\n|$)', [Text.RegularExpressions.RegexOptions]::Singleline)
-  if (-not $m.Success) { return @() }
-  $lines = $m.Groups[1].Value -split "\r?\n"
-  $out = New-Object System.Collections.Generic.List[string]
-  $kind = $null; $k = 0; $mf = $null
-  for ($k = 0; $k -lt $lines.Count; $k++) {
-    $l = $lines[$k]
-    if ($l -match '^verify:[ \t]*(#.*)?$') { $kind = 'block'; break }
-    $mf = [regex]::Match($l, '^verify:[ \t]*\[(.*)\][ \t]*(#.*)?$')
-    if ($mf.Success) { $kind = 'flow'; break }
-  }
-  if ($kind -eq 'flow') {
-    foreach ($g in [regex]::Matches($mf.Groups[1].Value, '\s*(?:"([^"]*)"|''([^'']*)''|([^,\[\]]+))')) {
-      $v = ''
-      foreach ($gi in 1..3) { if ($g.Groups[$gi].Success -and $g.Groups[$gi].Value) { $v = $g.Groups[$gi].Value; break } }
-      $v = $v.Trim(); if ($v) { $out.Add($v) }
-    }
-  } elseif ($kind -eq 'block') {
-    $i = $k + 1; $n = $lines.Count
-    while ($i -lt $n) {
-      $l = $lines[$i]
-      if ($l.Trim() -eq '' -or $l.TrimStart().StartsWith('#')) { $i++; continue }
-      $md = [regex]::Match($l, '^([ \t]*)-(?:[ \t]+(.*))?$')
-      if (-not $md.Success) { break }                       # next key (or anything that is not an item)
-      $ind = $md.Groups[1].Value.Length
-      $v = if ($md.Groups[2].Success) { $md.Groups[2].Value.Trim() } else { '' }
-      $i++
-      $ms = [regex]::Match($v, '^([>|])[-+]?[0-9]*[ \t]*(#.*)?$')
-      if ($ms.Success) {                                   # block scalar: body = following more-indented lines
-        $body = New-Object System.Collections.Generic.List[string]
-        while ($i -lt $n) {
-          $b = $lines[$i]
-          if ($b.Trim() -eq '') { $body.Add(''); $i++; continue }
-          if ((Get-Indent $b) -le $ind) { break }
-          $body.Add($b); $i++
-        }
-        while ($body.Count -gt 0 -and $body[$body.Count - 1] -eq '') { $body.RemoveAt($body.Count - 1) }
-        if ($body.Count -eq 0) { Die ("empty block scalar (" + $ms.Groups[1].Value + ") in verify: item " + ($out.Count + 1)) }
-        $bi = ($body | Where-Object { $_.Trim() } | ForEach-Object { Get-Indent $_ } | Measure-Object -Minimum).Minimum
-        $body2 = @($body | ForEach-Object { if ($_.Trim()) { $_.Substring($bi) } else { '' } })
-        if ($ms.Groups[1].Value -eq '|') { $v = $body2 -join "`n" }
-        else { $v = (@($body2 | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })) -join ' ' }
-      } else {                                             # plain/quoted scalar, possibly continued on indented lines
-        while ($i -lt $n) {
-          $b = $lines[$i]
-          if ($b.Trim() -eq '' -or $b -match '^[ \t]*-([ \t]|$)' -or (Get-Indent $b) -le $ind) { break }
-          $v = $v + ' ' + $b.Trim(); $i++
-        }
-        $v = Unquote (Strip-Comment $v)
-      }
-      $v = $v.Trim()
-      if ($v) { $out.Add($v) }
-    }
-  }
-  return @($out)
-}
-
-$cmds = @(Extract-Verify $plan)
+try { $cmds = @(V-Parse $plan $phase $checkpoint) } catch { Die $_.Exception.Message }
 if ($cmds.Count -eq 0) {
   Write-Output 'NO_COMMANDS'; Write-Output 'verify: 0 cmd(s) | passed: 0 | failed: 0 | inherited: 0 | judgment: 0'; exit 2
 }
@@ -143,8 +74,17 @@ function Run-Command([string]$cmd, [string]$cwd) {
   $checks = Join-Path $workspace 'checks'; [void][IO.Directory]::CreateDirectory($checks)
   $runDir = Join-Path $checks $id; $specFile = $runDir + '.json'
   $spec = @{schema_version=1; run_id=$id; owner=@{kind='local'; id=$id}; cwd=$cwd; command=$cmd; shell=$shell; run_dir=$runDir
-    timeout_seconds=$null; cancel_grace_seconds=2; no_progress_seconds=$null}
-  [IO.File]::WriteAllText($specFile, ($spec | ConvertTo-Json -Depth 8), $utf8)
+    timeout_seconds=$currentCheck.timeout_seconds; cancel_grace_seconds=$currentCheck.cancel_grace_seconds
+    no_progress_seconds=$currentCheck.no_progress_seconds; resource_key=$currentCheck.resource_key; progress_file=$currentCheck.progress_file}
+  try { $fullBase=V-GitText $root @('rev-parse','--verify',($base+'^{commit}')) } catch { $fullBase='unverifiable:'+$base }
+  $linked=@()
+  if ($cwd -ne $root) {
+    foreach ($dep in 'node_modules','.venv','venv') { $path=Join-Path $root $dep; if (Test-Path -LiteralPath $path) { $linked+=@{path=$path; target=$path} } }
+  }
+  $spec.verification=@{check=$currentCheck; provenance=@{kind=$(if ($cwd -eq $root) { 'HEAD' } else { 'BASE' }); base_sha=$fullBase
+    preparation=$(if ($cwd -eq $root) { 'current-worktree' } else { 'git-worktree-add-detach' }); linked_dependencies=@($linked)}}
+  if ($linked.Count) { $spec.verification.repeat_reason='linked-dependencies-unverifiable' }
+  [IO.File]::WriteAllText($specFile, (V-Json $spec), $utf8)
   $script = "& '" + $runner.Replace("'", "''") + "' run '" + $specFile.Replace("'", "''") + "'; exit `$LASTEXITCODE"
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   $p = $null
@@ -164,9 +104,14 @@ function Run-Command([string]$cmd, [string]$cwd) {
     $resultFile = Join-Path $runDir 'result.json'
     if (-not (Test-Path -LiteralPath $resultFile)) { return @{rc=125; out=$errTask.Result; valid=$false; run_dir=$runDir} }
     $result = [IO.File]::ReadAllText($resultFile, $utf8) | ConvertFrom-Json
-    $valid = $result.state -eq 'exited' -and $result.cleanup_verified -and $result.logs_complete -and $null -ne $result.exit_code
+    $valid = V-EvidenceValid $result (V-Load $specFile)
+    $cleanup=$false
+    try {
+      $cleanup = $result.cleanup_verified -and (V-FileHash $resultFile) -ceq (V-Load (Join-Path $runDir 'result.sha256')) -and
+        (V-Get $result.evidence 'request_sha256') -ceq (V-Id (V-Load $specFile)) -and $result.run_dir -ceq $runDir
+    } catch { } # uncertain ownership/record integrity never authorizes cleanup
     $out = (Read-LogTail $result.stdout_log) + "`n" + (Read-LogTail $result.stderr_log)
-    return @{rc=$(if ($valid) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$result.exit_code), 0) } else { 125 }); out=$out; valid=$valid; run_dir=$runDir}
+    return @{rc=$(if ($valid) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$result.exit_code), 0) } else { 125 }); out=$out; valid=$valid; cleanup_verified=$cleanup; run_dir=$runDir; evidence=(V-Get $result 'evidence')}
   } finally { if ($p) { $p.Dispose() } }
 }
 function Lines([string]$s) {  # like reading lines: a trailing newline does not produce an empty last line
@@ -184,11 +129,11 @@ function Indent-Tail([string]$s, [int]$n) {
 }
 
 # paths the phase changed (tracked + untracked)
-$changed = @()
-$changed += @(& git diff --name-only $base 2>$null)
-$changed += @(& git ls-files --others --exclude-standard 2>$null)
-$changed = @($changed | Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)
+$changedUnknown=$false
+try { $changed = @(@(V-Nul (V-Git $root @('diff','--name-only','-z',$base))) + @(V-Nul (V-Git $root @('ls-files','--others','--exclude-standard','-z'))) | Sort-Object -Unique) }
+catch { $changed=@(); $changedUnknown=$true }
 function Mentions-Changed([string]$text) {
+  if ($changedUnknown) { return $true }
   foreach ($pth in $changed) {
     if ($text.IndexOf($pth, [StringComparison]::Ordinal) -ge 0) { return $true }
     $bn = [IO.Path]::GetFileName($pth)
@@ -215,6 +160,7 @@ function Missing-Tool([int]$rc, [string]$out, [string]$cmd) {
 }
 $depsLinked = $false
 $baseOut = ''
+$basePrepared=$false; $baseVerified=$false
 function Remove-BaseWorktree([string]$wt) {
   $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
   $full = [IO.Path]::GetFullPath($wt)
@@ -235,12 +181,14 @@ function Remove-BaseWorktree([string]$wt) {
 }
 function Run-AtBase([string]$cmd) {  # returns rc; 125 = no usable base worktree; sets $script:baseOut
   $script:baseOut = ''
+  $script:basePrepared=$false; $script:baseVerified=$false
   $wt = Join-Path ([IO.Path]::GetTempPath()) ('verify-gate-base.' + [guid]::NewGuid().ToString('N').Substring(0, 8))
   & git worktree add -q --detach $wt $base *> $null
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $wt -PathType Container)) {
     [Console]::Error.WriteLine("verify-gate: cannot create a worktree for base $base7")
     return 125
   }
+  $script:basePrepared=$true
   $links = @()
   foreach ($dep in 'node_modules', '.venv', 'venv') {
     $src = Join-Path $root $dep; $dst = Join-Path $wt $dep
@@ -249,40 +197,34 @@ function Run-AtBase([string]$cmd) {  # returns rc; 125 = no usable base worktree
     }
   }
   $r = Run-Command $cmd $wt
+  $script:baseVerified=$r.valid
   $script:baseOut = $r.out
   Rep ("    BASE logs: " + $r.run_dir)
-  if (-not $r.valid) { Rep "    BASE runner incomplete; retained worktree: $wt"; return 125 }
+  Rep ("    evidence: " + (Join-Path $r.run_dir 'result.json') + ' | repeat_reason: ' + (V-Get $r.evidence 'repeat_reason') + ' | origin_run_id: ' + (V-Get $r.evidence 'origin_run_id'))
+  if (-not $r.valid) {
+    if (V-Get $r 'cleanup_verified' $false) { Remove-BaseWorktree $wt }
+    else { Rep "    BASE runner incomplete; retained worktree: $wt" }
+    return 125
+  }
   foreach ($l in $links) { try { [IO.Directory]::Delete($l) } catch { } }   # drop the junction, never its target
   Remove-BaseWorktree $wt
   return $r.rc
 }
-function Signature([string]$out) {  # last 8 non-empty lines, ANSI/paths/durations/numbers normalized
-  $esc = [regex]'\x1b\[[0-9;]*[A-Za-z]'
-  $summary = [regex]'\b(passed|failed|errors?|skipped)\b'
-  $rootFwd = $root.Replace('\', '/')
-  $res = New-Object System.Collections.Generic.List[string]
-  foreach ($l0 in (Lines $out)) {
-    $l = $esc.Replace($l0, '').Replace($root, 'ROOT').Replace($rootFwd, 'ROOT')
-    $l = [regex]::Replace($l, '[^ ]*verify-gate-base\.[A-Za-z0-9]*', 'ROOT')
-    $l = [regex]::Replace($l, '[0-9]+(\.[0-9]+)?s\b', 'Ns')
-    if (-not $summary.IsMatch($l)) { $l = [regex]::Replace($l, '[0-9]{2,}', 'N') }
-    if ($l.Trim()) { $res.Add($l) }
-  }
-  $a = @($res); if ($a.Count -gt 8) { $a = $a[($a.Count - 8)..($a.Count - 1)] }
-  return ($a -join "`n")
-}
+function Signature([string]$out) { return V-Signature $root $out }
 
 # --- main loop ---------------------------------------------------------------------------
 $n = 0; $p = 0; $f = 0; $i = 0; $j = 0; $status = 0
 $report = New-Object Text.StringBuilder
 function Rep([string]$s) { [void]$report.Append($s).Append("`n") }
-foreach ($c in $cmds) {
+foreach ($currentCheck in $cmds) {
+  $c=$currentCheck.command
   if (-not $c) { continue }
   $n++
   $label = $c.Replace("`r`n", ' ').Replace("`n", ' ')
   $r = Run-Command $c $root
   $rc = $r.rc; $out = $r.out
   Rep ("    HEAD logs: " + $r.run_dir)
+  Rep ("    evidence: " + (Join-Path $r.run_dir 'result.json') + ' | repeat_reason: ' + (V-Get $r.evidence 'repeat_reason') + ' | origin_run_id: ' + (V-Get $r.evidence 'origin_run_id'))
   if (-not $r.valid) {
     $j++; if ($status -eq 0) { $status = 4 }
     Rep "JUDGMENT $label  (runner incomplete; inspect durable status/result)"; continue
@@ -295,10 +237,14 @@ foreach ($c in $cmds) {
     continue
   }
   $brc = Run-AtBase $c
-  if ($brc -eq 0) {
+  if ($basePrepared -and -not $baseVerified) {
+    $j++; if ($status -eq 0) { $status=4 }
+    Rep "JUDGMENT $label  (BASE evidence incomplete)"; Rep $tailOut
+    if ($depsLinked -and $sourceChanged) { Rep '    inherited classification unreliable: shared .venv/node_modules may execute HEAD sources' }
+  } elseif ($brc -eq 0) {
     $f++; $status = 1
     Rep "FAIL $label"; Rep $tailOut
-  } elseif ($brc -eq 125) {
+  } elseif (-not $basePrepared) {
     $f++; $status = 1
     Rep "FAIL $label  (base $base7 could not be checked out - treated as a new failure)"; Rep $tailOut
   } elseif (Mentions-Changed ($c + "`n" + ((Tail-Lines $out 200) -join "`n"))) {
