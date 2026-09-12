@@ -4,7 +4,7 @@ Use when an implementer returns `BLOCKED` (Step 3 / fix rounds), when a loop hit
 
 ## Dispatch
 
-Role: `diagnosis` — model and effort from `../roles.md` (a Claude judgment model; the fallback is announced). Fresh worker, read-only. Path A (`worker-start --agent claude`). The coordinator writes the filled template to a scratch file, creates the Task, attaches per `../orca-recipes.md`; Orca prepends its lifecycle preamble — the template must not repeat it.
+Role: `diagnosis` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). Fresh worker, read-only. The coordinator writes the filled template to a scratch file, creates the Task, and attaches per `../orca-recipes.md`; Orca prepends its lifecycle preamble — the template must not repeat it.
 
 The coordinator reads only line 1 (the token) and the section the token names (`## Context`, `## Summary`). It never acts on a diagnosis by editing code itself.
 

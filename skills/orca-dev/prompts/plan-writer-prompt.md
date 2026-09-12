@@ -4,15 +4,15 @@ Use when the coordinator needs a plan written (Step 1) or revised after plan rev
 
 ## Dispatch
 
-Role: `plan-writer` (Mode A) / `plan-reviser` (Mode B) — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `plan-writer` (Mode A) / `plan-reviser` (Mode B) — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the exact mandatory worker-boundary prefix from `../orca-recipes.md` §1, a blank line, and the filled template body to the scratch spec; checks that actual prefix before Task creation and dispatch; then attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-**Every dispatch is a FRESH worker.** A worker carries nothing between dispatches. Mode B therefore re-reads the plan from disk and takes its entire scope from the ledger — it never relies on remembering having written the plan. The plan file on disk is the only continuity, which is also why the coordinator never lets the plan text live only in a prompt.
+**Author retention**: Mode B normally reuses the actual retained author until the plan is approved and committed. The `pro` profile is the narrow exception: the FIRST revision must use a fresh native `plan-reviser` per `../roles.md`, with an announced full handoff (full plan, ledger, latest author/review reports); subsequent revisions reuse that retained native reviser. Keep the settled initial author available for context until commit, without giving it revision tasks. If the authorized reviser's context is actually lost or unrecoverable, launch a fresh replacement of the same authorized revision profile with the same full handoff, announce the replacement and record the context loss.
 
 The worker writes the plan file itself and may read anything in the repository — research inside the worker is exactly what it is for. It must NOT touch source files and must NOT run state-changing git commands.
 
-Mode A may be served by GPT Pro via the codex-chatgpt-web bridge or by Claude Opus xhigh; Mode B is always Claude Opus xhigh (see `../roles.md`). The template is model-agnostic and must work for either — never add model-specific instructions to the body.
+Model, effort, and family rules are defined in `../roles.md`. The template is model-agnostic and must work for any authorized planner.
 
-The plan reviewer is a fresh worker from a different model family than the writer (see `../roles.md`) — writer and reviewer never share a family.
+The plan reviewer is a fresh worker from an independent model family (see `../roles.md`) — writer and reviewer never share a family.
 
 Both modes are fully self-contained: the worker sees nothing from the coordinator's session, so the user's original request, the repo path, and every known constraint must be physically in the prompt. `[REPORT_FILE]` is a separate path the coordinator supplies — the plan file itself stays clean.
 
@@ -21,7 +21,7 @@ Both modes are fully self-contained: the worker sees nothing from the coordinato
 ## Mode A: Write a new plan (Step 1)
 
 ```
-You are the plan-writing stage of orca-dev: a fresh worker writing an implementation plan for a multi-phase feature. The coordinator (Codex) will send your plan to the plan reviewer — a fresh worker from a different model family — then drive implementation phase by phase from it.
+You are the plan-writing stage of orca-dev: a worker writing an implementation plan for a multi-phase feature. The coordinator will send your plan to the plan reviewer — a fresh worker from an independent model family — then drive implementation phase by phase from it.
 
 You may read anything in the repository, but write ONLY the plan file specified below and your report file. Do not modify source code, tests, or any other file. Do NOT run `git commit` / `git push` or any other state-changing git command — the coordinator handles git.
 
@@ -56,10 +56,14 @@ YAML frontmatter + markdown body:
 slug: <short-kebab-slug>
 created: YYYY-MM-DD
 status: in-progress          # in-progress | done | abandoned
+verify:                      # lint/typecheck/test commands for bin/verify-gate
+  - <command 1>
+  - <command 2>
 phases:
   - id: Ф1
     scope: "<one-line>"
     status: in-progress       # pending | in-progress | done
+    risk: none
   - id: Ф2
     scope: "..."
     status: pending
@@ -72,20 +76,22 @@ phases:
     parallel_group: G1
 ---
 ```
-`risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly.
+`risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly. Every phase MUST have a declared `risk:` value.
+
+`verify:` is a top-level list of deterministic lint / typecheck / test commands that `bin/verify-gate` executes to validate the repository after each phase. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
 
 
 Body must have these H2 sections, in order:
 
 1. `## Goal` — what this enables, why now. Two short paragraphs max.
-1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan; every phase must trace to at least one of them.
+1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan; distinguishes engineering readiness from agreed external acceptance; every phase must trace to at least one of them.
 1b. `## Non-goals / deferred` — explicit exclusions: what this plan deliberately does not do.
 1c. `## Global Constraints` — the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. Every phase's requirements implicitly include this section. If the spec imposes none, write literally `None declared in the spec.` Do NOT merge into `## Contracts`: Contracts define interfaces between phases; Global Constraints are external requirements binding the whole plan.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility.
-3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that the implementer can build without guessing.
-4. `## Test strategy` — what proves correctness, per phase. Test types (unit/integration/e2e), key cases, what NOT to test.
+3. `## Contracts` — function signatures, data shapes, API surface, explicit contract IDs (`C1`, `C2`, ...) so that `Consumes` and `Produces` blocks can reference them mechanically.
+4. `## Test strategy` — what proves correctness, per phase. Test checkpoints (directed, integration, final), finite execution budgets, key cases, what NOT to test.
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
-6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed steps inside each.
+6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with detailed steps structured as: outcome → deliverable/dependencies → check → evidence, with interfaces and partial status handling.
 
 For sections 1a, 1b, and 1c, use this template body verbatim (replace bullets with the plan's actual content):
 
@@ -106,8 +112,8 @@ List the spec's project-wide requirements — version floors, dependency limits,
 Every phase in `## Phases` opens with a `**Files in this phase:**` list (Create / Modify / Test — exact paths), then an `**Interfaces:**` block:
 
 **Interfaces:**
-- Consumes: [what this phase uses from earlier phases — exact signatures. If nothing, write literally `nothing`]
-- Produces: [what later phases rely on — exact function names, parameter and return types. If nothing, write literally `nothing`]
+- Consumes: [what this phase uses from earlier phases — exact contract IDs (e.g. C1) and signatures. If nothing, write literally `nothing`]
+- Produces: [what later phases rely on — exact contract IDs (e.g. C2), function names, parameter and return types. If nothing, write literally `nothing`]
 
 The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is written explicitly as `nothing`, never omitted. It matters most for `parallel_group` phases (built concurrently — neighbors' code is invisible until merge) and for BE/FE pairs building to one contract, and it gives reviewers a mechanical cross-phase consistency check.
 
@@ -123,7 +129,7 @@ The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is wri
 
 ## Discipline
 
-- **YAGNI**: only what the user asked for. No speculative flags, extra abstractions, or "nice to have" features.
+- **YAGNI & Simplicity**: only what the user asked for. No speculative flags, extra abstractions, or "nice to have" features. Plan reviewer will strictly evaluate Simplicity.
 - **DRY**: don't invent new abstractions; reuse what exists.
 - **TDD-friendly**: tests should be writable before or alongside implementation, not as an afterthought.
 - **Single responsibility per file**: no god-files created.
@@ -145,12 +151,12 @@ That's it. Do NOT commit — the coordinator handles git.
 
 ---
 
-## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — fresh worker)
+## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — retained author; first `pro` revision / lost context uses handoff)
 
-The coordinator dispatches Mode B after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+The coordinator dispatches Mode B under the Author retention rule above (including the first `pro` revision exception) after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
-You are the plan-revision stage of orca-dev: a fresh worker revising an implementation plan after a plan review returned blocking findings. You did NOT write this plan and you have no memory of it — read it from disk first. Do not rewrite it from scratch: apply only the changes the coordinator has authorized via the ledger below.
+You are the plan-revision stage of orca-dev: revising an implementation plan after a plan review returned blocking findings. Read the authoritative plan on disk and apply only the changes authorized via the ledger below.
 
 You may read anything in the repository, but write ONLY the plan file below and your report file. Do not modify source code or tests. Do NOT run `git commit` / `git push` — the coordinator handles git.
 

@@ -193,7 +193,7 @@ EOF
 fi
 
 # --- 6. bridge (optional, Pro planner) ------------------------------------------------
-if pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null 2>&1; then ok "codex-chatgpt-web bridge running (Pro planner available)"; else info "codex-chatgpt-web bridge not running → planning profile 'standard'"; fi
+if pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null 2>&1; then ok "codex-chatgpt-web bridge running (opt-in --planner pro available)"; else info "codex-chatgpt-web bridge not running (opt-in --planner pro disabled; default planner is configured in roles.md)"; fi
 
 if [ "$nwarn" -gt 0 ]; then echo "install.sh: $nwarn warning(s)"; exit 1; fi
 echo "done."

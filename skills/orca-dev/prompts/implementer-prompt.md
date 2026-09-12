@@ -4,13 +4,13 @@ Use when dispatching implementation of a phase (Step 3) or a fix round after the
 
 ## Dispatch
 
-Role: `implementer` (first round) / the same role for fix rounds — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `implementer` (first round) / the same role for fix rounds — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-The implementer cascade — Gemini 3.7 Flash High via `agy`, falling back to Codex Luna max, escalating to Codex Terra max reasoning for BLOCKED phases — is defined in `../roles.md`. The template must stay model-agnostic. For a parallel-track phase, start the worker in that track's worktree so it treats the worktree as its repo root.
+The implementer cascade, reasoning escalation, and substitution routes are defined in `../roles.md`. The template must stay model-agnostic. For a parallel-track phase, start the worker in that track's worktree so it treats the worktree as its repo root.
 
 Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. Resolve it once per phase as `$(bin/sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path. For a parallel-track phase, run `bin/sdd-workspace` inside the track's worktree so the report lands in that track's workspace. Fix rounds append to the same file — never mint a new report path for round 2+.
 
-**Fix rounds go to the SAME worker terminal.** After the fused review (Step 4), re-inject the fix-round template into the implementer's own terminal (`--terminal <handle>` / `dispatch --inject` into that same terminal) so the thread is retained — it already knows the plan and the phase, and the fix-round template only has to carry the authorized blockers. The same terminal also serves `NEEDS_CONTEXT` re-dispatches and effort upgrades in Step 3.
+**Implementer retention**: the coordinator retains the implementer's terminal across review and fix rounds until the phase is committed. After the fused review (Step 4), re-inject the fix-round template into the implementer's own terminal (`--terminal <handle>` / `dispatch --inject` into that same terminal) so the thread is retained — it already knows the plan and the phase, and the fix-round template only has to carry the authorized blockers. The same terminal also serves `NEEDS_CONTEXT` re-dispatches and effort upgrades in Step 3.
 
 **Fresh fallback**: if the implementer's terminal was released or is gone, the phase was implemented by a different agent, or the implementer cascade fell back to another model, prepend the re-brief block from the template's "fresh fallback" note so the new worker has full context.
 
@@ -188,6 +188,6 @@ Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-l
 When the coordinator dispatches the final-review fix wave (SKILL.md Step 5), the fix-round template above is reused on a **FRESH worker with the fresh-fallback re-brief** (the whole-plan fix wave has no single implementer terminal to re-inject into), with these substitutions:
 
 - **Scope** is the WHOLE plan, not one phase: fill "Your phase" with `the whole plan (Step 5 final-review fix wave)` and drop the phase-scope line.
-- **Base** is MERGE_BASE (the branch start), and the implementation is COMMITTED — inspect it via `git diff <merge-base-sha>..HEAD`, not an uncommitted worktree diff.
+- **Base** is `plan_base` (the recorded full SHA before the plan started), and the implementation is COMMITTED — inspect it via `git diff <plan_base>..HEAD` (round 2 of Step 5, fix wave still uncommitted: `git diff <plan_base>` plus `git status --porcelain`; `WORKTREE` is only the `review-package` argument, never a Git ref), not an arbitrary merge-base.
 - **AUTHORIZED_BLOCKERS reviewer values** may also be `review-final` (Step 5 findings), in addition to `review-primary | review-control`.
 - **[REPORT_FILE]** = `$dir/final-fix-report.md` and does not exist yet — create it fresh and skip "read the previous round's report"; write your fix results as `## Fix round 1`.

@@ -7,12 +7,15 @@ plan_base: 16df3ef0f2cbbcdab8e091cb473ab96ffb3577d3
 orca_run: run_8930e295fe81
 phases:
   - id: Ф1
+    base: d522e2656b55f0a67e28b4a1fc2e3689e7cd3de0
     scope: "Согласованная политика ролей, жизненного цикла, простоты плана и поставки"
-    status: in-progress
-    risk: REGRESSION
+    status: done
+    commits: 'd522e26..'
+    risk: DATA_LOSS
     verify:
       - 'git diff --check'
       - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
+      - powershell.exe -NoProfile -Command '$errs = $null; $toks = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location).Path "install.ps1"), [ref]$toks, [ref]$errs); if ($errs.Count -gt 0) { $errs | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 } else { [Console]::WriteLine("ZERO_ERRORS"); exit 0 }'
   - id: Ф2
     scope: "Один владелец длительной команды, полные логи, остановка и общая блокировка ресурса"
     status: pending
@@ -46,6 +49,8 @@ phases:
       - 'git diff --check'
 verify:
   - 'git diff --check'
+  - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
+  - powershell.exe -NoProfile -Command '$errs = $null; $toks = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location).Path "install.ps1"), [ref]$toks, [ref]$errs); if ($errs.Count -gt 0) { $errs | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 } else { [Console]::WriteLine("ZERO_ERRORS"); exit 0 }'
 ---
 
 ## Goal

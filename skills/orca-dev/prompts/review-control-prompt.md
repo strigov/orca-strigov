@@ -4,7 +4,7 @@ Use AFTER the primary review (Step 4.1) returned `REVIEW_OK`. This is a second-o
 
 ## Dispatch
 
-Role: `review-control` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Codex Sol at xhigh effort). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `review-control` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
 **Read-only.** The worker must not modify code; the only file it writes is `[REPORT_FILE]`. When reviewing a parallel-track phase, start the worker in that track's worktree.
 
@@ -95,7 +95,7 @@ NITS:
 
    If `REVIEW_OK`: after line 1 emit only the `DEFER:` and `NITS:` sections (omit either if empty). Nothing else.
 
-   Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields are treated as DEFER by the coordinator and do not block the phase. BLOCKING items must cite `file:line`. This is a control review, not a style pass: raise what the primary review genuinely missed AND matters — do not invent findings, and do not suppress one because the primary already passed the diff. A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
+   Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields make the report malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER. BLOCKING items must cite `file:line`. This is a control review, not a style pass: raise what the primary review genuinely missed AND matters — do not invent findings, and do not suppress one because the primary already passed the diff. A report whose line 1 is not one of the two bare tokens is invalid — the coordinator will re-dispatch the review.
 
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 

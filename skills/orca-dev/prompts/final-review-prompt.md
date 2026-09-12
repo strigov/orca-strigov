@@ -4,16 +4,18 @@ Use AFTER the last phase has passed Step 4 and been committed, BEFORE plan archi
 
 ## Dispatch
 
-Role: `review-final` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Claude Opus xhigh). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `review-final` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+
+**Family independence on mixed branches**: For a mixed branch touched by multiple implementer families, final review assigns independent reviewers ensuring every unit of change is reviewed outside its author families (see `../roles.md`).
 
 **A fresh Orca worker terminal every round — never re-inject into a previous reviewer's terminal** (no bias from the previous round).
 
 Before dispatching, build the whole-branch review package with `bin/review-package` from the orca-dev repo (only the printed path enters the coordinator's context, never the diff):
 
-- **Round 1:** `bin/review-package <MERGE_BASE> HEAD "$(bin/sdd-workspace <plan-file>)/review-final-r1-<base7>.diff"` — MERGE_BASE comes from `git merge-base main HEAD`; if there is no `main` branch (the command errors) or it returns HEAD itself (work ran directly on the mainline), fall back to the recorded base7 of the plan's first phase (frontmatter `commits:`). Pass the OUTFILE explicitly — the range-mode default would land in the shared workspace root, not the plan-scoped workspace.
-- **Round 2** (the fixer's changes are uncommitted): `bin/review-package <MERGE_BASE> WORKTREE "$(bin/sdd-workspace <plan-file>)/review-final-r2-<base7>.diff"` — OUTFILE is mandatory in WORKTREE mode.
+- **Round 1:** `bin/review-package <plan_base> HEAD "$(bin/sdd-workspace <plan-file>)/review-final-r1-<base7>.diff"` — `plan_base` is the recorded commit SHA before the plan's first commit. Pass the OUTFILE explicitly — the range-mode default would land in the shared workspace root, not the plan-scoped workspace.
+- **Round 2** (the fixer's changes are uncommitted): `bin/review-package <plan_base> WORKTREE "$(bin/sdd-workspace <plan-file>)/review-final-r2-<base7>.diff"` — OUTFILE is mandatory in WORKTREE mode.
 
-Never build the package from `HEAD~1` — MERGE_BASE is the recorded branch start; anything else silently drops earlier phases from the review.
+Never build the package from `HEAD~1` — `plan_base` is the recorded baseline; anything else silently drops earlier phases from the review.
 
 ## Prompt template
 
@@ -24,12 +26,12 @@ You are the final whole-branch review stage of orca-dev (Step 5). You are a fres
 
 - Working directory / repo root: `<absolute path>`
 - Plan file (authoritative): `<absolute path>` — read the YAML frontmatter, `## Goal`, `## Acceptance criteria`, `## Non-goals / deferred`, `## Contracts`, and every `## Ф<n>:` phase section
-- Merge base (branch start): `<merge-base-sha>`
+- Plan base (baseline before plan): `<plan_base-sha>`
 - Head: `<head-sha>` (round 2: uncommitted working tree — the coordinator will tell you)
-- Review package (REQUIRED): `[DIFF_FILE]` — the whole-branch diff MERGE_BASE..HEAD written by `bin/review-package`: commit list + stat + full diff
+- Review package (REQUIRED): `[DIFF_FILE]` — the whole-branch diff plan_base..HEAD written by `bin/review-package`: commit list + stat + full diff
 - Change ledger: `<repo-root>/docs/plans/<slug>.ledger.json` — accumulated findings from all phase-review rounds; you triage its open DEFER / NIT items below
 
-Read the plan file and the ledger first. Then read `[DIFF_FILE]` in ONE read call — it contains the commit list, a stat summary, and the full diff with surrounding context. The diff's context lines ARE the changed files: do not read a changed file separately unless a hunk you must judge is cut off mid-function — and say so in your report. If the package file is missing, fetch the diff yourself: `git log --oneline <merge-base-sha>..<head-sha>`, `git diff --stat <merge-base-sha>..<head-sha>`, `git diff -U10 <merge-base-sha>..<head-sha>`.
+Read the plan file and the ledger first. Then read `[DIFF_FILE]` in ONE read call — it contains the commit list, a stat summary, and the full diff with surrounding context. The diff's context lines ARE the changed files: do not read a changed file separately unless a hunk you must judge is cut off mid-function — and say so in your report. If the package file is missing, fetch the diff yourself: `git log --oneline <plan_base-sha>..<head-sha>`, `git diff --stat <plan_base-sha>..<head-sha>`, `git diff -U10 <plan_base-sha>..<head-sha>`.
 
 Unlike a phase gate, inspecting code OUTSIDE the diff is legitimate here — that is how you verify integration and architecture — but tie each excursion to a numbered check below, and name what you checked in your report.
 

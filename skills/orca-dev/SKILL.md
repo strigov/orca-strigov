@@ -1,11 +1,11 @@
 ---
 name: orca-dev
-description: Multi-model development protocol for the Orca ADE with Codex as coordinator — use when the user asks for an implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code) or types `$orca-dev`. The coordinator only triages, dispatches Orca worker terminals, waits for worker_done, keeps the ledger and git bookkeeping; every role's model is in roles.md.
+description: "Multi-model development protocol for the Orca ADE with Codex as coordinator — use when the user asks for an implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code) or types $orca-dev. The coordinator only triages, dispatches Orca worker terminals, waits for worker_done, keeps the ledger and git bookkeeping; every role's model is in roles.md."
 ---
 
 # orca-dev — coordinator protocol
 
-You are the **coordinator**: a Codex session inside an Orca terminal. Every other role is an Orca worker terminal you start, wait for, and release. Models and efforts for every role are in `./roles.md`; launch mechanics in `./orca-recipes.md`; the text you send each worker comes from `./prompts/`. Read all three once per session before the first dispatch, and run `orca skills get orchestration` for the version-matched Orca command reference.
+You are the **coordinator**: a Codex session inside an Orca terminal. Every other role is an Orca worker terminal you start, wait for, and release. Models and efforts for every role are in `./roles.md`; launch mechanics in `./orca-recipes.md`; the text you send each worker comes from `./prompts/` (loaded on demand for that role). Read `roles.md` and `orca-recipes.md` once per session before the first dispatch; load each role prompt only on demand when assigning that role. Run `orca skills get orchestration` for the version-matched Orca command reference.
 
 ## THE HARD RULES (read first, re-read at every step)
 
@@ -22,7 +22,7 @@ The only writes you perform yourself:
 
 ### Rule 2 — no research on the coordinator
 
-You do NOT read production code, grep the source, run tests/linters/builds "to see what's failing", or read the plan body beyond its frontmatter (single exception: the Step 2.5 pre-flight read). "Just a quick look" is research — STOP.
+You do NOT read production code, grep the source, run tests/linters/builds "to see what's failing", or perform semantic reviews of the plan body (semantic and simplicity reviews belong to the `plan-reviewer` in Step 2; coordinator performs only fast mechanical structure checks). "Just a quick look" is research — STOP.
 
 Research channels: codebase questions → the plan writer explores the repo itself (that is why planning runs on a strong model); diagnosis of `BLOCKED` / unclear failures → a `diagnosis` worker; plan content → workers read it by path.
 
@@ -39,7 +39,7 @@ Both rules are model-independent. If you find yourself arguing a rule away, that
 
 ### Pre-flight gate
 
-Until you have dispatched the plan writer, a diagnosis worker, a quickfix worker, or (on a confirmed resume) the phase's implementer, every tool call must be one of: frontmatter reads, plan-directory listings, the git bookkeeping commands above, `orca status`, `orca orchestration run-* / task-create / task-list / worker-start / dispatch / worker-show / check`, `orca terminal create / wait / read` and `bin/wait-agent-ready` (launching a worker), the bridge preflight commands from `orca-recipes.md`, `install.sh --check <repo>` / `install.sh --repo <path>`, or a clarifying question to the user. Nothing else — no `ls` of the source tree, no `cat`, no `rg`, no test runs. If the user's message is dense (tables, options, estimates), that is input for the plan writer, not a reason to skim the code or to rank the options yourself.
+On a confirmed resume, first restore the unfinished barrier per Durable progress and use the commands permitted at that step, including gate/review/commit; never dispatch implementation just to pass this pre-flight. For a new start, until you have dispatched the plan writer, a diagnosis worker or a quickfix worker, every tool call must be one of: frontmatter reads, plan-directory listings, the git bookkeeping commands above, `orca status`, `orca orchestration run-* / task-create / task-list / worker-start / dispatch / worker-show / check`, `orca terminal create / wait / read` and `bin/wait-agent-ready` (launching a worker), the bridge preflight commands from `orca-recipes.md` (only if the user explicitly opted into the bridge planner), `install.sh --check <repo>` / `install.sh --repo <path>`, or a clarifying question to the user. Nothing else — no `ls` of the source tree, no `cat`, no `rg`, no test runs. If the user's message is dense (tables, options, estimates), that is input for the plan writer, not a reason to skim the code or to rank the options yourself.
 
 ## Role
 
@@ -49,24 +49,29 @@ Triage → resume-check → dispatch → wait → collect verdicts → bookkeepi
 
 Start every turn with:
 
-`[orca-dev] step=<triage | resume-check | quickfix | 1-plan | 2-plan-review | 2.5-preflight | 3-implement | 3.5-gate | 4-fused-review | synthesize | 4.6-integration | 5-final-review | 5-fix | commit | archive> phase=<Ф-id or —> round=<k>/<cap> base=<base7 or —> run=<orca run id or —> impl=<flash|luna|terra|claude|—> planner=<pro|opus|—>`
+`[orca-dev] step=<triage | resume-check | quickfix | 1-plan | 2-plan-review | 3-implement | 3.5-gate | 4-fused-review | synthesize | 4.6-integration | 5-final-review | 5-fix | commit | archive> phase=<Ф-id or —> round=<k>/<cap> base=<base7 or —> run=<orca run id or —> impl=<role/model or —> planner=<profile or —>`
 
 If you cannot fill a field, you have lost protocol state: re-read the plan frontmatter, `git log --oneline -15`, `orca orchestration task-list --brief --json`, and this file before doing anything else.
 
 ## Durable progress
 
-Conversation memory does not survive compaction. Durable state, in order of authority:
+Conversation memory does not survive compaction. Reconcile these durable records; frontmatter records intent and never overrides missing commit or acceptance evidence:
 
-1. **Plan frontmatter** — per-phase `status`, `base:` (BASE sha recorded at Step 3.1), `risk:`, `commits:` ranges, top-level `status`, `orca_run:` (the Orca Run id), `plan_base:` (the commit the plan landed on — Step 5's merge base), `verify:` (the gate commands the writer recorded).
-2. **git log** — the commits named in the frontmatter exist even when you no longer remember creating them.
+1. **Plan frontmatter** — per-phase `status`, `base:` (full BASE sha recorded before phase begins), `risk:`, `commits:` ranges, top-level `status`, `orca_run:` (the Orca Run id), `plan_base:` (the full commit SHA directly before the first plan commit — Step 5's merge base), `verify:` (the gate commands the writer recorded).
+2. **Git history and commit receipts** — verify that the phase commit/range actually exists and matches the accepted delivery. A prepared `done`, an open-ended `commits: "<base7>.."`, or unrelated HEAD movement is not positive commit evidence.
 3. **Ledger** `docs/plans/<slug>.ledger.json` — every triaged finding across all loops.
 4. **Orca** — `orca orchestration run-use --id <orca_run>` rebinds you; `task-list --brief --json` shows what was dispatched and what settled; `worker-show --dispatch <id>` tells you whether a worker is still alive.
 
-At skill start and after any compaction: read the frontmatter, `git log --oneline -15`, and `task-list`. Phases marked `done` are done — never re-dispatch them. A phase whose implementation is in the tree while the frontmatter still says `in-progress` is implemented — resume at Step 3.5 (gate on the current tree, BASE = the phase's `base:`), then Step 4 with a fresh package; the old report in the workspace is `[IMPL_REPORT_FILE]`. Before re-dispatching an implementer, `task-list --status dispatched` — a live write task for this phase means wait, not dispatch: two writers in one tree corrupt each other.
+At skill start and after any compaction: read the frontmatter, `git log --oneline -15`, the ledger, and `task-list`; reconcile them with the settled Task/Dispatch receipts and the relevant report sections before choosing the next step.
+
+- A phase is complete only when its accepted delivery and positive commit/range evidence agree. After a crash, recover the matching commit from Git history before attempting another commit; never commit the same delivery twice. Prepared `done`/`commits:` without this evidence remains unfinished and cannot authorize the next phase.
+- When implementation is already present, restore the recorded unfinished verification, review, fix or commit barrier using the phase's recorded `base:` and `[IMPL_REPORT_FILE]`. `awaiting_commit` permits only the pending commit once the current candidate has the required accepted gate/reviews and no unresolved findings. Missing or stale verification/review evidence returns to the corresponding barrier (Step 3.5 and a fresh package when the tree changed), within the existing round caps; it never becomes permission to skip review or blindly re-dispatch implementation. Preserve the recorded review history and pending synthesis instead of restarting their loops. If the unfinished step cannot be established, retain the barrier and dispatch diagnosis.
+- All phases committed with top-level `in-progress` means resume the unfinished Step 5, delivery verification or final bookkeeping. Even a prepared top-level `done` needs the final-review/delivery evidence and completion commit described below; it must not hide pending final work from resume discovery.
+- Before any writer dispatch/reuse, inspect current Task/Dispatch and execution-host evidence per recipes §6. A live or unverifiable **unsettled write task** in this tree blocks another writer. An alive retained terminal whose Task is durably settled is not an active writer; it can preserve context and receive an authorized follow-up. Terminal idleness alone proves neither settlement nor death.
 
 ## Verdicts
 
-Every worker ends with exactly one `worker_done`. You read three things from it: `subject` (the verdict token), `payload.outcome`, `payload.reportPath`. The report file's line 1 repeats the token; 4.1 reports also carry `SPEC:` (line 2) and `QUALITY:` (line 3).
+Every worker ends with exactly one `worker_done`. You read three things from it: `subject` (the verdict token), `payload.outcome`, `payload.reportPath`. The report file's line 1 repeats the token; 4.1 reports also carry `SPEC:` (line 2) and `QUALITY:` (line 3); plan-review reports carry `## Simplicity` with `SIMPLICITY: OK | CHANGES_REQUESTED`.
 
 | step | tokens |
 |---|---|
@@ -81,7 +86,9 @@ Every worker ends with exactly one `worker_done`. You read three things from it:
 
 Any review, gate or synthesis worker that could not produce its artifact at all returns the bare token `BLOCKED` with `--outcome failed` (its report's `## Reason` says why): one fresh re-dispatch of the same role, then escalate to the user.
 
-Procedure: take `subject`, strip whitespace/emphasis, exact-match against the step's set. No match, or a 4.1 report missing `SPEC:`/`QUALITY:` → malformed: re-dispatch ONCE into the same terminal with "Your previous worker_done did not carry a valid verdict token. Re-send worker_done with subject exactly one of: <tokens>, and fix line 1 of the report." Still malformed → escalate to the user with the report path. Never infer a verdict from prose; never treat a missing token as approval. A `worker_done` that Orca **rejects** (missing `--from` / `--dispatch-capability`, sender not the dispatch assignee — observed 2026-09-02 on a Path B reviewer that copied the template line without the preamble's values) is not a verdict and not a reason to close the terminal: read the report's line 1 for the token, then re-inject into the same worker terminal "Resend your worker_done with the `--from` and `--dispatch-capability` values from the Orca preamble at the top of your task" — once Orca accepts it, `worker-release`. Orca's own rule: never release on a rejected/stale `worker_done`, never substitute `terminal close` for release. `outcome: failed` with a valid token is a protocol verdict (`BLOCKED`, `NEEDS_*`); `outcome: failed` whose body names quota / rate limit / auth / launch / bridge errors is an **availability** failure → cascade per `roles.md`.
+Procedure: take `subject`, strip whitespace/emphasis, exact-match against the step's set. No match, or a report missing mandatory fields (`SPEC:`/`QUALITY:` for 4.1, `SIMPLICITY:` for plan review, or a BLOCKING item missing its required fields) → malformed: re-dispatch ONCE into the same terminal with a format-correction Dispatch: "Your previous worker_done did not carry a valid verdict token or required structured fields. Re-send worker_done with subject exactly one of: <tokens>, and fix required fields in the report." Prior findings remain unresolved. Still malformed after one correction → escalate to the user with the report path. Never infer a verdict from prose; never treat a missing token as approval; never silently DEFER format errors.
+
+A `worker_done` that Orca **rejects** (missing `--from` / `--dispatch-capability`, sender not the dispatch assignee) is not a verdict and not a reason to close the terminal: read the report's line 1 for the token, then re-inject into the same worker terminal "Resend your worker_done with the `--from` and `--dispatch-capability` values from the Orca preamble at the top of your task" — once Orca accepts it, proceed to settlement. Orca's own rule: never release on a rejected/stale `worker_done`, never substitute `terminal close` for release. `outcome: failed` with a valid token is a protocol verdict (`BLOCKED`, `NEEDS_*`); `outcome: failed` whose body names quota / rate limit / auth / launch / bridge errors is an **availability** failure → cascade per `roles.md`.
 
 ## Workspace scripts ($WS, $RPKG, $GATE)
 
@@ -109,23 +116,24 @@ $WS = "$BIN\sdd-workspace.ps1"; $RPKG = "$BIN\review-package.ps1"; $GATE = "$BIN
 
 ## Pre-dispatch checklist (every worker)
 
-1. No unfilled placeholders (`<...>`, `[...]`) in the spec.
+1. Build every Task spec as the exact mandatory worker-boundary prefix in `orca-recipes.md` §1, a blank line, then the filled role/follow-up body. Before Task creation AND dispatch/reuse, mechanically check that the actual spec begins with that literal prefix and has no unfilled placeholders (`<...>`, `[...]`); missing prefix → repair the spec before sending. This applies to retries, fix rounds, context answers and format corrections too.
 2. Absolute paths: repo root, plan, ledger, report file, review package.
 3. The user's request verbatim where the template asks for it.
 4. Self-contained: the worker sees nothing from your session.
-5. Role, agent, model, effort taken from `roles.md`; **family rule** checked for reviewer dispatches (writer's family ≠ reviewer's family) — when the implementer was a Codex or Claude model, take the reviewers from the `Family-rule substitutions` table in `roles.md`. Never `ultra`.
-6. Path A vs Path B chosen per `orca-recipes.md` (Antigravity is always Path B — implementer, gate, synthesizer, quickfix and integration-check alike, with `bin/wait-agent-ready` before `dispatch --inject`; `worker-start --agent antigravity` ends in `agent_prompt_stalled` (observed 2026-09-01 on the synthesizer). Codex is Path B until hooks are trusted).
+5. Role, agent, model, effort taken from `roles.md`; for every reviewer, including availability fallbacks, check independence from ALL actual author families of each reviewed unit. Use only the existing allowed independent routes/substitutions; if none is available, stop with incomplete acceptance. Never `ultra`.
+6. Path A vs Path B chosen per `orca-recipes.md` (Antigravity is always Path B). Every Codex worker requires an explicit model and the role's effort policy from `roles.md`, plus proven effective `-c features.multi_agent=false`, separately from the spec boundary. The documented Path A cannot carry/prove that setting, so use Path B even after hooks are trusted; verify launch evidence before reusing a Codex terminal. Follow the readiness evidence rules before `dispatch --inject`; a timeout does not permit dispatch/retry.
 7. Round 2+: ledger path present and open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
 8. Review dispatches (4.1 / 4.2 / 5 / plan review): this round's freshly generated package path as `[DIFF_FILE]`, the implementer's report as `[IMPL_REPORT_FILE]` (read-only input), `[GLOBAL_CONSTRAINTS]` copied verbatim from the plan.
 9. Anti-coaching scan on every reviewer spec: delete any sentence containing "do not flag", "don't treat", "not a defect", "at most Minor", "Minor at most", "the plan chose", "ignore the". Referencing settled ledger ids (`REJECTED_BY_SCOPE` / `DEFER`) is the only allowed form.
 10. `[REPORT_FILE]` is always the worker's OWN report: `$("$WS" <plan-file>)/<role>-<phase>-r<k>.md` for reviewers, gate, synthesizer, diagnosis and plan roles; `phase-<id>-report.md` for implementers (fix rounds — review, gate-fix and NEEDS_CONTEXT follow-ups alike — append to the same file and rewrite its line 1).
+11. Prompts are loaded on demand: read each template only when dispatching that specific role.
 
 ## Triage
 
 ```
 Frontend-only task (.tsx/.jsx/.vue/.svelte/.css/.scss, or "UI", "дизайн", "компонент", "страница", screenshot with UI intent)?
-  new UI / redesign → frontend-implementer (new-UI model); simple tweak → frontend-implementer (tweak model) — models in roles.md
-  → still the full protocol: a one-phase plan on the `standard` profile is cheap, and there is no plan-less path (Steps 3–5 key off the plan file).
+  new UI / redesign → frontend-implementer; simple tweak → frontend-implementer — models and routes in roles.md
+  → still the full protocol: a one-phase plan on the default profile is cheap, and there is no plan-less path (Steps 3–5 key off the plan file).
 Else single-file change, <~20 lines, no architectural judgment? → quickfix (cascade in roles.md) — see `## Quickfix path`
 Else → full protocol.
 Ambiguous → ask once.
@@ -139,63 +147,65 @@ No plan, no review workers, one worker. 1. Branch check as in Step 2 (never comm
 
 ## Before Step 1 — in-progress plans
 
-Look for `docs/plans/*.md` (or the repo's plan dir) with top-level `status: in-progress`. None → Step 1. One → "Found in-progress plan: <slug> (phase <id> — <scope>). Continue or start new?" — wait. Several → list, ask. On continue: `run-use --id <orca_run>` (or `run-create` if missing, then record it), skip Steps 1–2, apply Durable-progress checks, resume at the right step.
+Inspect `docs/plans/*.md` (or the repo's plan dir) for top-level `status: in-progress`, including plans whose phases are all committed. A top-level `done` is excluded only when final-review/delivery evidence and the completion commit are confirmed per Durable progress; prepared or unproven markers still count as unfinished. None → Step 1. One → "Found in-progress plan: <slug> (phase <id> — <scope>). Continue or start new?" — wait. Several → list, ask. On continue: `run-use --id <orca_run>` (or `run-create` if missing, then record it), skip Steps 1–2, apply Durable-progress checks, resume at the right step.
 
 ## Full protocol
 
 ### Step 1 — plan (writer)
 
 0. `install.sh --check <repo>` (from the skill's repo, `$BIN/../install.sh`; on Windows `& "$env:ORCA_DEV_HOME\install.ps1" -Check <repo>`); a WARN about trust or hooks → `install.sh --repo <repo>` (Windows: `install.ps1 -Repo <repo>`) or ask the user — a blocked worker costs a dispatch attempt.
-1. Choose the planning profile per `roles.md` (`strong` / `standard`). Run the bridge preflight from `orca-recipes.md`; say which profile you picked.
+1. Choose the planning profile per `roles.md` (default: `astra`; `pro` only on explicit user opt-in; `opus` only as explicit user override). State which profile you picked.
 2. `orca orchestration run-create --objective "<slug>" --json`; keep the run id — you write it into the plan frontmatter as `orca_run:` at the plan commit.
-3. Fill `prompts/plan-writer-prompt.md` Mode A (user request verbatim, repo root, known constraints, `[REPORT_FILE]`), `task-create`, attach per recipes. Required frontmatter includes `verify:` — the writer lists the repo's lint/typecheck/test commands the gate will run.
+3. Fill `prompts/plan-writer-prompt.md` Mode A (user request verbatim, repo root, known constraints, `[REPORT_FILE]`), `task-create`, attach per recipes. Required frontmatter includes `risk:` per phase and `verify:` — the writer lists the repo's lint/typecheck/test commands the gate will run.
 4. Wait. `PLAN_WRITTEN` → Step 2. `BLOCKED` → read the report's `## Reason`; a requirements question → ask the user, then re-inject the answer into the same writer terminal as a new task; anything else → `diagnosis` worker.
-5. Pro availability failure: close the terminal and retry ONCE in a FRESH Pro terminal (new task, "RETRY (attempt 2 of 2) …" — never the same terminal, see `roles.md`), then close that one too and dispatch the `standard` writer. Tell the user in one line. The planning profile flips to `standard` for the rest of this plan.
+5. Availability failure on opt-in Pro: retry ONCE in a FRESH Pro terminal (new task, "RETRY (attempt 2 of 2) …"), then switch to `astra`. Tell the user in one line.
 
-Release the writer's terminal after `worker_done` — Mode B is always a fresh worker.
+**Author retention:** Keep the plan-writer terminal alive until the plan is approved and committed; call `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `plan review r<k>`) immediately after accepting the delivery in Path A. Operator-created Path B terminals remain open according to recipes §5. Mode B normally reuses the actual author. The `pro` profile is the narrow exception: its first revision goes to a fresh native `plan-reviser` per `roles.md`, with announced full handoff (plan, ledger, latest author/review reports); retain and reuse that reviser for later revisions. Keep the settled initial author for context until the plan commit; it receives no revision task. Actual context loss uses a fresh replacement of the authorized revision profile with the same full handoff, announced.
 
 ### Step 2 — plan review (loop, cap 4)
 
-Reviewer per profile and round: the `plan-reviewer` row in `roles.md`. FRESH worker every round; read-only; never re-inject into a previous reviewer's terminal.
+Reviewer per `roles.md` (ordinary plan reviewer vs. complex plan reviewer). FRESH worker every substantive round (cap 4); read-only; never re-inject into a previous reviewer's terminal.
 
-- `APPROVED` → **branch check first**: if `git branch --show-current` is `main` / `master`, run `git checkout -b feat/<slug>` before anything is committed — committing to `main` requires the user's explicit words in this session (observed 2026-09-01: a plan landed on `main` without consent). Then write `plan_base: <git rev-parse --short HEAD>` (the commit the plan lands on — Step 5 diffs against it) and `orca_run:` into the frontmatter and commit the plan file alone (`docs(plans): add <slug>`, plan file staged by name, Co-Authored-By trailer naming the coordinator model, no push). → Step 2.5.
+The plan reviewer evaluates requirements compliance, semantic consistency (contracts, consumes/produces matching, global constraints, phase risks), and performs the mandatory **Simplicity** check (`## Simplicity`, `SIMPLICITY: OK | CHANGES_REQUESTED`).
+
+- `APPROVED` (requires `SIMPLICITY: OK`) → **branch check first**: if `git branch --show-current` is `main` / `master`, run `git checkout -b feat/<slug>` before anything is committed — committing to `main` requires the user's explicit words in this session. Then write `plan_base: <git rev-parse HEAD>` (the full commit SHA directly before the plan commit — Step 5 diffs against it) and `orca_run:` into the frontmatter and commit the plan file alone (`docs(plans): add <slug>`, plan file staged by name, Co-Authored-By trailer naming the coordinator model, no push). After successful commit receipt, request release of the author/reviser terminals per recipes §5 and record the actual receipts → Step 3.
 - `CHANGES_REQUESTED` → ledger sequence:
   (a) triage each BLOCKING item's `class:` → ledger `decision` (`MUST_FIX_NOW` / `REGRESSION_FROM_AUTHORIZED_FIX` → `ACCEPTED` or `PARTIALLY_ACCEPTED`; `DEFER` / `NIT` / `REJECTED_BY_SCOPE` → same-named decisions). `plan-mandated` items → `ESCALATED_TO_HUMAN`, shown to the user with the plan text, never fixed without an answer.
   (b) write/update the ledger (ids `P<round>-B<n>`, reviewer `plan-review`); first update prior entries' `status`.
-  (c) dispatch `plan-reviser` (fresh, Mode B, model per `roles.md`) with ledger path + open items inline + the reviewer's BLOCKING lines verbatim. `NEEDS_AUTHORIZATION` → extend the ledger item if inside scope, else escalate.
+  (c) dispatch `plan-reviser` with Mode B: normally reuse the retained author; for the first revision after the `pro` initial plan, use a fresh native reviser per `roles.md` with announced full handoff and reuse it thereafter; actual context loss uses a fresh worker of the authorized revision profile with full handoff, announced. Every revision spec includes the ledger path + open items inline + the reviewer's BLOCKING lines verbatim. `NEEDS_AUTHORIZATION` → extend the ledger item if inside scope, else escalate.
   (d) dispatch a FRESH reviewer with the follow-up template (ledger path + the reviser's per-item report). Round++.
 
 **Loop control — in order, first match wins, after every `CHANGES_REQUESTED`:**
-1. Anti-pingpong: drop items repeating a point rejected with reasoning in a prior round (`resolved-by-decision`). Empty list → treat as `APPROVED`.
+1. Anti-pingpong: drop items repeating a point rejected with reasoning in a prior round (`resolved-by-decision`). Empty list → treat as `APPROVED` if simplicity is OK.
 2. No-progress: blocking list identical to the previous round → escalate with a one-sentence impasse summary from a `diagnosis` worker.
 3. New-blocker churn: all prior blockers closed AND all remaining are NEW `MUST_FIX_NOW` (not `REGRESSION_FROM_AUTHORIZED_FIX`) AND none cite DATA_LOSS / SECURITY / GUARANTEED_FAIL → escalate with: closed list, new list with materiality, recommendation.
 4. Round cap: next round would be 5 → escalate.
 5. Otherwise run (a)–(d).
 
-### Step 2.5 — pre-flight scan (coordinator, no dispatch)
-
-The one full read of the plan body. Three mechanical checks: (1) `## Global Constraints` vs phase text naming a conflicting value; (2) every `Consumes:` line matches a `Produces:` line of an earlier phase or `## Contracts` (`nothing` is exempt); (3) rubric-mandated defects (a test asserting nothing, verbatim duplication, "skip tests"); (4) every phase carries `risk:` (`none | SECURITY | DATA_LOSS | REGRESSION`) — missing → treat as `none` and note it. Also copy `## Global Constraints` verbatim for reviewer specs, and confirm `verify:` is non-empty (empty → the gate worker will discover commands; note it). Findings → ONE batched question to the user. Nothing → proceed silently. Accepted edits → ledger (reviewer `preflight`, ids `PF-B<n>`) + a Mode B reviser dispatch + re-check once.
-
 ### Step 3 — implement the phase
 
 Before every implementer dispatch:
-1. Record BASE: `git rev-parse --short HEAD` → state line `base=` AND the phase's frontmatter `base:` (frontmatter is yours; this is what survives compaction).
+1. At the phase's first start, record BASE: `git rev-parse HEAD` → state line `base=` AND the phase's frontmatter `base:` (frontmatter is yours; this full SHA survives compaction). On resume/fix rounds reuse that recorded BASE; do not overwrite it with current HEAD.
 2. Resolve `[REPORT_FILE]` = `$("$WS" <plan-file>)/phase-<id>-report.md`.
-3. Confirm no live write task (`task-list --status dispatched`).
+3. Confirm no unresolved live or unverifiable write task from current Task/Dispatch and execution-host evidence (recipes §6); a settled retained terminal may be reused.
 
 Route by the phase's `Files`: frontend-only → `frontend-implementer`; else → `implementer` cascade (`roles.md`). `impl=` in the state line records which model is live. Fill `prompts/implementer-prompt.md` (first-round), `task-create`, attach (Antigravity = Path B).
+
+**Implementer retention:** The implementer's terminal is retained across fix rounds until the phase is approved and committed; call `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `fix round r<k>`) immediately after accepting the delivery in Path A. Operator-created Path B terminals remain open according to the actual retention/release receipts (recipes §5).
 
 Verdicts:
 - `DONE` → Step 3.5. `DONE_WITH_CONCERNS` → read the concerns in the report; correctness/scope → address before review; observations → note.
 - `NEEDS_CONTEXT` → answer it in a new task re-injected into the same terminal (plain text: the question quoted, the answer, "continue and report as before"). If answering needs codebase research, dispatch `diagnosis` with the question instead of guessing.
 - `NEEDS_AUTHORIZATION` (fix rounds only) → Step 4(c) branch.
-- `BLOCKED` → `diagnosis` worker (`prompts/diagnosis-prompt.md`, model per `roles.md`) with the report + plan path. Its token: `NEEDS_MORE_CONTEXT` → re-inject the implementer with the diagnosis report's `## Context` section; `NEEDS_MORE_REASONING` → the reasoning-escalation model per `roles.md` in a FRESH terminal (a launched terminal cannot change model) with the fresh-fallback re-brief plus the BLOCKED report and diagnosis paths; `PHASE_TOO_LARGE` → Mode B reviser splits the phase, re-run Step 2 on the change; `PLAN_WRONG` → user.
-- An `escalation` message from a worker (`check --types escalation`) is handled exactly like `BLOCKED`, with the message body as the report.
-- Availability failure (see Verdicts; also no heartbeat AND no `worker_done` for 20 min while `worker-show` / `terminal read` show an idle terminal) → next model in the cascade, fresh terminal, tell the user. Activity means alive — a slow worker is never an availability failure.
+- `BLOCKED` → `diagnosis` worker (`prompts/diagnosis-prompt.md`, model per `roles.md`) with the report + plan path. Its token: `NEEDS_MORE_CONTEXT` → re-inject the implementer with the diagnosis report's `## Context` section; `NEEDS_MORE_REASONING` → the reasoning-escalation model per `roles.md` in a FRESH terminal with the fresh-fallback re-brief plus the BLOCKED report and diagnosis paths; `PHASE_TOO_LARGE` → Mode B reviser per Step 2(c) splits the phase, re-run Step 2 on the change; `PLAN_WRONG` → user.
+- An `escalation` message from a worker (`check --types escalation`) is handled exactly like `BLOCKED`, with the message body as the report. Immediate risk escalation applies if `risk: SECURITY / DATA_LOSS` is encountered.
+- Availability failure (see Verdicts and recipes §6: positive current host exit/failure evidence or an accepted, durably settled availability verdict; silence, timeout, idle and failed Task bookkeeping alone never authorize redispatch) → next model in the cascade, fresh terminal, confirm no unresolved live or unverifiable write task exists, follow the current recovery receipt/`nextAction`, and tell the user. A durably settled Task may retain an alive terminal for context; a slow unsettled worker is never an availability failure.
 
 Never re-run the same model on the same input unchanged.
 
 ### Step 3.5 — verification gate (before every review round)
+
+In the main tree, prepare the phase commit candidate's frontmatter intent per Auto-commit before its concluding gate/package, keeping top-level `in-progress`; parallel tracks leave the plan untouched and use the group bookkeeping rules. On resume, check whether this preparation is already present; it never substitutes for accepted review or positive commit evidence.
 
 1. `"$GATE" <plan-file> <base-sha> <repo-root>` (cwd = repo or track worktree).
    - `GATE_OK` → record line 2 as the gate summary; → Step 4.
@@ -208,15 +218,15 @@ Never re-run the same model on the same input unchanged.
 
 **4.0 package** — every round: `dir=$("$WS" <plan-file>)`; `"$RPKG" <BASE> WORKTREE "$dir/review-<phase>-r<round>-<base7>.diff"`.
 
-**4.1 primary review** — `review-primary` (model per `roles.md`: the escalation model when the phase's `risk:` is SECURITY / DATA_LOSS or from round 3; substitutions announced; family-rule substitution when the implementer was a Claude model). Fresh worker every round. Spec: base, plan, phase, round, gate summary, `[DIFF_FILE]`, `[IMPL_REPORT_FILE]`, `[REPORT_FILE]` (the reviewer's own), `[GLOBAL_CONSTRAINTS]`, ledger path (round 2+). Report lines 1–3 mandatory. Then process `CANNOT_VERIFY` items mechanically: run the literal `CHECK:` (always a shell command); match → ledger `verified-by-controller`; mismatch → `ACCEPTED`, joins this round's BLOCKING list (skip 4.2 this round); not executable → ledger `open` + `handed-to-4.2`, carried as "verify additionally" into the next 4.2. A phase is never done with an open CANNOT_VERIFY.
+**4.1 primary review** — `review-primary` (model and effort per `roles.md`, including risk escalations and family substitutions). Fresh worker every round. Spec: base, plan, phase, round, gate summary, `[DIFF_FILE]`, `[IMPL_REPORT_FILE]`, `[REPORT_FILE]` (the reviewer's own), `[GLOBAL_CONSTRAINTS]`, ledger path (round 2+). Report lines 1–3 mandatory. Warnings are judged by material impact (not mere clean stdout). Then process `CANNOT_VERIFY` items mechanically: run the literal `CHECK:` (always a shell command); match → ledger `verified-by-controller`; mismatch → `ACCEPTED`, joins this round's BLOCKING list (skip 4.2 this round); not executable → ledger `open` + `handed-to-4.2`, carried as "verify additionally" into the next 4.2. A phase is never done with an open CANNOT_VERIFY.
 
-**4.2 control review** — only when 4.1 returned `REVIEW_OK`: `review-control` (model per `roles.md`, including the family-rule substitution when the implementer was a Codex model; fresh, read-only, runs no tests). Spec: this round's package, `[IMPL_REPORT_FILE]`, its own `[REPORT_FILE]`, constraints, gate summary, "verify additionally" lines.
+**4.2 control review** — only when 4.1 returned `REVIEW_OK`: `review-control` (model and effort per `roles.md`, including family substitutions and experimental routes; fresh, read-only, runs no tests). Spec: this round's package, `[IMPL_REPORT_FILE]`, its own `[REPORT_FILE]`, constraints, gate summary, "verify additionally" lines.
 
 **Combined BLOCKING list.** First record both reviewers' DEFER/NITS in the ledger (`deferred`). Then:
 - empty and no open CANNOT_VERIFY → Step 4.5 (if rounds ≥ 2) → auto-commit.
-- non-empty → ledger sequence: (a) triage (`reviewer: review-primary | review-control`, ids `F<round>-B<n>`; a 4.2 item missing `authorization_relation` / `why_now` / `minimal_fix` → `DEFER`; `plan-mandated` → `ESCALATED_TO_HUMAN`); (b) write the ledger; (c) fix round: re-inject the implementer's own terminal (same model; fresh-fallback re-brief if the terminal is gone or the cascade moved) with the fix-round template — ledger path, `[REPORT_FILE]`, open ACCEPTED / PARTIALLY_ACCEPTED items inline; frontend phases go to the frontend implementer's terminal. `NEEDS_AUTHORIZATION` → extend the ledger item or escalate; never re-dispatch unchanged. **Fix-report check** before any re-review: the report's `## Fix round <N>` must name covering tests, exact commands, and output — missing → return to the fixer. Then Step 3.5 again, fresh 4.0 package, fresh 4.1, fresh 4.2. Round++.
+- non-empty → ledger sequence: (a) triage (`reviewer: review-primary | review-control`, ids `F<round>-B<n>`; a BLOCKING item missing a required field (as defined by that role's own prompt) → one format-correction Dispatch per Verdicts, findings stay unresolved; still deficient → protocol blocker, escalate — never `DEFER`; `plan-mandated` → `ESCALATED_TO_HUMAN`); (b) write the ledger; (c) fix round: re-inject the retained implementer's own terminal (same model; fresh-fallback re-brief if the terminal is gone or the cascade moved) with the fix-round template — ledger path, `[REPORT_FILE]`, open ACCEPTED / PARTIALLY_ACCEPTED items inline; frontend phases go to the frontend implementer's terminal. `NEEDS_AUTHORIZATION` → extend the ledger item or escalate; never re-dispatch unchanged. **Fix-report check** before any re-review: the report's `## Fix round <N>` must name covering tests, exact commands, and output — missing → return to the fixer. Then Step 3.5 again, fresh 4.0 package, fresh 4.1, fresh 4.2. Round++.
 
-**Loop control** — same ordered checks as Step 2 (anti-pingpong and no-progress per reviewer; churn on the combined output; cap 4; a BLOCKING item without a class label counts as NEW `MUST_FIX_NOW` with no materiality). Round-cap escalation carries the package path, the combined list, and a one-sentence impasse summary from `diagnosis`.
+**Loop control** — same ordered checks as Step 2 (anti-pingpong and no-progress per reviewer; churn on the combined output; primary review escalation at round 4, cap 4; immediate risk escalation for `SECURITY` / `DATA_LOSS`). Round-cap escalation carries the package path, the combined list, and a one-sentence impasse summary from `diagnosis`.
 
 ### Step 4.5 — synthesis (only after 2+ rounds, or accept-at-escalation — the user accepting the remaining findings at a cap escalation)
 
@@ -224,15 +234,23 @@ Never re-run the same model on the same input unchanged.
 
 ### Step 5 — final whole-branch review (once per plan, cap 2)
 
-After the last phase's auto-commit (top-level `status: done`), before archival. `MERGE_BASE` = the frontmatter's `plan_base:` (fallback, only when the current branch is not `main`/`master`: `git merge-base main HEAD`; on `main` a merge-base is HEAD and the package would be empty). Package: `"$RPKG" <MERGE_BASE> HEAD "$dir/review-final-r1-<base7>.diff"` (WORKTREE mode if the last phase was left uncommitted) — an `EMPTY` result from the script means a wrong base, never a clean branch. ONE `review-final` worker (model per `roles.md`). `REVIEW_OK` → clean finish. `REVIEW_BLOCKING` → ledger (`review-final`, `FR<round>-B<n>`; `plan-mandated` → human) → ONE fixer: a fresh implementer (current cascade model, fresh-fallback re-brief, whole-plan scope, `[REPORT_FILE]` = `$dir/final-fix-report.md`) with the complete list (BLOCKING + `MUST_FIX_BEFORE_MERGE` triages). Then Step 3.5 on the fixed tree (BASE = `plan_base:`), and round 2: fresh WORKTREE package, fresh reviewer with the fix list inlined. Still blocking → escalate. Clean → commit the fixes (`fix: address final-review findings for <slug>`), then archival.
+After positive commit evidence for the last phase, with top-level `status: in-progress`, before archival. `MERGE_BASE` = the frontmatter's `plan_base:` (the full SHA recorded at plan commit; fallback only when not `main`/`master`: `git merge-base main HEAD`). Package: `"$RPKG" <MERGE_BASE> HEAD "$dir/review-final-r1-<base7>.diff"` (WORKTREE mode for an authorized final-fix wave; a skipped last phase commit remains at its commit barrier) — an `EMPTY` result from the script means a wrong base, never a clean branch.
+
+`review-final` worker(s) per `roles.md`. In a mixed-author branch, ensure independent reviewer assignments cover every unit of change by a family outside its authors. `REVIEW_OK` → required delivery verification and final bookkeeping below; top-level status remains `in-progress`. `REVIEW_BLOCKING` → ledger (`review-final`, `FR<round>-B<n>`; `plan-mandated` → human) → ONE fixer: a fresh implementer (current cascade model, fresh-fallback re-brief, whole-plan scope, `[REPORT_FILE]` = `$dir/final-fix-report.md`) with the complete list (BLOCKING + `MUST_FIX_BEFORE_MERGE` triages). Then Step 3.5 on the fixed tree (BASE = `plan_base:`), and round 2: fresh WORKTREE package, fresh reviewer with the fix list inlined. Still blocking → escalate. Clean → commit the fixes (`fix: address final-review findings for <slug>`) through the Commit Barrier, keeping top-level `in-progress`, then finish delivery verification and bookkeeping below.
+
+**Delivery verification and final bookkeeping:** Keep top-level `in-progress` until final review is clean, all required source commits are confirmed, and the plan's required delivery checks/acceptance have positive evidence for the accepted tree. Use the existing gate role for declared delivery checks not already covered by valid evidence; an unavailable required check remains incomplete. Record the outcomes, report paths and pending final action in the existing plan-workspace reports/Orca records so resume can recover this barrier.
+
+Only then prepare top-level `status: done` for a separate plan-only commit (`docs(plans): complete <slug>`). Explicitly verify this completion metadata change and refresh the applicable gate/package evidence before committing; the accepted final review continues to cover the unchanged implementation. Do not silently bundle source edits: changed implementation or hook edits return to the required verification/review barrier within the existing caps. A failed/skipped completion commit leaves the marker as intent and final bookkeeping pending; resume uses Git and the recorded final evidence even if the working-tree frontmatter says `done`. Positive completion commit receipt (or its verified recovery from Git) is required before reporting the plan finished or offering archival.
 
 ## Auto-commit (after a clean fused review)
 
-Frontmatter first: phase `status: done` + `commits: "<base7>.."` (parallel groups: full `<base7>..<head7>`); next pending → `in-progress`; no next → top-level `done`. Stage by name (from `git status --porcelain`; never `-A`; exclude the ledger and unrelated files), the plan file, the synthesis file if any. Conventional subject referencing the phase, 1–2 sentence why-body, `Co-Authored-By: <coordinator model> <noreply@openai.com>` trailer. Never `--no-verify`, `--amend`, or `push` without explicit approval in this session. Skip when the user said "no commit"/"не коммить", when unrelated uncommitted changes exist (warn; the ledger does not count), or when a hook fails (report it; a hook failure is fixed by a quickfix worker, never by hand). **After a skipped commit do not start the next phase** — its BASE would swallow this phase's diff; report and wait for the user. Inside a parallel track the plan file is never edited: both phases' frontmatter flips happen in the main tree at group step 6. Report `Committed: <sha> <subject>`.
+Prepare frontmatter intent before the concluding Step 3.5 gate and Step 4 package: phase `status: done` + `commits: "<base7>.."` (parallel groups: full `<base7>..<head7>`); next pending → `in-progress` as intent only; top-level stays `in-progress`, including after the last phase. On entry to commit, confirm the accepted gate/reviews cover this candidate; any later tracked change restores the necessary verification/package/review barrier within the existing caps. Stage by name (from `git status --porcelain`; never `-A`; exclude the ledger and unrelated files), the plan file, the synthesis file if any. Conventional subject referencing the phase, 1–2 sentence why-body, `Co-Authored-By: <coordinator model> <noreply@openai.com>` trailer. Never `--no-verify`, `--amend`, or `push` without explicit approval in this session. Skip when the user said "no commit"/"не коммить", when unrelated uncommitted changes exist (warn; the ledger does not count), or when a hook fails (report it; a hook failure is fixed by a quickfix worker, never by hand).
 
-Then release every worker terminal that belongs to the finished phase (`worker-release` / `terminal close`), keeping only the implementer's terminal if the next phase is an immediate follow-up on the same agent.
+**Commit Barrier:** Accepted content is not equal to a finished phase until positive commit receipt, recorded with the actual SHA/range in the existing delivery records. Prepared frontmatter is intent; state is `awaiting_commit` only when required verification/reviews are accepted, otherwise their unfinished barrier remains. Recovery verifies Git before repeating a commit. **After a failed or skipped commit do not start the next phase** — its BASE would swallow this phase's diff; report and wait for the user. Inside a parallel track the plan file is never edited: both phases' frontmatter flips happen in the main tree at group step 6. Report `Committed: <sha> <subject>`.
 
-## Plan archival (after Step 5 clean)
+After a successful commit, request release of the finished phase's settled workers per recipes §5, or retain the implementer for an immediate follow-up on the same agent. Record actual settlement/release receipts for both paths: `retained`, `external`, `user_takeover`, `release_pending`, `release_unknown`, no-owned-resource and no-op results leave the terminal open. A release request is not actual release; never substitute forced `terminal close`.
+
+## Plan archival (after Step 5, delivery verification and completion commit)
 
 Ask once: `План реализован. Переместить в docs/plans/finished/? [y/N]`. Yes → `git mv`, separate commit `chore: archive <slug>`, delete the ledger, report `Archived: <sha>`. Otherwise silent. Never between phases, never for quickfixes.
 
@@ -245,7 +263,7 @@ Steps 1–2 cover all phases up front; Steps 3–4 run per phase; after a phase'
 Two pending phases sharing `parallel_group` run concurrently. Preconditions: plan approved, clean `git status` (the untracked ledger excepted), no live write task.
 
 1. Flip both to `in-progress`, commit `docs(plans): start parallel group <G>`.
-2. Per phase: `orca orchestration worker-start --task <t> --worktree new-child --name <slug>-<phase> --setup run --agent … ` (Path A) or `orca worktree create --name <slug>-<phase> --setup run --json` + Path B in that worktree. Read the worktree id from the receipt, then **pre-trust the new path** before the first dispatch into it — `install.sh --repo <track-path>` (recipes §3; a parent directory's trust does not cover a child worktree, and Claude/Antigravity workers otherwise stall on the trust dialog and burn a dispatch attempt); all later `"$WS"` / `"$RPKG"` / `"$GATE"` calls for the track run with cwd inside it; per-track ledger lives inside the worktree. **A track never edits the plan file** (no `base:`/`status:` flips — keep the track's BASE in its state line and ledger); that is what keeps step 4's merges conflict-free.
+2. Per phase: `orca orchestration worker-start --task <t> --worktree new-child --name <slug>-<phase> --setup run --agent … ` (Path A only for agents whose required settings it can prove; Codex uses Path B per recipes §2) or `orca worktree create --name <slug>-<phase> --setup run --json` + Path B in that worktree. Read the worktree id from the receipt, then **pre-trust the new path** before the first dispatch into it — `install.sh --repo <track-path>` (recipes §3; a parent directory's trust does not cover a child worktree, and Claude/Antigravity workers otherwise stall on the trust dialog and burn a dispatch attempt); all later `"$WS"` / `"$RPKG"` / `"$GATE"` calls for the track run with cwd inside it; per-track ledger lives inside the worktree. **A track never edits the plan file** (no `base:`/`status:` flips — keep the track's BASE in its state line and ledger); that is what keeps step 4's merges conflict-free.
 3. Steps 3 → 3.5 → 4 per track independently; commit per track inside its worktree (source and test files only — the plan file stays untouched in the track).
 4. Merge sequentially in the main tree: `git merge --no-ff <track-branch>` twice (branch name: `git -C <track-path> branch --show-current`); a conflict falsifies the plan's independence claim → `git merge --abort`, escalate.
 5. Integration check (state `4.6-integration`): `"$GATE" <plan-file> <pre-merge-sha>` on the merged tree → `GATE_FAIL` → repair rounds, cap 2: fresh implementer repair (ledger item `G<r>-B1`) → Step 3.5 → one 4.1 round on the repair diff → commit `fix: repair integration of group <G>`.
@@ -277,15 +295,15 @@ One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, mo
 ## Red flags — never
 
 - Write source or tests yourself; research the codebase yourself; run tests yourself except via `"$GATE"`; read a diff (not even "a quick sanity check" after a quickfix).
-- Launch Codex without an explicit `--model` (the user's default routes to the Pro bridge).
-- Re-inject into a previous reviewer's terminal — reviewers are fresh every round; the only terminal reuse is the implementer's own thread (a model escalation is always a fresh terminal).
-- Use `--effort high` for a Claude judgment role (it is a low setting), `--effort max` for any Claude role (billed ×1.5 — `xhigh` is the ceiling), or `ultra` anywhere without the user's word.
+- Launch/reuse a Codex worker without an explicit role model and proven effective `features.multi_agent=false`, or send any Task spec without the mandatory no-delegation prefix.
+- Re-inject into a previous reviewer's terminal — reviewers are fresh every round; the only terminal reuse is the author/implementer thread (a model change/escalation is always a fresh terminal).
+- Use `ultra` anywhere without explicit user request.
 - Skip 4.1 and go to 4.2; run 4.2 after a blocking 4.1; review without this round's fresh package; review without a `GATE_OK` on the current tree.
-- Pair a writer and a reviewer from the same model family.
+- Pair a writer and a reviewer from the same model family for the same artifact.
 - Tell a reviewer what not to flag; triage a `plan-mandated` item into ACCEPTED / REJECTED.
-- Re-dispatch a `done` phase; mark a phase done with an open CANNOT_VERIFY; one fixer per finding in Step 5; archive before Step 5 is clean.
+- Re-dispatch a phase with verified completion; treat prepared `done` as commit evidence; advance after failed/skipped commit or unresolved review; accept a phase with an open CANNOT_VERIFY; one fixer per finding in Step 5; report the whole plan done before final review, delivery verification and completion commit.
 - Two writers in one working tree, more than two tracks, or parallelizing phases the plan did not group.
-- Stop, close or release a worker because it is slow — heartbeats and terminal activity mean alive. Leave a settled worker open without a reason.
+- Stop, close, retry or cascade because of timeout/idle alone. Forget to record a settled worker's reuse, retention or actual release result; retained/external/uncertain ownership is a reason to preserve an open terminal.
 - Resolve merge conflicts between tracks; delete a worktree with unmerged work; push, force-push, skip hooks, `--amend`; start on `main` without consent.
 - Let a nit block progress.
 

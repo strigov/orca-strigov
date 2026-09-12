@@ -1,16 +1,20 @@
 # orca-strigov — orca-dev
 
-A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex coordinates**, everything else runs as Orca worker terminals on whichever agent and model fits the role (`skills/orca-dev/roles.md` is authoritative; this table is a summary):
+A multi-model development protocol for the [Orca](https://orca.dev) ADE. **Codex coordinates**, and each specialized role runs as an Orca worker terminal (`skills/orca-dev/roles.md` is the single authoritative source for agent, model, effort, and fallback matrices):
 
-| role | agent / model |
+| Role | Primary Responsibility |
 |---|---|
-| plan (round 1) | GPT Pro via the `codex-chatgpt-web` bridge → reviewed by Claude Fable xhigh |
-| plan revisions / fallback | Claude Opus xhigh → reviewed by Codex Sol max |
-| implementation | Gemini 3.7 Flash High (Antigravity CLI) → Codex Luna max fallback → Codex Terra max escalation |
-| frontend phases | Claude Opus xhigh (new UI) / Sonnet (tweaks) |
-| verification gate | `bin/verify-gate` script; a Gemini Flash worker only when the script has no commands or cannot classify |
-| code review | Claude Opus xhigh (Fable on risky phases and in the last fused round), Codex Sol xhigh control review — reviewers swap families when a Codex or Claude model wrote the code |
-| final branch review | Claude Opus xhigh |
+| `coordinator` | Orchestrates the entire pipeline, dispatches tasks, manages git commits |
+| `plan-writer` / `plan-reviser` | Researches codebase, writes and revises multi-phase implementation plans |
+| `plan-reviewer` | Independent review of plans for correctness, consistency, and simplicity |
+| `implementer` | Implements phase deliverables and tests |
+| `frontend-implementer` | Implements UI and design deliverables |
+| `gate` | Mechanical verification and test execution |
+| `review-primary` / `review-control` | Two-stage independent review of phase implementations |
+| `review-final` | Whole-branch architectural and integration review |
+| `diagnosis` | Investigates blockers and stalled loops |
+| `synthesizer` | Consolidates review findings into documentation |
+| `quickfix` | Handles trivial single-file fixes without planning |
 
 It is a port of [`superpowers-strigov-ver`](https://github.com/strigov/strigov-cc-plugins) from Claude Code to Orca: the same phased plans, authorization ledger, bounded review loops and family rule (writer ≠ reviewer family), with Orca's `worker-start` / `worker_done` replacing two ad-hoc transports.
 
@@ -34,9 +38,9 @@ git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov; cd $HOME\o
 .\install.ps1 -Check C:\path\to\repo      # read-only report; exit 1 on any WARN
 ```
 
-On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq); the GPT Pro bridge has a Windows build too, so the `strong` planning profile is available whenever its daemon is running (`orca-recipes.md` §7 has the Windows preflight).
+On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq). The ChatGPT Pro web bridge is supported as an explicit opt-in planner (`--planner pro`) when configured and running (`orca-recipes.md` §7 has the Windows preflight).
 
-Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI; unverified on native Windows — without it the implementer cascade starts at Codex Luna), `git`, `jq`, `python3`. The Pro planner additionally needs the `codex-chatgpt-web` launcher running in full-harness mode; without it the protocol uses the Opus → Sol planning pair automatically.
+Requirements: Orca ≥ 1.4.193 with orchestration enabled, `codex`, `claude`, `agy` (Antigravity CLI), `git`, `jq`, `python3`. See `skills/orca-dev/roles.md` for exact role assignments, fallback cascades, and effort levels.
 
 ## Use
 

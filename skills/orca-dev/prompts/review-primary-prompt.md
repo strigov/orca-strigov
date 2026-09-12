@@ -4,9 +4,9 @@ Use when the coordinator needs the primary review of the implementer's work on a
 
 ## Dispatch
 
-Role: `review-primary` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `review-primary` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-Per `../roles.md`: Claude Opus xhigh by default; Claude Fable xhigh on SECURITY / DATA_LOSS phases or in fused round 4 (the last before the cap); Codex Sol xhigh when Claude wrote the code or Opus is unavailable. The template stays model-agnostic.
+Model, effort, profile defaults, risk escalations (e.g. SECURITY/DATA_LOSS), and family substitutions are defined in `../roles.md`. The template stays model-agnostic.
 
 **A fresh Orca worker terminal every round — never re-inject into a previous reviewer's terminal.** A reviewer that remembers its own prior rounds anchors on them; the AUTHORIZED_CHANGE_LEDGER carries the round history instead.
 
@@ -110,7 +110,7 @@ What you run depends on the review round (given in Phase context):
 - Verify each ACCEPTED ledger item is fixed correctly in the new diff (see Follow-up review delta)
 - Run a test only when reading the code raises a specific doubt that no existing run answers — and then a focused test, never a package-wide suite. Name the doubt in your report.
 
-Every round: warnings or other noise in the implementer's reported test output are findings by themselves — test output should be pristine.
+Every round: assess warnings in test output for new material issues or violated requirements; stdout noise alone does not block approval unless it indicates a concrete defect, regression, or contract violation.
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 

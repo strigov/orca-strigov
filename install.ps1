@@ -123,7 +123,7 @@ if (-not (Test-Path -LiteralPath $src -PathType Container)) {
 foreach ($c in 'orca','codex','claude','agy','git') {
   $cmd = Get-Command $c -ErrorAction SilentlyContinue
   if ($cmd) { Write-Ok "${c}: $($cmd.Source)" }
-  elseif ($c -eq 'agy') { Write-Warn2 "agy (Antigravity CLI) not on PATH — the implementer cascade starts at Luna (roles.md); native Windows support of agy is unverified" }
+  elseif ($c -eq 'agy') { Write-Warn2 "agy (Antigravity CLI) not on PATH — the implementer cascade continues with its fallback (roles.md); native Windows support of agy is unverified" }
   else { Write-Warn2 "$c not on PATH" }
 }
 foreach ($c in 'python3','jq') {
@@ -271,8 +271,8 @@ if ($repos.Count -gt 0) {
 # codex-chatgpt-web ships a win32-x64 build (4.0.8 verified 2026-09-02); its daemon is `bun.exe … cli.js serve`.
 $bridgeUp = $false
 try { $bridgeUp = @(Get-CimInstance Win32_Process -Filter "Name='bun.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -match 'codex-chatgpt-web.*cli\.js serve' }).Count -gt 0 } catch { }
-if ($bridgeUp) { Write-Ok "codex-chatgpt-web bridge running (Pro planner available; preflight per orca-recipes.md §7 — run its doctor with CODEX_HOME cleared)" }
-else { Write-Info "codex-chatgpt-web bridge not running → planning profile 'standard' (Opus → Sol)" }
+if ($bridgeUp) { Write-Ok "codex-chatgpt-web bridge running (opt-in --planner pro available; preflight per orca-recipes.md §7 — run its doctor with CODEX_HOME cleared)" }
+else { Write-Info "codex-chatgpt-web bridge not running (opt-in --planner pro disabled; default planner is configured in roles.md)" }
 
 if ($script:nwarn -gt 0) { Write-Host "install.ps1: $($script:nwarn) warning(s)"; exit 1 }
 Write-Host "done."

@@ -1,18 +1,18 @@
 # Frontend Implementer Prompt (orca-dev)
 
-Use when dispatching a frontend-only phase (or a frontend-only task routed straight from triage) to the frontend implementer instead of the backend implementer. Frontend work is routed to Claude because it responds better to design nuance and the `frontend-design` skill lives on the Claude side.
+Use when dispatching a frontend-only phase (or a frontend-only task routed straight from triage) to the frontend implementer instead of the backend implementer.
 
 ## Dispatch
 
-Role: `frontend-implementer` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `frontend-implementer` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-Per `../roles.md`: Claude Opus xhigh for new UI (new page/component, visible redesign, visual rework), Claude Sonnet for simple tweaks (CSS change, copy edit, minor markup). The template itself stays model-agnostic.
+Model, effort, and profiles (`default` vs `light` tweaks) are defined in `../roles.md`. The template itself stays model-agnostic.
 
 The worker has NO session context. The prompt must be fully self-contained — include plan path + phase id + visual intent + any screenshot references + relevant existing files/components to follow.
 
 Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. Resolve it once per phase as `$(bin/sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path, exactly as for the backend implementer (see SKILL.md Step 3). Fix rounds append to the same file — never mint a new report path for round 2+.
 
-For follow-up rounds after the fused review (Step 4), re-inject the follow-up template into this worker's own terminal when it still exists (the thread already knows the plan and the phase); otherwise dispatch a fresh worker with the COMBINED BLOCKING list (the open ACCEPTED / PARTIALLY_ACCEPTED ledger items, merged by the coordinator from the primary review and the control review) and the same `[REPORT_FILE]`.
+**Implementer retention**: the coordinator retains the implementer's terminal across review and fix rounds until the phase is committed. For follow-up rounds after the fused review (Step 4), re-inject the follow-up template into this worker's own terminal when it still exists (the thread already knows the plan and the phase); otherwise dispatch a fresh worker with the COMBINED BLOCKING list (the open ACCEPTED / PARTIALLY_ACCEPTED ledger items, merged by the coordinator from the primary review and the control review) and the same `[REPORT_FILE]`.
 
 ## First-round prompt template
 

@@ -8,7 +8,7 @@ Role: `plan-reviewer` — launch recipe, model and effort come from `../roles.md
 
 **Read-only: no writes.** The reviewer must not touch the plan file. Revisions go back to the plan writer (`./plan-writer-prompt.md` Mode B) through the ledger — that separation is what makes the review independent. The only file this worker writes is `[REPORT_FILE]`.
 
-**Every round is a FRESH Orca worker terminal — never re-inject into a previous reviewer's terminal.** Reviewer freshness is a bias decision, exactly as for the Step 4.2 control review: a reviewer that remembers its own prior rounds anchors on them. The AUTHORIZED_CHANGE_LEDGER, not thread memory, carries the round history. Rounds 2+ use the follow-up template below. Round 1 may be served by Claude Fable xhigh (`strong` profile) or Codex Sol max, and rounds 2+ by Codex Sol max (see `../roles.md`) — the template is model-agnostic and must work for either.
+**Every round is a FRESH Orca worker terminal — never re-inject into a previous reviewer's terminal.** Reviewer freshness is a bias decision, exactly as for the Step 4.2 control review: a reviewer that remembers its own prior rounds anchors on them. The AUTHORIZED_CHANGE_LEDGER, not thread memory, carries the round history. Rounds 2+ use the follow-up template below. Role, profile, model, and effort are defined in `../roles.md` — the template is model-agnostic and must work for any authorized reviewer.
 
 **Effort is never `ultra` unless the user EXPLICITLY asked for ultra in their own words.** Do not propose ultra yourself — not as a question, not as a recommendation.
 
@@ -21,7 +21,7 @@ Do NOT paste the full plan text in any round — always point at the file; the w
 ```
 REVIEW MODE — read-only. Do not modify any file except your report file. If you find yourself wanting to edit the plan, report the finding instead.
 
-You are the plan-review stage of orca-dev: a fresh worker reviewing an implementation plan written by the plan writer. Review it skeptically for correctness, completeness, and risk.
+You are the plan-review stage of orca-dev: a fresh worker reviewing an implementation plan written by the plan writer. Review it skeptically for correctness, completeness, consistency, and simplicity.
 
 ## Plan file (authoritative — read it)
 
@@ -59,7 +59,9 @@ Use exactly one class per finding:
   - stated requirement missing/contradicted;
   - guaranteed implementation/test failure;
   - material data-loss/security/regression risk;
-  - public/API contract required by this plan is broken.
+  - public/API contract required by this plan is broken;
+  - semantic defect (unmatched Consumes/Produces, unaddressed Global Constraints, missing phase risk);
+  - material simplicity blocker (unnecessary complexity, speculative generality).
 
 - `REGRESSION_FROM_AUTHORIZED_FIX` — introduced by an accepted fix in this loop.
 
@@ -71,7 +73,7 @@ Use exactly one class per finding:
 
 ## Review stages
 
-**Stage A — Requirements compliance.** Only Stage A can produce `MUST_FIX_NOW`. The four Stage A criteria:
+**Stage A — Requirements compliance.** Only Stage A (and material simplicity/semantic blockers) can produce `MUST_FIX_NOW`. The Stage A criteria:
 
 - a stated requirement is missing or contradicted;
 - the plan contradicts an accepted repo constraint;
@@ -82,16 +84,29 @@ A plan step that names a function, module, path, or CLI flag which does not exis
 
 If the frontmatter marks phases with a shared `parallel_group`, additionally verify: their `## Files` sets are fully disjoint, and neither phase uses anything from the other beyond contracts frozen in `## Contracts`. A violated parallel_group is `MUST_FIX_NOW` (`GUARANTEED_FAIL` — the phases are built concurrently in separate worktrees and merged; overlap or implementation dependency guarantees a broken merge). A group with 3+ phases is also `MUST_FIX_NOW` (the coordinator supports exactly 2).
 
-**Stage B — Design hardening suggestions.** Report as `DEFER` by default. Stage B candidates include:
+**Stage B — Semantic consistency.** Verify cross-phase contracts and constraints:
+- `## Global Constraints`: ensure all items are explicitly satisfied across phases or marked `None declared in the spec.`
+- `Consumes:` / `Produces:` blocks: verify every phase's `Consumes:` references a contract ID / output produced by an earlier phase or existing codebase; verify no dangling dependencies or contract mismatches.
+- `risk:`: verify every phase in frontmatter declares a valid `risk:` (`none | SECURITY | DATA_LOSS | REGRESSION`).
 
+**Stage C — Simplicity & YAGNI review.**
+- Check for unwarranted generality, future-proofing ("just in case" features), duplicate mechanisms, unnecessary components/phases/states/agents/tests.
+- A material simplicity blocker MUST provide:
+  - `unnecessary_cost_or_risk: <explanation>`
+  - `simpler_alternative: <concrete simpler approach>`
+  - `preserved_requirements: <how simpler alternative satisfies all stated requirements>`
+  - Exact section references in the plan.
+- If simplicity concerns are material, report `SIMPLICITY: CHANGES_REQUESTED` and add `MUST_FIX_NOW` items. If purely advisory, report `SIMPLICITY: OK` and place any suggestions in `DEFER`.
+
+**Stage D — Design hardening suggestions.** Report as `DEFER` by default. Candidates include:
 - extra guards;
 - additional diagnostics;
 - additional edge cases;
-- alternative architecture;
+- alternative architecture without immediate cost/risk;
 - improved UX;
-- broader test coverage.
+- broader test coverage beyond acceptance criteria.
 
-If a Stage B suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the coordinator treats the item as `DEFER`.
+If a suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the report is malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER.
 
 ## Tooling
 
@@ -99,7 +114,15 @@ Everything you need is a shell command (read files, `rg`, `git show`, `git statu
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `APPROVED` | `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold. If `CHANGES_REQUESTED`, after line 1 emit:
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `APPROVED` | `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold.
+2. The report MUST contain a mandatory `## Simplicity` section:
+```
+## Simplicity
+SIMPLICITY: OK | CHANGES_REQUESTED
+```
+NOTE: `APPROVED` on line 1 is FORBIDDEN if `SIMPLICITY: CHANGES_REQUESTED`.
+
+3. If `CHANGES_REQUESTED`, emit:
 
 ```
 BLOCKING:
@@ -120,11 +143,11 @@ REJECTED_BY_SCOPE:
 - ...
 ```
 
-Only `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` items are valid in BLOCKING. Findings classified as `DEFER`, `NIT`, or `REJECTED_BY_SCOPE` go into their own section below; do NOT promote them to BLOCKING. If nothing blocks but you have DEFER / NIT / REJECTED_BY_SCOPE items, return `APPROVED` on line 1 and still emit those sections (omit any section that is empty).
+Only `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` items are valid in BLOCKING. Findings classified as `DEFER`, `NIT`, or `REJECTED_BY_SCOPE` go into their own section below; do NOT promote them to BLOCKING. If nothing blocks but you have DEFER / NIT / REJECTED_BY_SCOPE items, return `APPROVED` on line 1, `SIMPLICITY: OK`, and still emit those sections (omit any section that is empty).
 
 Each BLOCKING item starts with `class: <MUST_FIX_NOW | REGRESSION_FROM_AUTHORIZED_FIX>` so the coordinator can map your findings into the AUTHORIZED_CHANGE_LEDGER mechanically.
 
-2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
+4. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
 orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the same token>" --body "<3 sentences: what you did, what you found, what is left>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome <succeeded|failed> --report-path "[REPORT_FILE]" --files-modified "<comma-separated paths you changed; omit the flag if none>" --json
 
@@ -164,7 +187,7 @@ Re-read the whole plan for coherence, but your blocker authority is narrower tha
 For any NEW issue not tied to an open ledger item:
 
 - classify it as `DEFER` unless it clears the high-materiality bar — guaranteed implementation/test failure, data-loss/security risk, regression of an existing public contract, or direct contradiction of a stated user requirement / failure of a phase acceptance criterion.
-- For every new `MUST_FIX_NOW`, the BLOCKING line MUST include `new_blocker_materiality: <which high-materiality category and why>`. Without that field the coordinator treats the item as `DEFER` and will not act on it.
+- For every new `MUST_FIX_NOW`, the BLOCKING line MUST include `new_blocker_materiality: <which high-materiality category and why>`. Without that field, the report is malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER.
 - If all prior ledger blockers are fixed and you found only new non-critical issues, return `APPROVED` on line 1 and emit any `DEFER` / `NIT` items in their respective sections (below the empty BLOCKING block).
 
 **Authorized delta first.** Inspect the authorized delta — the open ledger items plus the plan-file sections the writer reported as edited — before scanning the wider plan. You may inspect surrounding context to validate that delta, but only escalate older, unrelated issues to `MUST_FIX_NOW` if they clear the high-materiality bar above. Latent issues outside the delta default to `DEFER`.

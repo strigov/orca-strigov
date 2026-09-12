@@ -4,7 +4,7 @@ Use between implementation (Step 3, or a Step 4 fix round) and the fused review.
 
 ## Dispatch
 
-Role: `gate` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Gemini 3.7 Flash High via `agy`). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `gate` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
 This worker runs ONLY when the deterministic `bin/verify-gate` script returned red or found no `verify:` commands in the plan frontmatter; the script's output is passed in the `## Script result` section below.
 

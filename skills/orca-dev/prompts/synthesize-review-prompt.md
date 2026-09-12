@@ -4,7 +4,7 @@ Use after a fused review converged in 2+ rounds (or the user accepted at an esca
 
 ## Dispatch
 
-Role: `synthesizer` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Gemini 3.7 Flash High via `agy`). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `synthesizer` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
 This is mechanical consolidation, not review: the worker writes exactly one file in the repo (`docs/reviews/<slug>-<phase-id>.md`) plus its report file, and touches nothing else.
 

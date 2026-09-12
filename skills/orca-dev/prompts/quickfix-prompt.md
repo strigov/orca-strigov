@@ -4,7 +4,7 @@ Use for trivial single-file changes (<~20 lines, no architectural judgment) rout
 
 ## Dispatch
 
-Role: `quickfix` — launch recipe, model and effort come from `../roles.md` (never hardcode a model here; per roles.md this is Gemini 3.7 Flash High via `agy`, falling back to Codex Luna max). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
+Role: `quickfix` — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the filled template to a scratch file, creates an Orca Task whose spec is that text, and attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
 There is no plan file: the task text below IS the spec. If the "trivial" task turns out non-trivial, the worker reports `BLOCKED` and the coordinator re-runs it through the full protocol.
 
