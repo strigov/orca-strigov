@@ -36,6 +36,8 @@ The deterministic `bin/verify-gate` script already ran on this tree and either r
 
 Discover the commands from repo config (package.json scripts, Makefile, pyproject, CI config) — do not guess exotic tooling.
 
+Read `../runtime-contracts.md` C3 on demand before a long check. Use the same runner as the deterministic gate for HEAD and BASE, with one owner, full logs and the plan's bounded deadline/cancel/resource policy. Runner request/status/log artifacts in the existing plan workspace are authorized verification output. A missing/unknown result or unverified cleanup is incomplete verification; preserve the BASE worktree if its tree is unknown. No model timer, Schedule task, second log observer or automatic kill from no-progress. Use bounded failure tails and durable result/log paths in the report, obey the phase's repeat budget and keep the live preamble's heartbeat/lifecycle obligations.
+
 ## Inherited-failure rule
 
 If a failure looks pre-existing (unrelated to the touched files), verify by running the same command at the base commit in a throwaway checkout: `git worktree add <tmpdir> <base-sha>`, run there, `git worktree remove --force <tmpdir>`. NEVER `git stash`, `git checkout` or `git reset` on this tree — the implementation is uncommitted and would be destroyed (and `stash` would not even give you the base: new files stay in place). If the throwaway checkout is impractical, say so and classify by reading the failing test's relation to the diff. Inherited failures do NOT fail the gate: report them as a note. Only failures introduced or touched by this phase's diff produce `GATE_FAIL`.

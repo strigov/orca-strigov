@@ -126,27 +126,47 @@ if ($cmds.Count -eq 0) {
 
 # --- helpers -----------------------------------------------------------------------------
 $utf8 = New-Object Text.UTF8Encoding($false)
+$workspace = & (Join-Path $PSScriptRoot 'sdd-workspace.ps1') $plan
+if ($LASTEXITCODE -ne 0) { exit 3 }
+$runner = Join-Path $PSScriptRoot 'run-check.ps1'
+$runnerShell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+function Read-LogTail([string]$file) {
+  $stream = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite')
+  try {
+    [void]$stream.Seek([Math]::Max(0, $stream.Length - 65536), 'Begin')
+    $buffer = New-Object byte[] 65536; $count = $stream.Read($buffer, 0, $buffer.Length)
+    return ((@(($utf8.GetString($buffer, 0, $count)) -split "\r?\n") | Select-Object -Last 200) -join "`n")
+  } finally { $stream.Dispose() }
+}
 function Run-Command([string]$cmd, [string]$cwd) {
-  # run $cmd in a child PowerShell (stdin = empty file), return @{ rc; out } with stdout+stderr merged
-  $script = "`$global:LASTEXITCODE = 0`n`$ErrorActionPreference = 'Continue'`n" + $cmd + "`n`$__ok = `$?`nif (`$LASTEXITCODE) { exit `$LASTEXITCODE }`nif (-not `$__ok) { exit 1 }`nexit 0`n"
+  $id = 'gate-' + [guid]::NewGuid().ToString('N')
+  $checks = Join-Path $workspace 'checks'; [void][IO.Directory]::CreateDirectory($checks)
+  $runDir = Join-Path $checks $id; $specFile = $runDir + '.json'
+  $spec = @{schema_version=1; run_id=$id; owner=@{kind='local'; id=$id}; cwd=$cwd; command=$cmd; shell=$shell; run_dir=$runDir
+    timeout_seconds=$null; cancel_grace_seconds=2; no_progress_seconds=$null}
+  [IO.File]::WriteAllText($specFile, ($spec | ConvertTo-Json -Depth 8), $utf8)
+  $script = "& '" + $runner.Replace("'", "''") + "' run '" + $specFile.Replace("'", "''") + "'; exit `$LASTEXITCODE"
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   $p = $null
   try {
     $psi = New-Object Diagnostics.ProcessStartInfo
-    $psi.FileName = $shell
+    $psi.FileName = $runnerShell
     $psi.Arguments = "-NoProfile -NonInteractive -NoLogo -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc"
-    $psi.UseShellExecute = $false; $psi.WorkingDirectory = $cwd
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.WorkingDirectory = $cwd
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = $utf8; $psi.StandardErrorEncoding = $utf8
     $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
     $p = [Diagnostics.Process]::Start($psi)
     $p.StandardInput.Close()
-    $sb = New-Object Text.StringBuilder
     $errTask = $p.StandardError.ReadToEndAsync()
-    $outText = $p.StandardOutput.ReadToEnd()
+    [void]$p.StandardOutput.ReadToEnd() # bounded runner receipt; command streams are durable files
     $p.WaitForExit()
-    [void]$sb.Append($outText); [void]$sb.Append($errTask.Result)
-    return @{ rc = $p.ExitCode; out = $sb.ToString() }
+    $resultFile = Join-Path $runDir 'result.json'
+    if (-not (Test-Path -LiteralPath $resultFile)) { return @{rc=125; out=$errTask.Result; valid=$false; run_dir=$runDir} }
+    $result = [IO.File]::ReadAllText($resultFile, $utf8) | ConvertFrom-Json
+    $valid = $result.state -eq 'exited' -and $result.cleanup_verified -and $result.logs_complete -and $null -ne $result.exit_code
+    $out = (Read-LogTail $result.stdout_log) + "`n" + (Read-LogTail $result.stderr_log)
+    return @{rc=$(if ($valid) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$result.exit_code), 0) } else { 125 }); out=$out; valid=$valid; run_dir=$runDir}
   } finally { if ($p) { $p.Dispose() } }
 }
 function Lines([string]$s) {  # like reading lines: a trailing newline does not produce an empty last line
@@ -195,13 +215,31 @@ function Missing-Tool([int]$rc, [string]$out, [string]$cmd) {
 }
 $depsLinked = $false
 $baseOut = ''
+function Remove-BaseWorktree([string]$wt) {
+  $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+  $full = [IO.Path]::GetFullPath($wt)
+  if (-not $full.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($full) -notmatch '^verify-gate-base\.[a-f0-9]{8}$') { throw 'unowned base cleanup path' }
+  # Detach links themselves before Git cleanup; never recurse through a junction.
+  $pending = New-Object 'System.Collections.Generic.Stack[string]'; $pending.Push($full)
+  while ($pending.Count) {
+    $dir = $pending.Pop(); $entry = Get-Item -Force -LiteralPath $dir
+    if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($dir); continue }
+    foreach ($item in Get-ChildItem -Force -LiteralPath $dir) {
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName) } else { [IO.File]::Delete($item.FullName) }
+      } elseif ($item.PSIsContainer) { $pending.Push($item.FullName) }
+    }
+  }
+  & git worktree remove -f $full *> $null
+  if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("verify-gate: retained base worktree: $full") }
+}
 function Run-AtBase([string]$cmd) {  # returns rc; 125 = no usable base worktree; sets $script:baseOut
   $script:baseOut = ''
   $wt = Join-Path ([IO.Path]::GetTempPath()) ('verify-gate-base.' + [guid]::NewGuid().ToString('N').Substring(0, 8))
   & git worktree add -q --detach $wt $base *> $null
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $wt -PathType Container)) {
     [Console]::Error.WriteLine("verify-gate: cannot create a worktree for base $base7")
-    Remove-Item -LiteralPath $wt -Recurse -Force -ErrorAction SilentlyContinue; return 125
+    return 125
   }
   $links = @()
   foreach ($dep in 'node_modules', '.venv', 'venv') {
@@ -212,9 +250,10 @@ function Run-AtBase([string]$cmd) {  # returns rc; 125 = no usable base worktree
   }
   $r = Run-Command $cmd $wt
   $script:baseOut = $r.out
+  Rep ("    BASE logs: " + $r.run_dir)
+  if (-not $r.valid) { Rep "    BASE runner incomplete; retained worktree: $wt"; return 125 }
   foreach ($l in $links) { try { [IO.Directory]::Delete($l) } catch { } }   # drop the junction, never its target
-  & git worktree remove -f $wt *> $null
-  if (Test-Path -LiteralPath $wt) { Remove-Item -LiteralPath $wt -Recurse -Force -ErrorAction SilentlyContinue }
+  Remove-BaseWorktree $wt
   return $r.rc
 }
 function Signature([string]$out) {  # last 8 non-empty lines, ANSI/paths/durations/numbers normalized
@@ -243,6 +282,11 @@ foreach ($c in $cmds) {
   $label = $c.Replace("`r`n", ' ').Replace("`n", ' ')
   $r = Run-Command $c $root
   $rc = $r.rc; $out = $r.out
+  Rep ("    HEAD logs: " + $r.run_dir)
+  if (-not $r.valid) {
+    $j++; if ($status -eq 0) { $status = 4 }
+    Rep "JUDGMENT $label  (runner incomplete; inspect durable status/result)"; continue
+  }
   if ($rc -eq 0) { $p++; Rep "PASS $label"; continue }
   $tailOut = Indent-Tail $out 40
   if (Missing-Tool $rc $out $c) {

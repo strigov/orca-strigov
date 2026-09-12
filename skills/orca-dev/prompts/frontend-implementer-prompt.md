@@ -53,7 +53,7 @@ Do not guess on visuals. A wrong mockup is worse than a clarifying question.
 2. Cover empty / loading / error states explicitly. Do not ship a "happy path only" UI.
 3. Match the existing component and design patterns in the repo (tokens, primitives, utilities).
 4. Write tests where they belong for this stack (component tests, snapshot / visual if established, e2e only if the plan asks).
-5. Run tests / typecheck / linters; confirm they pass. Long-running commands (full test suites, builds): run them in ONE shell call with a generous timeout and let it block. If your tool forces a background run, wait inside a single shell command (`Start-Sleep 300` / `sleep 300`, then check the process) — never with your own timer/schedule tool and never with repeated short reads of the log: every wake-up is a full-context model call (observed 2026-09-02: ~13 calls per minute for 40 minutes of "waiting", five-hour quota gone).
+5. Run the meaningful bounded tests / typecheck / linters required by the phase. For a long command, read `../runtime-contracts.md` C3 on demand and use its blocking runner, explicit deadline/cancel policy, full logs and declared shared resource. Keep one owner: no model timer, Schedule task, blind PID loop or second observer. If a command terminal is necessary, use the verified C3 terminal wait. No-progress is diagnostic; apply bounded diagnosis and preserve the live preamble's heartbeat/lifecycle obligations. Report real command/result/log paths and cleanup limitations; repeat an unchanged check only for a new hypothesis or required replay within budget.
 6. Self-review (see below) and fix issues before reporting.
 7. Write your full report to [REPORT_FILE], then send exactly one `worker_done` (see Reporting below).
 

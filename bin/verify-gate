@@ -54,12 +54,14 @@
 # then one line per command: "<PASS|FAIL|INHERITED|JUDGMENT> <command>" and, for
 # FAIL/JUDGMENT, the last 40 lines of its output indented.
 set -u
+BIN=$(cd "$(dirname "$0")" && pwd)
 plan="${1:-}"; base="${2:-}"; root="${3:-$(pwd)}"
 [ -z "$plan" ] || [ -z "$base" ] && { echo "usage: verify-gate <plan-file> <base-sha> [repo-root]" >&2; exit 3; }
 [ -f "$plan" ] || { echo "plan file not found: $plan" >&2; exit 3; }
 command -v python3 >/dev/null 2>&1 || { echo "verify-gate: python3 is required (frontmatter parsing) but not found in PATH" >&2; exit 3; }
 case "$plan" in /*) ;; *) plan="$(pwd)/$plan" ;; esac   # resolve before cd into [repo-root]
 cd "$root" || { echo "verify-gate: cannot cd to repo root: $root" >&2; exit 3; }
+root=$(pwd -P)
 
 # --- extract `verify:` list from frontmatter (block or flow style) -------------
 # (function + heredoc, not heredoc inside $(...): macOS bash 3.2 cannot parse that)
@@ -140,6 +142,54 @@ if [ ! -s "$cmdfile" ]; then
   echo "NO_COMMANDS"; echo "verify: 0 cmd(s) | passed: 0 | failed: 0 | inherited: 0 | judgment: 0"; exit 2
 fi
 
+workspace=$(bash "$BIN/sdd-workspace" "$plan") || exit 3
+# Legacy commands explicitly have no deadline; new policy metadata is added in C4.
+# Full streams stay on disk; only bounded tails enter the gate's classifier.
+run_command() {
+  local spec_file
+  spec_file=$(make_spec "$1" "$2") || return 125
+  run_dir=${spec_file%.json}
+  bash "$BIN/run-check" run "$spec_file" >/dev/null
+  runner_ok=0
+  read_result "$run_dir" valid >/dev/null && runner_ok=1
+  run_out=$(read_result "$run_dir" tail)
+  read_result "$run_dir" code
+  return $?
+}
+make_spec() {
+python3 - "$workspace" "$1" "$2" <<'PY'
+import json, os, shutil, sys, uuid
+ws,command,cwd=sys.argv[1:]
+rid='gate-'+uuid.uuid4().hex
+checks=os.path.join(ws,'checks'); os.makedirs(checks,exist_ok=True)
+rd=os.path.join(checks,rid); path=rd+'.json'
+s=dict(schema_version=1, run_id=rid, owner=dict(kind='local',id=rid),
+       cwd=cwd,command=command,shell=shutil.which('bash'),run_dir=rd,
+       timeout_seconds=None,cancel_grace_seconds=2,no_progress_seconds=None)
+with open(path,'x',encoding='utf-8') as f: json.dump(s,f,ensure_ascii=False)
+print(path)
+PY
+}
+read_result() {
+python3 - "$1" "$2" <<'PY'
+import json,os,sys
+rd,mode=sys.argv[1:]
+try:
+    with open(os.path.join(rd,'result.json'),encoding='utf-8') as f: s=json.load(f)
+except (OSError,ValueError): sys.exit(125)
+valid=s['state']=='exited' and s['cleanup_verified'] and s['logs_complete'] and s['exit_code'] is not None
+if mode=='valid': sys.exit(0 if valid else 125)
+if mode=='code':
+    rc=s['exit_code'] if valid else 125
+    sys.exit(min(255,rc if rc>=0 else 128-rc))
+for name in ('stdout.log','stderr.log'):
+    with open(os.path.join(rd,name),'rb') as f:
+        size=f.seek(0,2); f.seek(max(0,size-65536))
+        text=f.read(65536).decode('utf-8',errors='replace')
+    print('\n'.join(text.splitlines()[-200:]))
+PY
+}
+
 n=0; p=0; f=0; i=0; j=0; status=0; report=""
 # paths the phase changed (tracked + untracked), used to decide whether a base
 # failure can honestly be called inherited
@@ -187,7 +237,14 @@ run_at_base() {  # $1 = command ; returns the command's exit code at BASE (125 =
     echo "verify-gate: cannot enter base worktree $wt" >&2
     git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"; return 125
   fi
-  base_out=$( cd "$wt" && bash -c "$1" </dev/null 2>&1 ); local rc=$?
+  run_command "$1" "$wt"; local rc=$?
+  base_out=$run_out
+  report+="    BASE logs: $run_dir"$'\n'
+  if [ "$runner_ok" -ne 1 ]; then
+    # An unknown tree may still use this worktree. Preserve it for diagnosis.
+    report+="    BASE runner incomplete; retained worktree: $wt"$'\n'
+    return 125
+  fi
   git worktree remove -f "$wt" >/dev/null 2>&1 || rm -rf "$wt"
   return $rc
 }
@@ -217,7 +274,13 @@ PY
 while IFS= read -r -d '' c || [ -n "$c" ]; do
   [ -z "$c" ] && continue
   n=$((n+1)); label=$(printf '%s' "$c" | tr '\n' ' ')
-  out=$(bash -c "$c" </dev/null 2>&1); rc=$?
+  run_command "$c" "$root"; rc=$?; out=$run_out
+  report+="    HEAD logs: $run_dir"$'\n'
+  if [ "$runner_ok" -ne 1 ]; then
+    j=$((j+1)); [ $status -eq 0 ] && status=4
+    report+="JUDGMENT $label  (runner incomplete; inspect durable status/result)"$'\n'
+    continue
+  fi
   if [ $rc -eq 0 ]; then p=$((p+1)); report+="PASS $label"$'\n'; continue; fi
   tail_out=$(printf '%s\n' "$out" | tail -40 | sed 's/^/    /')
   if missing_tool "$rc" "$out" "$c"; then

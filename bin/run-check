@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# C3: one blocking owner; policy and exact commands arrive as a JSON file.
+set -eu
+BIN=$(cd "$(dirname "$0")" && pwd)
+exec python3 "$BIN/lib/run_check.py" "$@"

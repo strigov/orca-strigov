@@ -100,6 +100,10 @@ Before the first dispatch of a session run `install.sh --check <repo>` (read-onl
 
 ## 4. Waiting
 
+For a worker-owned long shell command, load [runtime-contracts.md](runtime-contracts.md#c3--one-local-command-owner) C3 on demand. Use `run-check run SPEC_JSON` (native Windows: `run-check.ps1`) and let the shell block. Its owner receives full log/result paths, explicit deadline/cancel policy, diagnostic progress and an optional shared local resource key. `run-check wait` observes a new diagnostic state or completion; it never transfers ownership. The coordinator receives significant findings from the owner rather than observing the same log. Silence/no-progress permits bounded diagnosis, not a kill, new writer or resource takeover. Do not add Schedule/model timers, monitoring workers or an Orca process API. A required command terminal uses the verified `orca terminal wait --terminal <handle> --for exit --timeout-ms ...`; this waits for that terminal, not an arbitrary PID. Preserve heartbeat and settlement duties from the live preamble.
+
+The following wait is for **worker settlement**, not for a test process:
+
 ```bash
 orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 540000 --json
 ```

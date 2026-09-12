@@ -10,15 +10,17 @@ phases:
     base: d522e2656b55f0a67e28b4a1fc2e3689e7cd3de0
     scope: "Согласованная политика ролей, жизненного цикла, простоты плана и поставки"
     status: done
-    commits: 'd522e26..'
+    commits: 'd522e2656b55f0a67e28b4a1fc2e3689e7cd3de0..9f2e95b8a6abb489a02cce1a698c3aa2e07b7934'
     risk: DATA_LOSS
     verify:
       - 'git diff --check'
       - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
       - powershell.exe -NoProfile -Command '$errs = $null; $toks = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location).Path "install.ps1"), [ref]$toks, [ref]$errs); if ($errs.Count -gt 0) { $errs | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 } else { [Console]::WriteLine("ZERO_ERRORS"); exit 0 }'
   - id: Ф2
+    base: 9f2e95b8a6abb489a02cce1a698c3aa2e07b7934
     scope: "Один владелец длительной команды, полные логи, остановка и общая блокировка ресурса"
-    status: pending
+    status: done
+    commits: '9f2e95b..'
     risk: DATA_LOSS
     verify:
       - 'python -B -m unittest discover -s tests -p test_runner.py'
@@ -48,9 +50,8 @@ phases:
       - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
       - 'git diff --check'
 verify:
-  - 'git diff --check'
-  - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
-  - powershell.exe -NoProfile -Command '$errs = $null; $toks = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location).Path "install.ps1"), [ref]$toks, [ref]$errs); if ($errs.Count -gt 0) { $errs | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 } else { [Console]::WriteLine("ZERO_ERRORS"); exit 0 }'
+  - "python -B -m unittest discover -s tests -p test_runner.py"
+  - "git diff --check"
 ---
 
 ## Goal
