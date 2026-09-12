@@ -51,6 +51,7 @@ public sealed class CheckJob : IDisposable {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool MoveFileEx(string from, string to, uint flags);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ReplaceFile(string to, string from, string backup, uint flags, IntPtr exclude, IntPtr reserved);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern uint GetFinalPathNameByHandle(IntPtr file, StringBuilder path, uint length, uint flags);
   IntPtr job, process;
   public uint Pid { get; private set; }
@@ -60,7 +61,26 @@ public sealed class CheckJob : IDisposable {
     if (path.StartsWith(@"\\?\")) return path;
     return path.StartsWith(@"\\") ? @"\\?\UNC\" + path.Substring(2) : @"\\?\" + path;
   }
-  public static void Replace(string from, string to) { Check(MoveFileEx(LongPath(from), LongPath(to), 9)); }
+  public static void Replace(string from, string to, int retryMilliseconds) {
+    from = LongPath(from); to = LongPath(to);
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    while (true) {
+      // ReplaceFile permits existing readers to keep the old complete record.
+      // No IGNORE_ACL/MERGE flags; WRITE_THROUGH is unsupported by this API.
+      if (ReplaceFile(to, from, null, 0, IntPtr.Zero, IntPtr.Zero)) return;
+      int error = Marshal.GetLastWin32Error();
+      if (error == 2) { // First publication only; never overwrite a raced-in file.
+        if (MoveFileEx(from, to, 8)) return;
+        error = Marshal.GetLastWin32Error();
+      }
+      long remaining = retryMilliseconds - watch.ElapsedMilliseconds;
+      // A short-lived incompatible handle can deny either file. Keep the same
+      // temp bytes; permanent errors and partial ReplaceFile errors fail closed.
+      if ((error != 5 && error != 32) || remaining <= 0)
+        throw new Win32Exception(error, "atomic replacement failed (Win32 " + error + "); temporary path: " + from);
+      System.Threading.Thread.Sleep((int)Math.Min(10, remaining));
+    }
+  }
   public static string CanonicalDirectory(string path) {
     var sa = new SA { length = Marshal.SizeOf(typeof(SA)) };
     IntPtr h = CreateFile(LongPath(path), 0, 7, ref sa, 3, 0x02000000, IntPtr.Zero);
@@ -142,12 +162,41 @@ function Safe-Path([string]$path) {
   }
   return $full
 }
-function Read-Json([string]$path) { return ([IO.File]::ReadAllText((Safe-Path $path), $utf8) | ConvertFrom-Json) }
-function Write-Json([string]$path, $value) {
+function Read-Json([string]$path, [Diagnostics.Stopwatch]$watch = $null, $timeout = $null) {
+  # Atomic replacement briefly holds DELETE access. Readers must share it,
+  # pinning the opened complete record without blocking the owner's publisher.
+  $opening = [Diagnostics.Stopwatch]::StartNew(); $notified = $false
+  while ($true) {
+    try {
+      $stream = [IO.File]::Open((Safe-Path $path), 'Open', 'Read', ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+      break
+    } catch [IO.IOException] {
+      # ReplaceFile can expose the new name before its exclusive handle closes.
+      # Retry only sharing violations; ACL, missing-file and parse errors stand.
+      $remaining = 250 - $opening.Elapsed.TotalMilliseconds
+      if ($watch -and $null -ne $timeout) { $remaining = [Math]::Min($remaining, ($timeout - $watch.Elapsed.TotalSeconds) * 1000) }
+      if (($_.Exception.GetBaseException().HResult -band 65535) -ne 32 -or $remaining -lt 1) { throw }
+      if (-not $notified) { Write-Verbose 'run-check: JSON open sharing retry (Win32 32)'; $notified = $true }
+      Start-Sleep -Milliseconds ([int][Math]::Min(10, [Math]::Floor($remaining)))
+    }
+  }
+  $reader = $null
+  try {
+    $reader = New-Object IO.StreamReader($stream, $utf8)
+    return ($reader.ReadToEnd() | ConvertFrom-Json)
+  } finally { if ($reader) { $reader.Dispose() } else { $stream.Dispose() } }
+}
+function Write-Json([string]$path, $value, [Diagnostics.Stopwatch]$watch = $null, $timeout = $null) {
   $path = Safe-Path $path
   $tmp = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
   [IO.File]::WriteAllText($tmp, ($value | ConvertTo-Json -Depth 15 -Compress), $utf8)
-  [CheckJob]::Replace($tmp, $path)
+  # Never add a retry allowance beyond the run deadline (or to standalone CLI).
+  $retry = 0
+  if ($watch) {
+    $retry = 250
+    if ($null -ne $timeout) { $retry = [int][Math]::Max(0, [Math]::Min(250, [Math]::Floor(($timeout - $watch.Elapsed.TotalSeconds) * 1000))) }
+  }
+  [CheckJob]::Replace($tmp, $path, $retry)
 }
 function Json($v) { return ($v | ConvertTo-Json -Depth 15 -Compress) }
 function Equal-Json($a, $b) {
@@ -180,11 +229,11 @@ function Tree-Clear($state) {
   if ($state.supervisor.host -cne [Environment]::MachineName) { return $false }
   return [CheckJob]::Probe($state.tree.name) -eq 0
 }
-function Observe([string]$runDir) {
+function Observe([string]$runDir, [Diagnostics.Stopwatch]$watch = $null, $timeout = $null) {
   $path = Join-Path $runDir 'result.json'
   if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $runDir 'status.json' }
   if (-not (Test-Path -LiteralPath $path)) { return [pscustomobject]@{ state = 'unknown'; reason = 'initializing-or-lost-owner'; run_dir = $runDir } }
-  $state = Read-Json $path
+  $state = Read-Json $path $watch $timeout
   if ($state.state -in @('running', 'waiting-resource') -and (Alive $state.supervisor) -ne $true) {
     $state.state = 'unknown'; $state.reason = 'owner-unverifiable-or-exited'; $state.exit_code = $null
     $state.logs_complete = $false; $state.cleanup_verified = Tree-Clear $state
@@ -244,7 +293,7 @@ function Resource-Path($spec) {
   [void][IO.Directory]::CreateDirectory($root)
   return Join-Path $root ($key + '.json')
 }
-function Claim($path, $binding) {
+function Claim($path, $binding, [Diagnostics.Stopwatch]$watch = $null, $timeout = $null) {
   if (-not $path) { return $true }
   [void](Safe-Path $path)
   try {
@@ -258,13 +307,13 @@ function Claim($path, $binding) {
     try {
       try { $taken = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $taken = $true }
       if (-not $taken) { return $false }
-      $previous = Read-Json $path
-      $old = Read-Json (Join-Path $previous.run_dir 'status.json')
+      $previous = Read-Json $path $watch $timeout
+      $old = Read-Json (Join-Path $previous.run_dir 'status.json') $watch $timeout
       if ($old.run_id -cne $previous.run_id -or -not (Equal-Json $old.owner $previous.owner) -or (Alive $old.supervisor) -ne $false) { return $false }
       $final = Join-Path $previous.run_dir 'result.json'
-      if (Test-Path -LiteralPath $final) { $old = Read-Json $final }
+      if (Test-Path -LiteralPath $final) { $old = Read-Json $final $watch $timeout }
       if ($old.cleanup_verified -ne $true -and -not (Tree-Clear $old)) { return $false }
-      if (Equal-Json (Read-Json $path) $previous) { [IO.File]::Delete((Safe-Path $path)) }
+      if (Equal-Json (Read-Json $path $watch $timeout) $previous) { [IO.File]::Delete((Safe-Path $path)) }
     } catch { } finally { if ($taken) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
     return $false
   }
@@ -290,7 +339,7 @@ function Run($spec) {
     duration_seconds=0; exit_code=$null; state='waiting-resource'; reason=$null; tree=$null; cleanup_verified=$false; logs_complete=$false
     stdout_log=(Join-Path $r 'stdout.log'); stderr_log=(Join-Path $r 'stderr.log'); timeout_seconds=$spec.timeout_seconds; resource_lock=$null
     meaningful_progress='unknown'; output_activity=$false; stalled=$false; diagnostic_events=0 }
-  Write-Json (Join-Path $r 'status.json') $st
+  Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
   $lock = $null; $claimed = $false; $job = $null; $reason = $null; $stopAt = $null; $forcedAt = $null
   $progress = $null; $lastProgress = 0; $rootExitAt = $null
   $binding = [pscustomobject]@{ run_id=$spec.run_id; run_dir=$r; owner=$spec.owner }
@@ -300,9 +349,9 @@ function Run($spec) {
     while ($true) {
       $elapsed = $watch.Elapsed.TotalSeconds
       $cancel = Join-Path $r 'cancel.json'
-      if ((Test-Path -LiteralPath $cancel) -and (Equal-Json (Read-Json $cancel) $spec.owner) -and -not $reason) { $reason = 'cancel' }
+      if ((Test-Path -LiteralPath $cancel) -and (Equal-Json (Read-Json $cancel $watch $spec.timeout_seconds) $spec.owner) -and -not $reason) { $reason = 'cancel' }
       if ($null -ne $spec.timeout_seconds -and $elapsed -ge $spec.timeout_seconds -and -not $reason) { $reason = 'deadline' }
-      if (-not $claimed -and -not $reason) { $claimed = Claim $lock $binding }
+      if (-not $claimed -and -not $reason) { $claimed = Claim $lock $binding $watch $spec.timeout_seconds }
       if ($claimed -and -not $job -and -not $reason) {
         if (V-Get $spec 'verification') {
           $before=V-Context $spec; $reuse=V-FindReuse $spec $before; $origin=$reuse.origin; $repeatReason=$reuse.reason
@@ -315,14 +364,14 @@ function Run($spec) {
         $jobName = 'Local\orca-check-tree-' + [guid]::NewGuid().ToString('N')
         $job = New-Object CheckJob($jobName)
         $st.tree = @{kind='windows-job'; name=$jobName; leader=$null}
-        Write-Json (Join-Path $r 'status.json') $st
+        Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
         # Cooperative cancellation is a durable file request; after grace the
         # Job Object is terminated. Native console signals are not guessed.
         $script = "[Console]::OutputEncoding = New-Object Text.UTF8Encoding(`$false)`n`$OutputEncoding = [Console]::OutputEncoding`n`$env:PYTHONIOENCODING = 'utf-8'`n`$env:ORCA_CHECK_CANCEL_FILE = '" + $cancel.Replace("'","''") + "'`n`$global:LASTEXITCODE = 0`n`$ErrorActionPreference = 'Continue'`n" + $spec.command + "`n`$__ok = `$?`nif (`$LASTEXITCODE) { exit `$LASTEXITCODE }`nif (-not `$__ok) { exit 1 }`nexit 0`n"
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
         $job.Start($spec.shell, $encoded, $spec.cwd, $st.stdout_log, $st.stderr_log)
         $st.tree.leader = Identity $job.Pid; $st.state = 'running'
-        Write-Json (Join-Path $r 'status.json') $st
+        Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
       }
       if ($job) {
         if ($job.Exited -and $job.Count -eq 0) { $st.exit_code = $job.ExitCode; $st.cleanup_verified = $true; break }
@@ -331,7 +380,7 @@ function Run($spec) {
         if ($job.Exited -and $null -eq $rootExitAt) { $rootExitAt = $elapsed }
         if ($null -ne $rootExitAt -and $elapsed - $rootExitAt -ge $spec.cancel_grace_seconds -and -not $reason) { $reason = 'descendants-after-exit' }
         if ($reason -and $null -eq $stopAt) {
-          if (-not (Test-Path -LiteralPath $cancel)) { Write-Json $cancel $spec.owner }
+          if (-not (Test-Path -LiteralPath $cancel)) { Write-Json $cancel $spec.owner $watch $spec.timeout_seconds }
           $stopAt = $elapsed
         }
         if ($null -ne $stopAt -and $elapsed - $stopAt -ge $spec.cancel_grace_seconds -and $null -eq $forcedAt) { $job.Stop(); $forcedAt = $elapsed }
@@ -347,7 +396,7 @@ function Run($spec) {
       $st.output_activity = (Get-Item -LiteralPath $st.stdout_log).Length -gt 0 -or (Get-Item -LiteralPath $st.stderr_log).Length -gt 0
       if ($null -ne $spec.no_progress_seconds -and $elapsed - $lastProgress -ge $spec.no_progress_seconds -and -not $st.stalled) { $st.stalled=$true; $st.diagnostic_events++ }
       $st.duration_seconds = $elapsed
-      Write-Json (Join-Path $r 'status.json') $st
+      Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
       Start-Sleep -Milliseconds 80
     }
   } catch {
@@ -369,11 +418,11 @@ function Run($spec) {
     try { $st.evidence=V-FinishEvidence $spec $st $before $repeatReason $origin }
     catch { $st.evidence=@{schema_version=1; valid=$false; reusable=$false; invalidation_reasons=@('evidence-error: '+$_.Exception.Message)} }
     # Seal the exact durable serialization, including numeric/timestamp bytes.
-    Write-Json (Join-Path $r 'result.sha256') (V-Hash $utf8.GetBytes((Json $st)))
+    Write-Json (Join-Path $r 'result.sha256') (V-Hash $utf8.GetBytes((Json $st))) $watch $spec.timeout_seconds
   }
-  Write-Json (Join-Path $r 'status.json') $st
-  Write-Json (Join-Path $r 'result.json') $st
-  if ($claimed -and $lock -and $st.cleanup_verified -and (Equal-Json (Read-Json $lock) $binding)) { [IO.File]::Delete((Safe-Path $lock)) }
+  Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
+  Write-Json (Join-Path $r 'result.json') $st $watch $spec.timeout_seconds
+  if ($claimed -and $lock -and $st.cleanup_verified -and (Equal-Json (Read-Json $lock $watch $spec.timeout_seconds) $binding)) { [IO.File]::Delete((Safe-Path $lock)) }
   Write-Output (Json $st)
   return Result-Code ([pscustomobject]$st)
 }
@@ -386,9 +435,9 @@ try {
   if ($Args.Count -in @(2,3) -and $Args[0] -eq 'wait') {
     $r = Safe-Path $Args[1]; $seconds = if ($Args.Count -eq 3) { [double]::Parse($Args[2], [Globalization.CultureInfo]::InvariantCulture) } else { 60 }
     if ([double]::IsNaN($seconds) -or [double]::IsInfinity($seconds) -or $seconds -lt 0) { throw 'invalid wait duration' }
-    $watch = [Diagnostics.Stopwatch]::StartNew(); $initial = Observe $r
+    $watch = [Diagnostics.Stopwatch]::StartNew(); $initial = Observe $r $watch $seconds
     while ($true) {
-      $state = Observe $r
+      $state = Observe $r $watch $seconds
       if ($state.state -notin @('running','waiting-resource') -or $state.diagnostic_events -ne $initial.diagnostic_events -or $watch.Elapsed.TotalSeconds -ge $seconds) {
         Write-Output (Json $state); exit (Result-Code $state)
       }

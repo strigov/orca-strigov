@@ -119,8 +119,9 @@ Resolve once per session (they live in this skill's repo; `SKILL_DIR` is the dir
 ```bash
 # ORCA_DEV_HOME (set by install.sh / install.ps1) wins; otherwise resolve the skill symlink.
 if [ -n "${ORCA_DEV_HOME:-}" ]; then BIN="$ORCA_DEV_HOME/bin"
-else SKILL_DIR="$(cd "$(dirname "$(readlink -f ~/.codex/skills/orca-dev/SKILL.md)")" && pwd)"; BIN="$SKILL_DIR/../../bin"; fi
+else SKILL_DIR="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$HOME/.codex/skills/orca-dev")"; BIN="$SKILL_DIR/../../bin"; fi
 WS="$BIN/sdd-workspace"; RPKG="$BIN/review-package"; GATE="$BIN/verify-gate"
+RUN="$BIN/run-check"; STATE="$BIN/protocol-state"
 echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 ```
 
@@ -129,12 +130,21 @@ On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) use the n
 ```powershell
 $BIN = "$env:ORCA_DEV_HOME\bin"   # set by install.ps1; restart Orca once after the first install
 $WS = "$BIN\sdd-workspace.ps1"; $RPKG = "$BIN\review-package.ps1"; $GATE = "$BIN\verify-gate.ps1"
+$RUN = "$BIN\run-check.ps1"; $STATE = "$BIN\protocol-state.ps1"
 & $GATE <plan-file> <base-sha>    # e.g. & $GATE docs\plans\x.md a1b2c3d
 ```
 
 - `"$WS" <plan-file>` prints the plan-scoped scratch directory (`.superpowers/sdd/<plan-basename>/`, self-ignoring) — home of prompt files, report files, review packages. Run it with cwd inside a track's worktree for parallel tracks. `"$WS" --name quickfix-<slug>` does the same for a plan-less quickfix.
 - `"$RPKG" BASE HEAD [OUTFILE]` (committed range) or `"$RPKG" BASE WORKTREE OUTFILE` (working tree vs BASE) writes the review package; only its `wrote <path>: N commit(s), M bytes` line enters your context.
-- `"$GATE" <plan-file> <base-sha> [repo-root]` runs the frontmatter's `verify:` commands and classifies failures against BASE; you read its line 1–2 and, on `GATE_FAIL`, pass its full output to the implementer.
+- `"$GATE" <plan-file> <base-sha> [repo-root]` runs the frontmatter's `verify:` commands and classifies failures against BASE; `--phase ID --checkpoint directed|integration|final` selects the declared scope. You read its line 1–2 and, on `GATE_FAIL`, pass its full output to the implementer.
+
+Keep the checkout and `bin/lib/` together. Before using an inherited `ORCA_DEV_HOME`,
+run this checkout's installer in read-only check mode. On Windows it distinguishes
+the installed skill target, User environment and Process environment. A stale
+Process value needs an Orca restart or an explicitly authorized process-only
+override at worker launch; it does not authorize rewriting user configuration.
+Missing runtime files/dependencies leave setup incomplete. The runner and state
+JSON interfaces remain defined only in [runtime-contracts.md](runtime-contracts.md).
 
 ## Pre-dispatch checklist (every worker)
 

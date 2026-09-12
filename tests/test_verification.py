@@ -1,4 +1,5 @@
 """C4 behavior on real files, tools and owned short commands; <=3min/module."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,36 +16,52 @@ class VerificationTests(unittest.TestCase):
 
     def test_snapshot_raw_bytes_dirty_index_untracked_and_declared_inputs(self):
         f = self.fx; root = f.git.root
-        initial = f.snapshot(); self.assertTrue(initial["valid"], initial)
-        path = root / "tracked.txt"
-        path.write_bytes(b"different\r\n")
-        dirty = f.snapshot(); self.assertNotEqual(initial["snapshot_id"], dirty["snapshot_id"])
-        self.assertEqual(dirty["snapshot_id"], f.snapshot()["snapshot_id"])
-        f.git.git("add", "tracked.txt")
-        staged = f.snapshot(); self.assertNotEqual(dirty["snapshot_id"], staged["snapshot_id"])
+        prefix = 'from pathlib import Path; import subprocess; root=Path(' + repr(str(root)) + '); '
+        ignored = root / "ignored-input"
+        # Every intermediate snapshot still runs the public CLI against real bytes.
+        steps = [
+            ('', []),
+            ("(root/'tracked.txt').write_bytes(b'different\\r\\n')", []),
+            ('', []),
+            ("subprocess.run(['git','add','tracked.txt'],check=True,timeout=5)", []),
+            ("(root/'tracked.txt').write_bytes(b'different\\n')", []),
+            ("(root/'новый file.txt').write_bytes(b'one')", []),
+            ("(root/'новый file.txt').rename(root/'renamed.txt')", []),
+            ("(root/'tracked.txt').unlink()", []),
+            ("(root/'.gitignore').write_text('ignored-input/\\n',encoding='utf-8'); "
+             "(root/'ignored-input').mkdir(); (root/'ignored-input/data').write_bytes(b'a')", [str(ignored)]),
+            ('', []),
+            ("(root/'ignored-input/data').write_bytes(b'b')", []),
+            ('', [str(ignored)]),
+            ('', [str(root/'absent')]),
+        ]
+        captures = f.snapshots([(prefix + prep if prep else '', inputs) for prep, inputs in steps])
+        initial, dirty, same, staged, lf, untracked, renamed, deleted, declared, undeclared, hidden, changed, absent = captures
+        self.assertTrue(all(s["valid"] for s in captures[:-1]), captures)
+        self.assertNotEqual(initial["snapshot_id"], dirty["snapshot_id"])
+        self.assertEqual(dirty["snapshot_id"], same["snapshot_id"])
+        self.assertNotEqual(dirty["snapshot_id"], staged["snapshot_id"])
         # Raw line endings differ even when Git's normalized blob is identical.
-        path.write_bytes(b"different\n")
-        self.assertNotEqual(staged["snapshot_id"], f.snapshot()["snapshot_id"])
-        p = root / "новый file.txt"; p.write_bytes(b"one")
-        untracked = f.snapshot(); p.rename(root / "renamed.txt")
-        renamed = f.snapshot(); self.assertNotEqual(untracked["snapshot_id"], renamed["snapshot_id"])
-        path.unlink(); self.assertNotEqual(renamed["snapshot_id"], f.snapshot()["snapshot_id"])
-        (root / ".gitignore").write_text("ignored-input/\n", encoding="utf-8")
-        ignored = root / "ignored-input"; ignored.mkdir(); data = ignored / "data"; data.write_bytes(b"a")
-        declared = f.snapshot(inputs=[str(ignored)]); undeclared = f.snapshot()
-        data.write_bytes(b"b")
-        self.assertEqual(undeclared["snapshot_id"], f.snapshot()["snapshot_id"])
-        self.assertNotEqual(declared["snapshot_id"], f.snapshot(inputs=[str(ignored)])["snapshot_id"])
-        self.assertFalse(f.snapshot(inputs=[str(root / "absent")])["valid"])
+        self.assertNotEqual(staged["snapshot_id"], lf["snapshot_id"])
+        self.assertNotEqual(untracked["snapshot_id"], renamed["snapshot_id"])
+        self.assertNotEqual(renamed["snapshot_id"], deleted["snapshot_id"])
+        self.assertEqual(undeclared["snapshot_id"], hidden["snapshot_id"])
+        self.assertNotEqual(declared["snapshot_id"], changed["snapshot_id"])
+        self.assertFalse(absent["valid"])
 
     def test_service_artifacts_excluded_but_tracked_sources_never_hidden(self):
-        f=self.fx; before=f.snapshot()
-        (f.workspace / "mutable.log").write_text("service output")
-        self.assertEqual(before["snapshot_id"], f.snapshot()["snapshot_id"])
-        tracked=f.workspace / "real-source.txt"; tracked.write_text("source")
-        f.git.git("add", "-f", str(tracked))
-        first=f.snapshot(); tracked.write_text("changed source")
-        self.assertNotEqual(first["snapshot_id"], f.snapshot()["snapshot_id"])
+        f=self.fx
+        prefix = 'from pathlib import Path; import subprocess; ws=Path(' + repr(str(f.workspace)) + '); '
+        before, service, first, changed = f.snapshots([
+            ('', []),
+            (prefix + "(ws/'mutable.log').write_text('service output')", []),
+            (prefix + "p=ws/'real-source.txt'; p.write_text('source'); "
+             "subprocess.run(['git','add','-f',str(p)],check=True,timeout=5)", []),
+            (prefix + "(ws/'real-source.txt').write_text('changed source')", []),
+        ])
+        self.assertTrue(all(s['valid'] for s in (before, service, first, changed)))
+        self.assertEqual(before["snapshot_id"], service["snapshot_id"])
+        self.assertNotEqual(first["snapshot_id"], changed["snapshot_id"])
 
     def test_matching_evidence_skips_execution_and_binds_origin(self):
         f=self.fx; counter, code=f.counter_code()
@@ -63,13 +80,17 @@ class VerificationTests(unittest.TestCase):
     def test_changed_snapshot_definition_environment_tool_and_base_reject_reuse(self):
         f=self.fx; counter, code=f.counter_code()
         env_name="ORCA_TEST_C4_VALUE"; previous=os.environ.get(env_name); os.environ[env_name]="a"
-        declaration={"hermetic":True,"environment":[env_name, {"tool":sys.executable,"version_args":["--version"]}]}
+        absent_name="ORCA_TEST_C4_ABSENT"; previous_absent=os.environ.pop(absent_name,None)
+        declaration={"hermetic":True,"environment":[env_name, absent_name, {"tool":sys.executable,"version_args":["--version"]}]}
         try:
             rc, first=f.verified_run(code=code,declaration=declaration); self.assertEqual(rc,0,first)
+            self.assertEqual(first["evidence"]["environment"]["variables"][absent_name],hashlib.sha256(b"null").hexdigest())
             (f.git.root/"tracked.txt").write_bytes(b"changed")
             rc, changed=f.verified_run(code=code,declaration=declaration); self.assertEqual(rc,0,changed)
+            self.assertEqual(first["evidence"]["environment"],changed["evidence"]["environment"])
             os.environ[env_name]="b"
             rc, env=f.verified_run(code=code,declaration=declaration); self.assertEqual(rc,0,env)
+            self.assertNotEqual(first["evidence"]["environment"]["fingerprint"],env["evidence"]["environment"]["fingerprint"])
             rc, definition=f.verified_run(code=code+"; print('new definition')",declaration=declaration); self.assertEqual(rc,0,definition)
             prov=dict(kind="BASE",base_sha="a"*40,preparation="git-worktree-add-detach",linked_dependencies=[])
             rc, base=f.verified_run(code=code,declaration=declaration,provenance=prov); self.assertEqual(rc,125,base)
@@ -81,6 +102,7 @@ class VerificationTests(unittest.TestCase):
         finally:
             if previous is None: os.environ.pop(env_name,None)
             else: os.environ[env_name]=previous
+            if previous_absent is not None: os.environ[absent_name]=previous_absent
 
     def test_nonhermetic_and_required_replay_execute_physically(self):
         f=self.fx; counter,code=f.counter_code()
@@ -138,14 +160,17 @@ phases:
       - {"id":"final", "command":"echo final", "checkpoint":"final"}
 ---
 ''',encoding="utf-8")
-        def parse(phase, checkpoint):
-            r=f.helper("parse",plan,out,phase,checkpoint); self.assertEqual(r[0],0,r)
-            return read_json(out) if WINDOWS else [json.loads(v) for v in out.read_bytes().split(b"\0") if v]
-        self.assertEqual(parse("Ф1","final"),[])
-        commands=parse("Ф2","directed"); self.assertEqual(len(commands),2)
+        outputs = [f.base / ('parsed-' + str(i) + '.json') for i in range(4)]
+        results = f.helpers([('parse',(plan,dest,phase,checkpoint),'') for dest,(phase,checkpoint) in zip(outputs,
+                            [('Ф1','final'),('Ф2','directed'),('Ф2','final'),('missing','final')])])
+        for result in results[:3]: self.assertEqual(result[0],0,result)
+        def parsed(path):
+            return read_json(path) if WINDOWS else [json.loads(v) for v in path.read_bytes().split(b"\0") if v]
+        self.assertEqual(parsed(outputs[0]),[])
+        commands=parsed(outputs[1]); self.assertEqual(len(commands),2)
         self.assertEqual(commands[0]["command"],"echo first\necho second")
-        self.assertEqual(len(parse("Ф2","final")),3)
-        self.assertNotEqual(f.helper("parse",plan,out,"missing","final")[0],0)
+        self.assertEqual(len(parsed(outputs[2])),3)
+        self.assertNotEqual(results[3][0],0)
         plan.write_text('---\nverify:\n  - {"command":"echo unsafe", "unknown":true}\n---\n',encoding="utf-8")
         self.assertNotEqual(f.helper("parse",plan,out,"","final")[0],0)
 

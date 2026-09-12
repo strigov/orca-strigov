@@ -22,6 +22,8 @@ function V-Normal($value) {
   $result = @(); foreach ($item in $value) { $result += ,(V-Normal $item) }; return ,$result
 }
 function V-Json($value) {
+  # Native ConvertTo-Json emits no pipeline value for a top-level null.
+  if ($null -eq $value) { return 'null' }
   if ($PSVersionTable.PSVersion.Major -ge 7) { return ConvertTo-Json -InputObject (V-Normal $value) -Depth 80 -Compress -EscapeHandling EscapeHtml }
   return ConvertTo-Json -InputObject (V-Normal $value) -Depth 80 -Compress
 }

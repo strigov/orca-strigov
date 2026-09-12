@@ -38,6 +38,7 @@ if ($Help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit 0 }
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $mode = if ($Check.Count -gt 0) { 'check' } else { 'install' }
 $userHome = if ($env:ORCA_DEV_TEST_HOME) { $env:ORCA_DEV_TEST_HOME } else { [Environment]::GetFolderPath('UserProfile') }
+$testMode = -not [string]::IsNullOrEmpty($env:ORCA_DEV_TEST_HOME)
 $script:nwarn = 0
 
 function Write-Ok   ([string]$m) { Write-Host "  OK   $m" -ForegroundColor Green }
@@ -45,19 +46,68 @@ function Write-Warn2([string]$m) { $script:nwarn++; Write-Host "  WARN $m" -Fore
 function Write-Info ([string]$m) { Write-Host "  INFO $m" -ForegroundColor Cyan }      # not counted
 function Write-Fix  ([string]$m) { Write-Host "  FIX  $m" -ForegroundColor Cyan }
 
-function Resolve-Physical([string]$p) {
-  # absolute, physical (junction/symlink-resolved) path, or $null
+function Resolve-Physical([string]$p, [int]$depth = 0) {
+  # Resolve parent components too; relative link targets are relative to the link.
   try {
-    $item = Get-Item -LiteralPath $p -ErrorAction Stop
-    if (-not $item.PSIsContainer) { return $null }
-    $full = $item.FullName
-    # resolve reparse points (junction / symlink) to the target
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-      $t = $item.Target
-      if ($t) { $full = (Get-Item -LiteralPath ($t | Select-Object -First 1)).FullName }
+    if ($depth -gt 40 -or [string]::IsNullOrWhiteSpace($p)) { return $null }
+    $full = [IO.Path]::GetFullPath($p)
+    if ($full -eq [IO.Path]::GetPathRoot($full)) { return $full }
+    $parent = [IO.Path]::GetDirectoryName($full.TrimEnd('\'))
+    if ($parent) {
+      $physicalParent = Resolve-Physical $parent ($depth + 1)
+      if (-not $physicalParent) { return $null }
+      $full = Join-Path $physicalParent ([IO.Path]::GetFileName($full))
     }
+    $item = Get-Item -Force -LiteralPath $full -ErrorAction Stop
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      if ($item.LinkType -notin @('SymbolicLink','Junction') -or @($item.Target).Count -ne 1) { return $null }
+      $linkTarget = [string]@($item.Target)[0]
+      if (-not [IO.Path]::IsPathRooted($linkTarget)) { $linkTarget = Join-Path $parent $linkTarget }
+      return Resolve-Physical $linkTarget ($depth + 1)
+    }
+    if (-not $item.PSIsContainer) { return $null }
     return $full.TrimEnd('\')
   } catch { return $null }
+}
+
+function Assert-PlainPath([string]$p) {
+  # Writes must not traverse a foreign symlink/junction, including config files.
+  $cursor = [IO.Path]::GetFullPath($p)
+  while ($cursor) {
+    $entry = Get-Item -Force -LiteralPath $cursor -ErrorAction SilentlyContinue
+    if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "refusing write through link/reparse point: $cursor"
+    }
+    $cursor = [IO.Path]::GetDirectoryName($cursor.TrimEnd('\'))
+  }
+}
+
+if ($testMode) {
+  try {
+    if (-not [IO.Path]::IsPathRooted($userHome) -or -not (Resolve-Physical $userHome) -or
+        (Resolve-Physical $userHome) -eq (Resolve-Physical ([Environment]::GetFolderPath('UserProfile')))) {
+      throw 'ORCA_DEV_TEST_HOME must be an existing isolated absolute directory'
+    }
+    Assert-PlainPath $userHome
+  } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
+}
+$here = Resolve-Physical $here
+$testEnvFile = Join-Path $userHome '.orca-dev-user-environment.json'
+function Get-UserHomeSetting {
+  if (-not $testMode) { return [Environment]::GetEnvironmentVariable('ORCA_DEV_HOME', 'User') }
+  Assert-PlainPath $testEnvFile
+  if (Test-Path -LiteralPath $testEnvFile) {
+    $value = Get-Content -Raw -Encoding UTF8 -LiteralPath $testEnvFile | ConvertFrom-Json
+    if ($value.PSObject.Properties['ORCA_DEV_HOME']) { return $value.ORCA_DEV_HOME }
+  }
+  return $null
+}
+function Set-UserHomeSetting {
+  if (-not $testMode) { [Environment]::SetEnvironmentVariable('ORCA_DEV_HOME', $here, 'User'); return }
+  Assert-PlainPath $testEnvFile
+  $value = if (Test-Path -LiteralPath $testEnvFile) { Get-Content -Raw -Encoding UTF8 -LiteralPath $testEnvFile | ConvertFrom-Json } else { [PSCustomObject]@{} }
+  $value | Add-Member -Force -NotePropertyName ORCA_DEV_HOME -NotePropertyValue $here
+  [IO.File]::WriteAllText($testEnvFile, ($value | ConvertTo-Json -Depth 64), (New-Object Text.UTF8Encoding($false)))
 }
 
 # ---- argument handling ---------------------------------------------------------------
@@ -78,44 +128,62 @@ $target = Join-Path $skillsDir 'orca-dev'
 if (-not (Test-Path -LiteralPath $src -PathType Container)) {
   Write-Warn2 "skill source missing: $src"
 } else {
-  $srcAbs = (Get-Item -LiteralPath $src).FullName.TrimEnd('\')
-  $existing = if (Test-Path -LiteralPath $target) { Get-Item -LiteralPath $target } else { $null }
-  $pointsHere = $false
-  if ($existing -and ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    $t = @($existing.Target)[0]
-    if ($t) { $pointsHere = ((Get-Item -LiteralPath $t -ErrorAction SilentlyContinue).FullName.TrimEnd('\') -eq $srcAbs) }
-  }
+  $srcAbs = Resolve-Physical $src
+  $existing = Get-Item -Force -LiteralPath $target -ErrorAction SilentlyContinue
+  $isLink = $existing -and ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+    $existing.LinkType -in @('SymbolicLink','Junction')
+  $pointsHere = $isLink -and $srcAbs -and (Resolve-Physical $target) -eq $srcAbs
+  Write-Info "skill source: $srcAbs"
+  Write-Info "skill link: $target -> $(if ($isLink) { @($existing.Target) -join ', ' } else { '(not a recognized link)' })"
   if ($mode -eq 'install') {
-    New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
-    if ($pointsHere) {
+    try {
+      Assert-PlainPath $skillsDir
+      [IO.Directory]::CreateDirectory($skillsDir) | Out-Null
+      if (-not $srcAbs) { throw 'cannot resolve skill source' }
+      if ($pointsHere) {
       Write-Ok "skill already linked: $target -> $srcAbs"
-    } elseif ($existing -and -not ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    } elseif ($existing -and -not $isLink) {
       Write-Warn2 "$target exists and is not a link — not touching it; move it away and re-run"
     } else {
-      if ($existing) { Remove-Item -LiteralPath $target -Force }   # stale link only (a reparse point, never a real dir)
+      if ($existing) {
+        $again = Get-Item -Force -LiteralPath $target -ErrorAction Stop
+        if ($again.FullName -ne [IO.Path]::GetFullPath($target) -or
+            -not ($again.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $again.LinkType -ne $existing.LinkType -or
+            (@($again.Target) -join '|') -ne (@($existing.Target) -join '|')) { throw 'skill link changed before replacement' }
+        # Nonrecursive deletion removes only this link, even for a dangling junction on PS5.1.
+        if ($again.PSIsContainer) { [IO.Directory]::Delete($target) } else { [IO.File]::Delete($target) }
+      }
       $linked = $false
       try { New-Item -ItemType SymbolicLink -Path $target -Target $srcAbs -ErrorAction Stop | Out-Null; $linked = 'symlink' } catch { }
       if (-not $linked) {
-        try { New-Item -ItemType Junction -Path $target -Target $srcAbs -ErrorAction Stop | Out-Null; $linked = 'junction' } catch { }
+        # 5.1 resolves junction Target as a wildcard; 7 treats it literally.
+        $junctionTarget = if ($PSVersionTable.PSVersion.Major -le 5) { [Management.Automation.WildcardPattern]::Escape($srcAbs) } else { $srcAbs }
+        try { New-Item -ItemType Junction -Path $target -Target $junctionTarget -ErrorAction Stop | Out-Null; $linked = 'junction' } catch { }
       }
-      if ($linked) { Write-Ok "skill linked ($linked): $target -> $srcAbs" }
+      if ($linked) { $pointsHere = (Resolve-Physical $target) -eq $srcAbs; Write-Ok "skill linked ($linked): $target -> $srcAbs" }
       else { Write-Warn2 "could not link $target (enable Developer Mode for symlinks, or run once as Administrator)" }
     }
     # ORCA_DEV_HOME: the protocol resolves bin/ through it (readlink -f does not follow junctions in Git Bash)
-    $cur = [Environment]::GetEnvironmentVariable('ORCA_DEV_HOME', 'User')
-    if ($cur -ne $here) {
-      try { [Environment]::SetEnvironmentVariable('ORCA_DEV_HOME', $here, 'User'); Write-Ok "ORCA_DEV_HOME = $here (user environment; restart Orca to pick it up)" }
-      catch { Write-Warn2 "could not set ORCA_DEV_HOME: $($_.Exception.Message)" }
-    } else { Write-Ok "ORCA_DEV_HOME = $here" }
+    if ($pointsHere) {
+      $cur = Get-UserHomeSetting
+      if ($cur -ne $here) { Set-UserHomeSetting; Write-Ok "User ORCA_DEV_HOME = $here (restart Orca to inherit it)" }
+    }
+    } catch { Write-Warn2 $_.Exception.Message }
   } else {
     if ($pointsHere) { Write-Ok "skill present: $target" }
     elseif ($existing) { Write-Warn2 "skill at $target does not point to $srcAbs" }
     else { Write-Warn2 "skill not installed (run .\install.ps1)" }
-    $cur = [Environment]::GetEnvironmentVariable('ORCA_DEV_HOME', 'User')
-    if ($cur -eq $here) { Write-Ok "ORCA_DEV_HOME = $cur" }
-    else { Write-Warn2 "ORCA_DEV_HOME is '$cur', expected '$here' (run .\install.ps1)" }
   }
+  try {
+    $cur = Get-UserHomeSetting
+    if ((Resolve-Physical $cur) -eq $here) { Write-Ok "User ORCA_DEV_HOME = $cur" }
+    else { Write-Warn2 "User ORCA_DEV_HOME is '$cur', expected '$here' (run .\install.ps1)" }
+  } catch { Write-Warn2 $_.Exception.Message }
+  if ((Resolve-Physical $env:ORCA_DEV_HOME) -eq $here) { Write-Ok "Process ORCA_DEV_HOME = $env:ORCA_DEV_HOME" }
+  else { Write-Warn2 "Process ORCA_DEV_HOME is '$env:ORCA_DEV_HOME', expected '$here'; restart Orca or set `$env:ORCA_DEV_HOME = '$($here.Replace("'", "''"))' in this process/worker launch" }
 }
+if ($testMode) { Write-Info 'isolated test home: User environment is file-backed; external CLI/runtime probes and registration are skipped' }
 
 # ---- 2. CLIs -----------------------------------------------------------------------------
 # The workspace scripts are PowerShell (bin\*.ps1): git is the only runtime dependency. python3 / jq
@@ -132,7 +200,7 @@ foreach ($c in 'python3','jq') {
 }
 $pw = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($pw) { Write-Ok "pwsh: $($pw.Source)" } else { Write-Info "pwsh (PowerShell 7) not on PATH — the scripts also run on Windows PowerShell 5.1" }
-if (Get-Command orca -ErrorAction SilentlyContinue) {
+if (-not $testMode -and (Get-Command orca -ErrorAction SilentlyContinue)) {
   try {
     $st = (orca status --json 2>$null | ConvertFrom-Json).result.runtime.state
     if ($st -eq 'ready') { Write-Ok "orca runtime: ready" } else { Write-Warn2 "orca runtime state: $st (run: orca open --json)" }
@@ -140,7 +208,7 @@ if (Get-Command orca -ErrorAction SilentlyContinue) {
 }
 
 # ---- 3. Codex update prompt -------------------------------------------------------------------
-if (Get-Command codex -ErrorAction SilentlyContinue) {
+if (-not $testMode -and (Get-Command codex -ErrorAction SilentlyContinue)) {
   $v = (& codex --version 2>$null | Out-String).Trim()
   Write-Info "codex $v — keep it current (npm i -g @openai/codex@latest / winget upgrade); an 'Update available' prompt blocks worker input"
 }
@@ -226,6 +294,7 @@ function Set-TrustJson {
     Write-Ok "${Kind}: trust set for $r"
   }
   if ($changed) {
+    try { Assert-PlainPath $File } catch { Write-Warn2 $_.Exception.Message; return }
     $tmp = Join-Path (Split-Path -Parent $File) (".install-ps1.$([guid]::NewGuid().ToString('N').Substring(0,8)).tmp")
     try {
       $json = $d | ConvertTo-Json -Depth 64
@@ -256,7 +325,7 @@ if ($repos.Count -gt 0) {
   Set-TrustJson -Kind claude -File (Join-Path $userHome '.claude.json') -Mode $mode -Paths $paths.ToArray()
   Set-TrustJson -Kind agy -File (Join-Path (Join-Path (Join-Path $userHome '.gemini') 'antigravity-cli') 'settings.json') -Mode $mode -Paths $paths.ToArray()
   foreach ($repo in $repos) {
-    if (Get-Command orca -ErrorAction SilentlyContinue) {
+    if (-not $testMode -and (Get-Command orca -ErrorAction SilentlyContinue)) {
       try {
         $registered = @((orca repo list --json 2>$null | ConvertFrom-Json).result.repos | Where-Object { $_.path -eq $repo }).Count -gt 0
         if ($registered) { Write-Ok "orca: $repo registered" } else { Write-Warn2 "orca: repo not registered (orca repo add --path `"$repo`" --json)" }
@@ -270,7 +339,7 @@ if ($repos.Count -gt 0) {
 # ---- 6. bridge (optional, Pro planner) -------------------------------------------------------------
 # codex-chatgpt-web ships a win32-x64 build (4.0.8 verified 2026-09-02); its daemon is `bun.exe … cli.js serve`.
 $bridgeUp = $false
-try { $bridgeUp = @(Get-CimInstance Win32_Process -Filter "Name='bun.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -match 'codex-chatgpt-web.*cli\.js serve' }).Count -gt 0 } catch { }
+if (-not $testMode) { try { $bridgeUp = @(Get-CimInstance Win32_Process -Filter "Name='bun.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -match 'codex-chatgpt-web.*cli\.js serve' }).Count -gt 0 } catch { } }
 if ($bridgeUp) { Write-Ok "codex-chatgpt-web bridge running (opt-in --planner pro available; preflight per orca-recipes.md §7 — run its doctor with CODEX_HOME cleared)" }
 else { Write-Info "codex-chatgpt-web bridge not running (opt-in --planner pro disabled; default planner is configured in roles.md)" }
 

@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from support import ROOT, WINDOWS, RunnerFixture, command, read_json, selected_shell, until, write_json
+from support import ROOT, WINDOWS, Process, RunnerFixture, command, read_json, selected_shell, until, write_json
 
 
 class FixtureCleanupTests(unittest.TestCase):
@@ -65,6 +65,23 @@ class RunnerBehavior:
     def status(self, s):
         return read_json(Path(s["run_dir"]) / "status.json")
 
+    def native_reader(self, path, share):
+        """Pin one real Windows file incarnation until this binary reader closes."""
+        import ctypes
+        import msvcrt
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint,
+                                       ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+        kernel.CreateFileW.restype = ctypes.c_void_p
+        handle = kernel.CreateFileW(str(path), 0x80000000, share, None, 3, 0, None)
+        if handle == ctypes.c_void_p(-1).value: raise ctypes.WinError(ctypes.get_last_error())
+        try: fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel.CloseHandle(handle)
+            raise
+        return os.fdopen(fd, "rb")
+
     def test_success_failure_stdin_and_exact_command(self):
         code = "import sys,os;print('Привет \\\" $ & ' + os.getcwd());print(repr(sys.stdin.read()));sys.exit(7)"
         path, s = self.fx.spec(code)
@@ -101,14 +118,147 @@ class RunnerBehavior:
         path, s = self.fx.spec("import time;print('liveness');time.sleep(2.5);print('done')", no_progress_seconds=0.4)
         p = self.fx.start(path)
         until(lambda: self.status(s)["state"] == "running")
-        rc, out, err = self.fx.invoke("wait", s["run_dir"], "4")
-        st = json.loads(out)
-        self.assertEqual(st["diagnostic_events"], 1, (out, err))
-        self.assertEqual(st["meaningful_progress"], "unknown")
-        self.assertTrue(st["stalled"])
-        self.assertIn(st["state"], ("running", "exited"))
-        self.assertEqual(p.finish()[0], 0)
-        self.assertTrue(read_json(Path(s["run_dir"]) / "result.json")["output_activity"])
+        if WINDOWS:
+            status_path = Path(s["run_dir"]) / "status.json"
+            # Deny DELETE briefly, then leave a compatible reader open across
+            # publication. A pending complete temp proves the owner has a write.
+            with until(lambda: self.native_reader(status_path, 3)) as blocker:
+                old_bytes = blocker.read()
+                pending = until(lambda: next(status_path.parent.glob("status.json.*.tmp"), None))
+                pending_value = until(lambda: read_json(pending))
+                held_at = time.monotonic()
+                until(lambda: time.monotonic() - held_at >= 0.08, timeout=0.2)
+                self.assertEqual(read_json(status_path), json.loads(old_bytes))
+                self.assertEqual(read_json(pending), pending_value)
+                self.assertIsNone(p.p.poll(), "temporary contention must not stop the owner")
+                reader = self.native_reader(status_path, 7)
+                self.addCleanup(reader.close)
+        args = ("wait", s["run_dir"], "4")
+        before = self.status(s)
+        rc, out, err = self.fx.invoke(*args)
+        facts = dict(argv=self.fx.argv("run-check", *args), exit_code=rc,
+                     stdout=out, stderr=err, status_before=before)
+        try: facts["status_after"] = self.status(s)
+        except (OSError, ValueError) as error: facts["status_after"] = dict(unreadable=repr(error))
+        # Keep the actual failed reply in the outer runner log before teardown.
+        print("diagnostic-wait: " + json.dumps(facts, ensure_ascii=False), flush=True)
+        owner_rc, owner_out, owner_err = p.finish()
+        owner = dict(exit_code=owner_rc, stdout=owner_out, stderr=owner_err)
+        print("diagnostic-wait-owner: " + json.dumps(owner, ensure_ascii=False), flush=True)
+        try: st = json.loads(out)
+        except ValueError: self.fail("invalid wait JSON: " + json.dumps(facts, ensure_ascii=False))
+        self.assertIsInstance(st, dict, facts)
+        self.assertEqual(st["diagnostic_events"], 1, facts)
+        self.assertEqual(st["meaningful_progress"], "unknown", facts)
+        self.assertTrue(st["stalled"], facts)
+        self.assertIn(st["state"], ("running", "exited"), facts)
+        self.assertEqual(rc, 0 if st["state"] == "exited" else 125, facts)
+        self.assertEqual(owner_rc, 0, owner)
+        result = read_json(Path(s["run_dir"]) / "result.json")
+        self.assertTrue(result["output_activity"])
+        self.assertTrue(result["cleanup_verified"] and result["logs_complete"], result)
+        if WINDOWS:
+            self.assertFalse(pending.exists(), "successful publication consumes its temp")
+            self.assertEqual(reader.read(), old_bytes, "the existing handle retains the complete old record")
+            with self.native_reader(status_path, 7) as current:
+                new_bytes = current.read()
+            self.assertNotEqual(new_bytes, old_bytes)
+            self.assertEqual(json.loads(new_bytes), result)
+            reader.close()
+            print("atomic-writer: temporary contention cleared; old handle kept complete JSON; new handle saw final JSON", flush=True)
+            # Keep the DELETE-access window of atomic replacement open without
+            # deleting anything. ReadAllText's default sharing fails here.
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint,
+                                           ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+            kernel.CreateFileW.restype = ctypes.c_void_p
+            handle = kernel.CreateFileW(str(Path(s["run_dir"]) / "result.json"), 0x10000, 7, None, 3, 0, None)
+            self.assertNotEqual(handle, ctypes.c_void_p(-1).value, ctypes.get_last_error())
+            try:
+                self.assertEqual(read_json(Path(s["run_dir"]) / "result.json"), result)
+                args = ("wait", s["run_dir"], "0")
+                rc, out, err = self.fx.invoke(*args)
+                facts = dict(argv=self.fx.argv("run-check", *args), exit_code=rc, stdout=out, stderr=err)
+                print("diagnostic-wait-delete-sharing: " + json.dumps(facts), flush=True)
+                self.assertEqual(rc, 0, facts)
+                final = json.loads(out)
+                self.assertEqual(final["run_id"], result["run_id"])
+                self.assertEqual(final["state"], "exited")
+                self.assertTrue(final["cleanup_verified"] and final["logs_complete"])
+            finally:
+                kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+                self.assertTrue(kernel.CloseHandle(handle))
+            # Release actual read contention only after the CLI reports its
+            # first failed open. No guessed sleep tied to shell startup speed.
+            result_path = Path(s["run_dir"]) / "result.json"
+            args = ("-Verbose", "wait", s["run_dir"], "4")
+            prefix = []
+            with self.native_reader(result_path, 0):
+                waiter = Process(self.fx.argv("run-check", *args), self.fx.git.root)
+                self.fx.processes.append(waiter)  # includes the normal 14s parent watchdog
+                while True:
+                    line = waiter.p.stdout.readline()
+                    self.assertTrue(line, b"".join(prefix))
+                    prefix.append(line)
+                    if b"JSON open sharing retry (Win32 32)" in line:
+                        break
+            rc, out, err = waiter.finish()
+            facts = dict(argv=self.fx.argv("run-check", *args), exit_code=rc,
+                         stdout=b"".join(prefix).decode("utf-8-sig", "replace") + out, stderr=err)
+            print("atomic-reader-temporary: " + json.dumps(facts), flush=True)
+            self.assertEqual(rc, 0, facts)
+            self.assertEqual(json.loads(out), result, facts)
+            original_bytes = result_path.read_bytes()
+            with self.native_reader(result_path, 0):
+                # A read deadline shorter than the 250ms retry ceiling must
+                # still return an error while this exclusive handle stays open.
+                args = ("wait", s["run_dir"], "0.05")
+                rc, out, err = self.fx.invoke(*args)
+                facts = dict(argv=self.fx.argv("run-check", *args), exit_code=rc, stdout=out, stderr=err)
+                print("atomic-reader-permanent: " + json.dumps(facts), flush=True)
+                self.assertEqual(rc, 125, facts)
+                self.assertEqual(out, "", facts)
+                self.assertTrue(err, facts)
+            self.assertEqual(result_path.read_bytes(), original_bytes)
+            try:
+                result_path.write_bytes(b'{"broken":')
+                rc, out, err = self.fx.invoke("wait", s["run_dir"], "0")
+                print("atomic-reader-parse: " + json.dumps(dict(exit_code=rc, stdout=out, stderr=err)), flush=True)
+                self.assertEqual(rc, 125, (out, err))
+                self.assertEqual(out, "")
+                self.assertTrue(err)
+                self.assertEqual(result_path.read_bytes(), b'{"broken":')
+            finally:
+                result_path.write_bytes(original_bytes)
+            # An incompatible handle held until owner exit must remain a failure.
+            path, blocked = self.fx.spec("import time;print('blocked');time.sleep(2.5)")
+            owner = self.fx.start(path)
+            until(lambda: self.status(blocked)["state"] == "running")
+            rd = Path(blocked["run_dir"])
+            with until(lambda: self.native_reader(rd / "status.json", 3)) as blocker:
+                old_bytes = blocker.read()
+                started = time.monotonic()
+                rc, out, err = owner.finish()
+                temps = {f.name: read_json(f) for f in rd.glob("status.json.*.tmp")}
+                facts = dict(exit_code=rc, stdout=out, stderr=err, retained_temps=temps,
+                             contention_seconds=time.monotonic() - started)
+                print("atomic-writer-permanent: " + json.dumps(facts), flush=True)
+                self.assertEqual(rc, 125, facts)
+                self.assertIn("atomic replacement failed (Win32 32)", err, facts)
+                self.assertEqual(read_json(rd / "status.json"), json.loads(old_bytes))
+                self.assertFalse((rd / "result.json").exists())
+                self.assertTrue(temps, facts)
+                final = next(v for v in temps.values() if v["state"] == "interrupted")
+                self.assertTrue(final["cleanup_verified"] and final["logs_complete"], final)
+                self.assertLess(final["duration_seconds"], blocked["timeout_seconds"], final)
+            rc, out, err = self.fx.invoke("wait", rd, "0")
+            unknown = json.loads(out)
+            self.assertEqual(rc, 125, (out, err))
+            self.assertEqual(unknown["state"], "unknown")
+            self.assertTrue(unknown["cleanup_verified"])
+            self.assertFalse(unknown["logs_complete"])
+            self.assert_process_gone(json.loads(old_bytes)["tree"]["leader"]["pid"])
 
     def test_explicit_progress_file(self):
         progress = self.fx.base / ("stage-" + str(time.time_ns()))
@@ -171,8 +321,15 @@ class RunnerBehavior:
         self.assertNotEqual(self.fx.invoke("cancel", s["run_dir"], owner)[0], 0)
         self.assertIsNone(p.p.poll())
         write_json(owner, s["owner"])
-        self.assertEqual(self.fx.invoke("cancel", s["run_dir"], owner)[0], 0)
-        self.assertEqual(p.finish()[0], 124)
+        args = ("cancel", s["run_dir"], owner)
+        rc, out, err = self.fx.invoke(*args)
+        facts = dict(argv=self.fx.argv("run-check", *args), exit_code=rc, stdout=out, stderr=err)
+        print("owner-bound-cancel: " + json.dumps(facts), flush=True)
+        owner_rc, owner_out, owner_err = p.finish()
+        owner_facts = dict(exit_code=owner_rc, stdout=owner_out, stderr=owner_err)
+        print("owner-bound-cancel-owner: " + json.dumps(owner_facts), flush=True)
+        self.assertEqual(rc, 0, facts)
+        self.assertEqual(owner_rc, 124, owner_facts)
         r = read_json(Path(s["run_dir"]) / "result.json")
         self.assertEqual(r["reason"], "cancel")
         self.assertTrue(r["cleanup_verified"])

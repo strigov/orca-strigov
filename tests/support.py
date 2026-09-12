@@ -1,4 +1,4 @@
-"""Bounded real-process fixtures; never run installers or alter user config."""
+"""Bounded real-process fixtures; installers use only an isolated test home."""
 import base64
 import hashlib
 import json
@@ -23,6 +23,23 @@ def write_json(path, value):
 
 
 def read_json(path):
+    if WINDOWS:
+        # Observe atomic JSON publication without denying its DELETE access.
+        import ctypes
+        import msvcrt
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint,
+                                       ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+        kernel.CreateFileW.restype = ctypes.c_void_p
+        handle = kernel.CreateFileW(str(path), 0x80000000, 7, None, 3, 0, None)
+        if handle == ctypes.c_void_p(-1).value: raise ctypes.WinError(ctypes.get_last_error())
+        try: fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel.CloseHandle(handle)
+            raise
+        with os.fdopen(fd, "r", encoding="utf-8-sig") as stream:
+            return json.load(stream)
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
@@ -44,7 +61,7 @@ def stop_owned(p):
         return
     if WINDOWS:
         # Test-only backstop, bound to the still-open Popen incarnation.
-        subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+        subprocess.run([os.path.join(os.environ['SystemRoot'], 'System32', 'taskkill.exe'), "/PID", str(p.pid), "/T", "/F"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
     else:
         os.killpg(p.pid, signal.SIGKILL)
@@ -53,12 +70,12 @@ def stop_owned(p):
 
 class Process:
     """Every test process gets a parent watchdog, including assertion failures."""
-    def __init__(self, argv, cwd, seconds=14, log_stem=None):
+    def __init__(self, argv, cwd, seconds=14, log_stem=None, env=None):
         self.log_stem = log_stem
         self.p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   creationflags=0x08000000 if WINDOWS else 0,
-                                  start_new_session=not WINDOWS)
+                                  start_new_session=not WINDOWS, env=env)
         self.timer = threading.Timer(seconds, stop_owned, [self.p])
         self.timer.daemon = True
         self.timer.start()
@@ -81,8 +98,8 @@ class Process:
         self.finish()
 
 
-def command(argv, cwd, timeout=14):
-    return Process(argv, cwd, timeout).finish(timeout)
+def command(argv, cwd, timeout=14, env=None):
+    return Process(argv, cwd, timeout, env=env).finish(timeout)
 
 
 class TwoWorktrees:
@@ -203,6 +220,116 @@ def selected_shell():
     return shutil.which("bash")
 
 
+def installation_state(home=None):
+    """Read only digests/link identities; never expose or restore user settings."""
+    home = Path(home or Path.home())
+    names = ['.claude.json', '.gemini/antigravity-cli/settings.json',
+             '.codex/config.toml', '.codex/hooks.json', '.codex/skills/orca-dev',
+             '.profile', '.bashrc', '.zshrc']
+    state = {}
+    for name in names:
+        p = home / name
+        try:
+            info = p.lstat()
+            if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                state[name] = ['link', os.readlink(p)]
+            elif p.is_file(): state[name] = ['file', hashlib.sha256(p.read_bytes()).hexdigest()]
+            else: state[name] = ['directory', info.st_dev, info.st_ino]
+        except FileNotFoundError: state[name] = None
+    state['process_home'] = os.environ.get('ORCA_DEV_HOME')
+    if WINDOWS:
+        import winreg
+        values = []
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+            for i in range(winreg.QueryInfoKey(key)[1]): values.append(winreg.EnumValue(key, i))
+        state['user_environment_sha256'] = hashlib.sha256(json.dumps(sorted(values), default=str).encode()).hexdigest()
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment') as key:
+            try: value = winreg.QueryValueEx(key, 'ORCA_DEV_HOME')
+            except FileNotFoundError: value = None
+        state['machine_home'] = value
+    return state
+
+
+def directory_state(root):
+    """No traversal into even a dangling directory junction."""
+    result = {}
+    def visit(p):
+        for child in p.iterdir():
+            info = child.lstat(); name = str(child.relative_to(root))
+            if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                result[name] = ['link', os.readlink(child)]
+            elif child.is_dir(): result[name] = ['dir']; visit(child)
+            else: result[name] = ['file', hashlib.sha256(child.read_bytes()).hexdigest()]
+    visit(Path(root))
+    return result
+
+
+class InstallFixture(RunnerFixture):
+    """Use the production test-home seam, never HOME/USERPROFILE overrides."""
+    def __init__(self):
+        self.real_before = installation_state()
+        super().__init__(selected_shell())
+        self.home = self.base / 'isolated home ü [space]'
+        self.checkout = self.base / 'checkout ü [source] with space'
+        self.home.mkdir(); self.checkout.mkdir()
+        for name in ('install.ps1', 'install.sh'):
+            shutil.copyfile(ROOT / name, self.checkout / name)
+        for name in ('skills', 'bin'):
+            shutil.copytree(ROOT / name, self.checkout / name, ignore=shutil.ignore_patterns('__pycache__'))
+        (self.home / '.codex' / 'skills').mkdir(parents=True)
+        (self.home / '.gemini' / 'antigravity-cli').mkdir(parents=True)
+        write_json(self.home / '.claude.json', dict(unrelated={'keep': 7}, projects={'/unrelated': {'keep': True}}))
+        write_json(self.home / '.gemini/antigravity-cli/settings.json', dict(keep=[1,2], trustedWorkspaces=['/unrelated']))
+        (self.home / '.codex/config.toml').write_text('unrelated = true\n')
+        self.target = self.home / '.codex/skills/orca-dev'
+        self.env_file = self.home / '.orca-dev-user-environment.json'
+        write_json(self.env_file, dict(keep=True, ORCA_DEV_HOME=str(self.base / 'old checkout')))
+        self.env = dict(os.environ, ORCA_DEV_TEST_HOME=str(self.home), ORCA_DEV_HOME=str(self.checkout))
+        # Any accidental live-runtime probe fails and leaves an owned sentinel.
+        probes = self.base / 'probes'; probes.mkdir()
+        for name in ('orca','codex','claude','agy','brew'):
+            if WINDOWS:
+                body = '@echo off\r\necho probe>"' + str(self.base / 'unexpected-probe') + '"\r\nexit /b 89\r\n'
+                (probes / (name + '.cmd')).write_text(body)
+            else:
+                import shlex
+                p = probes / name
+                p.write_text('#!/bin/sh\nprintf probe > ' + shlex.quote(str(self.base / 'unexpected-probe')) + '\nexit 89\n')
+                p.chmod(0o700)
+        self.env['PATH'] = str(probes) + os.pathsep + os.environ['PATH']
+        self.calls = 0
+
+    def link(self, path, target):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if WINDOWS:
+            q = lambda p: "'" + str(p).replace("'", "''") + "'"
+            rc, out, err = command([self.shell, '-NoProfile', '-NonInteractive', '-Command',
+                '$junctionTarget=' + q(target) + '; if ($PSVersionTable.PSVersion.Major -le 5) { $junctionTarget=[Management.Automation.WildcardPattern]::Escape($junctionTarget) }; New-Item -ItemType Junction -Path ' + q(path) + ' -Target $junctionTarget -ErrorAction Stop | Out-Null'], self.base)
+            if rc: raise AssertionError((rc, out, err))
+        else: path.symlink_to(target, target_is_directory=True)
+
+    def install(self, check=False, env=None):
+        self.calls += 1
+        if WINDOWS:
+            argv = [self.shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                    str(self.checkout / 'install.ps1'), '-Check' if check else '-Repo', str(self.git.root)]
+        else:
+            argv = [self.shell, str(self.checkout / 'install.sh'), '--check' if check else '--repo', str(self.git.root)]
+        p = Process(argv, self.git.root, env=env or self.env, log_stem=self.base / ('install-' + str(self.calls)))
+        self.processes.append(p)
+        result = p.finish()
+        print('INSTALL invocation ' + str(self.calls) + ' exit=' + str(result[0]) + '\n' + result[1] + result[2])
+        if result[0] not in (0,1,2): raise AssertionError(result)
+        if installation_state() != self.real_before: raise AssertionError('real user configuration changed')
+        if (self.base / 'unexpected-probe').exists(): raise AssertionError('test invoked live CLI probe')
+        return result
+
+    def close(self):
+        try:
+            if installation_state() != self.real_before: raise AssertionError('real user configuration changed')
+        finally: super().close()
+
+
 class VerificationFixture(RunnerFixture):
     """C4/C5 drivers share the existing bounded two-worktree fixture."""
     def __init__(self):
@@ -216,6 +343,58 @@ class VerificationFixture(RunnerFixture):
         else:
             argv = [sys.executable, "-B", str(ROOT / "bin/lib/verification.py"), operation, *map(str, args)]
         return command(argv, self.git.root)
+
+    def helpers(self, steps):
+        """Finite C4 CLI batches, including explicit fixture mutations between calls.
+
+        Four calls share one native host/watchdog; each retains its actual CLI
+        arguments, stdout, stderr and exit status. No running owner is shared.
+        """
+        results = []
+        for offset in range(0, len(steps), 4):
+            group = steps[offset:offset + 4]
+            if not WINDOWS:
+                for operation, args, before in group:
+                    if before:
+                        prepared = command([sys.executable, '-B', '-c', before], self.git.root)
+                        if prepared[0]: raise AssertionError(prepared)
+                    results.append(self.helper(operation, *args))
+                continue
+            quote = lambda p: "'" + str(p).replace("'", "''") + "'"
+            script = self.base / 'verification-batch.ps1'
+            lines = ["$ErrorActionPreference='Stop'"]
+            for operation, args, before in group:
+                if before:
+                    lines += [self.python(before), "if ($LASTEXITCODE -ne 0) { throw 'fixture preparation failed' }"]
+                lines += [
+                    '$out=New-Object IO.StringWriter; $err=New-Object IO.StringWriter',
+                    '$savedOut=[Console]::Out; $savedErr=[Console]::Error',
+                    'try { [Console]::SetOut($out); [Console]::SetError($err); & ' +
+                    quote(ROOT / 'bin/lib/verification.ps1') + ' ' +
+                    ' '.join(quote(x) for x in (operation, *args)) +
+                    ' } finally { [Console]::SetOut($savedOut); [Console]::SetError($savedErr) }',
+                    '[Console]::WriteLine((@{code=$LASTEXITCODE; stdout=$out.ToString(); stderr=$err.ToString()} | ConvertTo-Json -Compress))',
+                ]
+            script.write_text('\n'.join(lines), encoding='utf-8-sig')
+            rc, out, err = command([self.shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                                    '-File', str(script)], self.git.root)
+            if rc or len(out.splitlines()) != len(group): raise AssertionError((rc, out, err))
+            for line in out.splitlines():
+                item = json.loads(line)
+                results.append((item['code'], item['stdout'], item['stderr']))
+        return results
+
+    def snapshots(self, steps):
+        """Capture every requested real mutation state, with unique durable outputs."""
+        jobs = []; outputs = []
+        for i, (before, inputs) in enumerate(steps):
+            spec = self.base / ('snapshot-input-' + str(i) + '.json')
+            out = self.base / ('snapshot-output-' + str(i) + '.json')
+            write_json(spec, dict(root=str(self.git.root), inputs=list(inputs), exclusions=[str(self.workspace)]))
+            jobs.append(('snapshot', (spec, out), before)); outputs.append(out)
+        for result in self.helpers(jobs):
+            if result[0]: raise AssertionError(result)
+        return [read_json(out) for out in outputs]
 
     def snapshot(self, inputs=(), exclusions=None):
         spec = self.base / "snapshot-input.json"; out = self.base / "snapshot-output.json"

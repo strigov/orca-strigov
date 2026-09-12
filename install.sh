@@ -7,7 +7,10 @@
 #   ./install.sh --check <path>  # read-only report, changes nothing
 #   --repo may be given several times. Exit: 0 clean, 1 if any WARN, 2 usage error.
 set -u
-here="$(cd "$(dirname "$0")" && pwd)"
+set -f  # Repo paths are literal; newline splitting below must not expand globs.
+here="$(cd "$(dirname "$0")" && pwd -P)"
+user_home="${ORCA_DEV_TEST_HOME:-$HOME}"
+test_mode="${ORCA_DEV_TEST_HOME:+yes}"
 usage(){ sed -n '2,8p' "$0"; }
 mode=install; repos=""
 add_repo(){
@@ -35,44 +38,76 @@ fix(){ printf '  \033[36mFIX\033[0m  %s\n' "$*"; }
 echo "orca-dev install ($mode)"
 
 # --- 1. skill link ------------------------------------------------------------
-src="$here/skills/orca-dev"; target="$HOME/.codex/skills/orca-dev"
-if [ ! -d "$src" ]; then
-  warn "skill source missing: $src"
-elif [ "$mode" = install ]; then
-  mkdir -p "$HOME/.codex/skills"
-  if [ -L "$target" ]; then
-    if [ "$(readlink "$target")" = "$src" ]; then ok "skill already linked: $target -> $src"
-    else rm -f "$target" && ln -s "$src" "$target" && ok "skill linked: $target -> $src" || warn "could not link $target"; fi
-  elif [ -e "$target" ]; then
-    warn "$target exists and is not a symlink — not touching it; move it away and re-run"
-  else
-    ln -s "$src" "$target" && ok "skill linked: $target -> $src" || warn "could not link $target"
-  fi
-else
-  if [ -L "$target" ] && [ "$(readlink "$target")" = "$src" ]; then ok "skill present: $target"
-  elif [ -e "$target" ]; then warn "skill at $target does not point to $src"
-  else warn "skill not installed (run ./install.sh)"; fi
-fi
+# Python is already a runtime dependency; lstat/unlink never traverses the leaf.
+if ! command -v python3 >/dev/null 2>&1; then warn 'python3 not on PATH (required; no installation changes made)'; exit 1; fi
+link_output=$(python3 - "$here" "$user_home" "$mode" "$test_mode" <<'PY'
+import os, pathlib, sys
+here, home, mode, test = sys.argv[1:]
+def plain(path):
+    p = pathlib.Path(os.path.abspath(path))
+    if any(x.is_symlink() for x in (p, *p.parents)):
+        raise ValueError('refusing write through symlink: ' + str(p))
+home_valid = not test
+try:
+    if test:
+        if not os.path.isabs(home) or not os.path.isdir(home) or os.path.realpath(home) == os.path.realpath(os.path.expanduser('~')):
+            raise ValueError('ORCA_DEV_TEST_HOME must be an existing isolated absolute directory')
+        plain(home)
+        home_valid = True
+    src = os.path.realpath(os.path.join(here, 'skills', 'orca-dev'))
+    target = os.path.join(home, '.codex', 'skills', 'orca-dev')
+    print('INFO:skill source: ' + src)
+    print('INFO:skill link: ' + target + ' -> ' + (os.readlink(target) if os.path.islink(target) else '(not a link)'))
+    points = os.path.islink(target) and os.path.realpath(target) == src
+    if not os.path.isdir(src): raise ValueError('skill source missing: ' + src)
+    if mode == 'install':
+        plain(os.path.dirname(target))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.lexists(target) and not os.path.islink(target):
+            raise ValueError(target + ' exists and is not a link; not touching it')
+        if not points:
+            if os.path.islink(target): os.unlink(target)
+            os.symlink(src, target)
+        print('OK:skill linked: ' + target + ' -> ' + src)
+    elif points: print('OK:skill present: ' + target)
+    else: raise ValueError('skill missing or stale: ' + target + ' (run ./install.sh)')
+except (OSError, ValueError) as exc:
+    print('WARN:' + str(exc))
+    if not home_valid: sys.exit(2)
+PY
+)
+link_rc=$?
+while IFS= read -r line; do
+  case "$line" in OK:*) ok "${line#OK:}";; WARN:*) warn "${line#WARN:}";; INFO:*) info "${line#INFO:}";; esac
+done <<<"$link_output"
+[ "$link_rc" -eq 2 ] && exit 2
+[ "$link_rc" -ne 0 ] && warn 'skill link validation failed'
+if [ -n "${ORCA_DEV_HOME:-}" ]; then
+  process_home=$(cd "$ORCA_DEV_HOME" 2>/dev/null && pwd -P)
+  if [ "$process_home" = "$here" ]; then ok "Process ORCA_DEV_HOME = $ORCA_DEV_HOME"
+  else warn "Process ORCA_DEV_HOME is '$ORCA_DEV_HOME', expected '$here'; restart the parent or export ORCA_DEV_HOME to this checkout for the worker launch"; fi
+else info 'Process ORCA_DEV_HOME unset; bootstrap resolves the installed skill link'; fi
+info 'User environment: install.sh does not write shell profiles or persistent environment'
+[ -n "$test_mode" ] && info 'isolated test home: external CLI/runtime probes, upgrades and registration are skipped'
 
 # --- 2. CLIs ----------------------------------------------------------------------
-for c in orca codex claude agy jq python3; do
+for c in orca codex claude agy git python3; do
   if command -v "$c" >/dev/null 2>&1; then ok "$c: $(command -v "$c")"; else warn "$c not on PATH"; fi
 done
-if command -v orca >/dev/null 2>&1; then
+if [ -z "$test_mode" ] && command -v orca >/dev/null 2>&1; then
   st=$(orca status --json 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("result",{}).get("runtime",{}).get("state","?"))' 2>/dev/null)
   [ "$st" = ready ] && ok "orca runtime: ready" || warn "orca runtime state: ${st:-unreachable} (run: orca open --json)"
 fi
 
 # --- 3. Codex update prompt ---------------------------------------------------------
-if command -v brew >/dev/null 2>&1 && brew list --cask codex >/dev/null 2>&1; then
+if [ -z "$test_mode" ] && command -v brew >/dev/null 2>&1 && brew list --cask codex >/dev/null 2>&1; then
   if brew outdated --cask codex 2>/dev/null | grep -q codex; then
-    if [ "$mode" = install ]; then brew upgrade --cask codex >/dev/null 2>&1 && ok "codex upgraded ($(codex --version 2>/dev/null))" || warn "codex upgrade failed — the TUI will show an update prompt that blocks workers"
-    else warn "codex outdated → update prompt will block workers (brew upgrade --cask codex)"; fi
+    warn "codex outdated → update prompt will block workers (brew upgrade --cask codex)"
   else ok "codex up to date ($(codex --version 2>/dev/null))"; fi
 fi
 
 # --- 4. Codex hooks trust --------------------------------------------------------------
-hooks="$HOME/.codex/hooks.json"; cfg="$HOME/.codex/config.toml"
+hooks="$user_home/.codex/hooks.json"; cfg="$user_home/.codex/config.toml"
 if [ -f "$hooks" ] && [ -f "$cfg" ]; then
   declared=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));h=d.get("hooks",d);print(sum(len(g.get("hooks",[g])) for l in h.values() for g in l))' "$hooks" 2>/dev/null)
   declared=${declared:-0}
@@ -131,6 +166,10 @@ for r in paths:
 if changed:
     tmp = None
     try:
+        from pathlib import Path
+        absolute = Path(os.path.abspath(p))
+        if any(x.is_symlink() for x in (absolute, *absolute.parents)):
+            raise OSError('refusing write through symlink: ' + p)
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(p)), prefix=".install-sh.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(d, f, indent=2, ensure_ascii=False)
@@ -178,11 +217,11 @@ $repos
 EOF
   # shellcheck disable=SC2086  # $paths is newline-separated; paths never contain newlines
   old_ifs=$IFS; IFS=$'\n'; set -- $paths; IFS=$old_ifs
-  trust_json claude "$HOME/.claude.json" "$mode" "$@"
-  trust_json agy "$HOME/.gemini/antigravity-cli/settings.json" "$mode" "$@"
+  trust_json claude "$user_home/.claude.json" "$mode" "$@"
+  trust_json agy "$user_home/.gemini/antigravity-cli/settings.json" "$mode" "$@"
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
-    if command -v orca >/dev/null 2>&1; then
+    if [ -z "$test_mode" ] && command -v orca >/dev/null 2>&1; then
       orca repo list --json 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);sys.exit(0 if any(r.get("path")==sys.argv[1] for r in d.get("result",{}).get("repos",[])) else 1)' "$repo" \
         && ok "orca: $repo registered" || warn "orca: repo not registered (orca repo add --path $repo --json)"
     fi
@@ -193,7 +232,7 @@ EOF
 fi
 
 # --- 6. bridge (optional, Pro planner) ------------------------------------------------
-if pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null 2>&1; then ok "codex-chatgpt-web bridge running (opt-in --planner pro available)"; else info "codex-chatgpt-web bridge not running (opt-in --planner pro disabled; default planner is configured in roles.md)"; fi
+if [ -z "$test_mode" ] && command -v pgrep >/dev/null 2>&1 && pgrep -f "codex-chatgpt-web.*cli.js serve" >/dev/null 2>&1; then ok "codex-chatgpt-web bridge running (opt-in --planner pro available)"; else info "codex-chatgpt-web bridge not running (opt-in --planner pro disabled; default planner is configured in roles.md)"; fi
 
 if [ "$nwarn" -gt 0 ]; then echo "install.sh: $nwarn warning(s)"; exit 1; fi
 echo "done."

@@ -39,22 +39,24 @@ phases:
     base: a3e4dc854474243cf77de9fbd85e2e4605ff315a
     scope: "Детерминированная валидация отчётов, переходов, независимости и возобновления"
     status: done
-    commits: 'a3e4dc854474243cf77de9fbd85e2e4605ff315a..'
+    commits: 'a3e4dc854474243cf77de9fbd85e2e4605ff315a..21d544b211333888cf8fc2921dccb2aa6fbccf9b'
     risk: REGRESSION
     verify:
       - {"id":"protocol-state","command":"python -B -m unittest discover -s tests -p test_protocol_state.py","checkpoint":"integration","timeout_seconds":175,"hermetic":false,"independent_replay":true}
       - {"id":"diff-check","command":"git diff --check","checkpoint":"integration","timeout_seconds":10,"hermetic":false,"independent_replay":true}
   - id: Ф5
+    base: 21d544b211333888cf8fc2921dccb2aa6fbccf9b
     scope: "Безопасная установка, совместимость и ограниченная сквозная приёмка"
-    status: pending
+    status: done
+    commits: '21d544b211333888cf8fc2921dccb2aa6fbccf9b..'
     risk: DATA_LOSS
     verify:
-      - 'python -B -m unittest discover -s tests -p test_install.py'
-      - 'python -B -m unittest discover -s tests -p test_delivery.py'
-      - 'python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev'
-      - 'git diff --check'
+      - {"id":"final-suite","command":"python -B -m unittest discover -s tests -p 'test_*.py' -v -f","checkpoint":"final","timeout_seconds":1050,"environment":["ORCA_TEST_SHELL","ORCA_DEV_HOME","ORCA_TEST_ARTIFACTS",{"tool":"python","version_args":["--version"]}],"hermetic":false,"independent_replay":true}
+      - {"id":"skill-validate","command":"python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev","checkpoint":"integration","timeout_seconds":20,"hermetic":false,"independent_replay":true}
+      - {"id":"diff-check","command":"git diff --check","checkpoint":"integration","timeout_seconds":10,"hermetic":false,"independent_replay":true}
 verify:
-  - {"id":"protocol-state","command":"python -B -m unittest discover -s tests -p test_protocol_state.py","checkpoint":"integration","timeout_seconds":175,"hermetic":false,"independent_replay":true}
+  - {"id":"final-suite","command":"python -B -m unittest discover -s tests -p 'test_*.py' -v -f","checkpoint":"final","timeout_seconds":1050,"environment":["ORCA_TEST_SHELL","ORCA_DEV_HOME","ORCA_TEST_ARTIFACTS",{"tool":"python","version_args":["--version"]}],"hermetic":false,"independent_replay":true}
+  - {"id":"skill-validate","command":"python -X utf8 -B C:/Users/strig/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev","checkpoint":"integration","timeout_seconds":20,"hermetic":false,"independent_replay":true}
   - {"id":"diff-check","command":"git diff --check","checkpoint":"integration","timeout_seconds":10,"hermetic":false,"independent_replay":true}
 ---
 
@@ -129,6 +131,7 @@ verify:
 | Ф5 | `install.sh`, `install.ps1`, `README.md`, `docs/install-windows.md` | Изоляция установки в тестах, stale links/env, актуальные entry points/зависимости и совместимость форматов |
 | Ф5 | `skills/orca-dev/SKILL.md`, `skills/orca-dev/orca-recipes.md` | Только окончательные пути, bootstrap/проверка установки и устранение выявленного дрейфа интеграции |
 | Ф5 | **Create** `tests/test_install.py`, `tests/test_delivery.py`, `docs/controlled-pipeline-validation.md`; Modify `tests/support.py` | Приёмка пользовательского сценария и короткий воспроизводимый отчёт |
+| Ф5 | Modify `bin/lib/verification.ps1`, `tests/test_verification.py`, `bin/run-check.ps1`, `tests/test_runner.py`; `tests/support.py` из строки выше | Принятые интеграционные исправления: канонический JSON null, конечные пакеты verification CLI, совместимое чтение и атомарная публикация Windows JSON, детерминированные проверки DELETE sharing, временной блокировки и постоянного отказа |
 
 `bin/sdd-workspace`, `bin/sdd-workspace.ps1`, `bin/wait-agent-ready` и `.ps1` изучены и переиспользуются; их изменение для данного решения не требуется. Не создавать второй механизм workspace или готовности worker.
 
@@ -222,10 +225,28 @@ Entry points `bin/protocol-state` и `bin/protocol-state.ps1`: `validate INPUT_J
 - Directed: один запуск затронутого test-модуля после содержательной правки; повтор только по изменению/конкретной новой гипотезе/обязательному replay. Не создавать тесты, просто проверяющие перефразировку документации; поведение проверяется реальными процессами, файлами и событиями.
 - Integration: Ф2 — runner через оба gate; Ф3 — runner → evidence → gate/package; Ф4 — Delivery → report → frozen artifact → commit/resume; Ф5 — полный минимальный сценарий установки/поставки. Исправление после интеграционного сбоя сначала проверяется направленно.
 - Бюджет каждого синтетического child-process — до 15 секунд; один модуль с процессными случаями — до 3 минут на платформу. Assertions привязаны к событию/файлу, не к точному времени до миллисекунды. Только два конкурентных child-run для проверки общего ресурса.
-- Полный итоговый набор: `python -B -m unittest discover -s tests -p 'test_*.py'` на Windows, `python3 -B -m unittest discover -s tests -p 'test_*.py'` на POSIX. Лимит 8 минут на платформу; один плановый итоговый проход и максимум один повтор после исправления конкретного дефекта. Обязательный независимый replay учитывается в этом бюджете, а не прячется как бесплатный запуск.
+- Полный итоговый набор: `python -B -m unittest discover -s tests -p 'test_*.py' -v -f` на Windows, `python3 -B -m unittest discover -s tests -p 'test_*.py' -v -f` на POSIX. Лимит 17 минут 30 секунд на платформу; один плановый итоговый проход и максимум один повтор после исправления конкретного дефекта. Обязательный независимый replay учитывается в этом бюджете, а не прячется как бесплатный запуск.
 - Diagnosis: один сбор ограниченных данных, одна проверяемая гипотеза, одна направленная проверка, до 15 минут на эпизод; затем решение continue по уже имеющемуся бюджету, исправить план или остановиться с partial. Новый эпизод без новой причины/данных не открывается автоматически.
 - Нельзя продлевать бюджет потому, что результат «почти готов». После исчерпания не запускать новый тяжёлый check/worker, сохранить артефакт и факты; уже живой процесс обрабатывается по его заранее записанной политике cleanup. Незавершённый сценарий перечисляется как blocker. Ledger/caps ревью продолжают действовать.
 - Счётчики минимальны: actual runs, reused runs/origin, independent replays, BASE runs/reuses, repeat reason, duration, diagnostic events и accepted/partial outcomes. Не собирать dashboard, quota, маркетинговый рейтинг или дополнительную телеметрию провайдера.
+
+Поправка Ф5 к общему бюджету: первый PS5.1 full suite остановлен по deadline 480 с во время случая 42, до последних 10 verification cases; эта попытка остаётся failed. Пакетирование только последнего модуля не доказывает укладывание всего набора в 480 с. Принято конечное выделение 1050 с = 6 × 175 с для шести существующих модулей с сохранением всех 52 сценариев и прежних child/module limits. Это верхняя плановая граница, не измеренная длительность или PASS; итоговая приёмка остаётся pending.
+
+Отдельное исключение Ф5 после доказанного PH5-G3 (решение координатора `msg_390435d2266d` для этого Run): `ReadAllText(status.json)` при атомарной Windows-замене дал sharing violation, wait exit 125 и пустой stdout. Исправляются native runner и чтение JSON в тестовой оснастке; регрессия с реальным DELETE-handle остаётся внутри существующего случая, всего 52 теста. PS5.1 full attempt2 прошёл 52/52 за 617.721 с **до** этой правки общего C3 runner и сохраняется как исторический PASS; PS7 full attempt1 остановлен на случае 26 за 259.464 с и остаётся failed, как и первый PS5.1 timeout.
+
+После этой правки координатору явно выделены ровно три оставшихся full run: **один дополнительный PS5.1**, **один ранее оставшийся PS7 actual-fix repeat**, **первый WSL**. Каждый ограничен 1050 с; child watchdog 14 с и module 175 с не меняются. Дополнительный PS5.1 — названное исключение из исходного ограничения повторов этой задачи; общие caps навыка не меняются, иных full repeats это решение не разрешает. Итоговая приёмка остаётся pending до этих проверок; статусы и commits ведёт координатор.
+
+Последующее исключение Ф5 для этого Run (явное решение координатора `msg_3a358e0daa5d`): после исправления чтения PS7 full attempt2 прошёл 52/52 за 490.167 с (`final-suite-ps7-2/summary.json`), затем PS5.1 full attempt3 остановлен на случае 26 за 319.532 с (`final-suite-ps51-3/summary.json`). Сохранённый результат владельца доказал writer-side `Replace` AccessDenied: interrupted, duration 1.7229405 с, cleanup/logs true. Оба результата сохраняются в истории; прежние PS7 и PS5.1 PASS предшествуют новой правке атомарной публикации.
+
+Текущее исправление: `ReplaceFileW` для существующего назначения, перенос без перезаписи для отсутствующего, конечные повторы Win32 5/32 не более 250 мс и не далее остатка бюджета команды. Реальные файловые дескрипторы проверяют временную блокировку, старый/новый полный JSON и постоянный отказ с сохранёнными временными байтами; прежние DELETE-reader/no-progress assertions и все 52 случая сохранены. Направленные проверки автора PS5.1/PS7/WSL завершены; свидетельства — `phase-5-fix-3-report.md` и `phase5-fix3-final-evidence.json` в workspace.
+
+Актуальное оставшееся выделение координатору после этой правки: **PS5.1 full attempt4**, **PS7 full attempt3**, **WSL full attempt1**, ровно по одному запуску, каждый до 1050 с. Это явное отдельное расширение исходных caps данной задачи для обычного сопровождения, а не штатное соблюдение первоначального распределённого лимита и не разрешение дальнейших повторов. Общие caps навыка, child 14 с/module 175 с, число тестов и status/commit metadata не меняются; автор полные наборы не запускает. Итоговая приёмка pending до независимых результатов нового снимка.
+
+Следующее отдельное расширение Ф5 по заданию `task_9a8af66091ba` / `ctx_f9eca34009df` относится только к подтверждённому read race: PS5.1 full attempt4 завершился 25 PASS + FAIL на случае 26, 304.137 с unittest / 306.782 с C3 (`final-suite-ps51-4/summary.json`). Wait вернул 125, пустой stdout и Open sharing violation; владелец независимо завершился exit0 за 4.6118785 с с полным JSON и cleanup/logs true. Этот failed outcome сохраняется вместе с исходным 480-секундным прерыванием, всеми прежними failures и pre-fix PASS.
+
+Исправление ограничено повтором открытия JSON при Win32 32: максимум 250 мс, дополнительно ограничено остатком бюджета wait/run; ACL, отсутствующий файл и ошибка разбора остаются ошибками. Принятая writer-side политика не меняется. Регрессия с реальным несовместимым handle освобождает его после verbose-сигнала первой неудачной попытки чтения, проверяет постоянную блокировку и повреждённый JSON; исходные 52 случая и порядок сохранены. Направленные PS5.1 4/4 и WSL diagnostic 1/1 прошли; PS7 сначала 2 PASS + необъяснённый cancel FAIL125, затем единственный разрешённый affected replay и ранее не выполненная exact-command проверка — 2/2 PASS после добавления записи ответа cancel/owner. Первый cancel failure не объявляется исправленным или опровергнутым; свидетельства и ограничения — `phase-5-fix-4-report.md`, `phase5-fix4-final-evidence.json`.
+
+После финальной фиксации кода и этих двух документов актуально выделены ровно **PS5.1 full attempt5**, **PS7 full attempt3**, **WSL full attempt1**, по одному запуску каждому, каждый до 1050 с. Это названное дальнейшее расширение для данного фактического дефекта в рамках обычного сопровождения репозитория; оно не удостоверяет соблюдение первоначальных caps. Общие распределённые caps, child 14 с/module 175 с, число тестов, frontmatter status и commit ranges сохраняются. Все full runs принадлежат координатору после settlement; автор их не запускает, дальнейшие повторения не выделены, итоговая приёмка pending.
 
 ### Платформы и независимость
 
@@ -319,7 +340,7 @@ Entry points `bin/protocol-state` и `bin/protocol-state.ps1`: `validate INPUT_J
 
 ## Ф5: Подтвердить установку и рабочую поставку
 
-**Files in this phase:** Modify `install.sh`, `install.ps1`, `README.md`, `docs/install-windows.md`, `skills/orca-dev/SKILL.md`, `skills/orca-dev/orca-recipes.md`, `tests/support.py`; Create `tests/test_install.py`, `tests/test_delivery.py`, `docs/controlled-pipeline-validation.md`.
+**Files in this phase:** Modify `install.sh`, `install.ps1`, `README.md`, `docs/install-windows.md`, `skills/orca-dev/SKILL.md`, `skills/orca-dev/orca-recipes.md`, `tests/support.py`, `bin/lib/verification.ps1`, `tests/test_verification.py`, `bin/run-check.ps1`, `tests/test_runner.py`; Create `tests/test_install.py`, `tests/test_delivery.py`, `docs/controlled-pipeline-validation.md`.
 
 **Interfaces:**
 - Consumes: C1–C6, результаты предыдущих фаз и общая фикстура двух worktree из `tests/support.py` (Ф2).
