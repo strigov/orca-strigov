@@ -229,7 +229,8 @@ def file_record(path):
 
 
 def capture_once(root, inputs, exclusions):
-    root = Path(text_git(root, "rev-parse", "--show-toplevel"))
+    from posix_runtime import artifact_path
+    root = artifact_path(text_git(root, "rev-parse", "--show-toplevel"))
     records = {}; witness = {}; indexed = {}
     for entry in git(root, "ls-files", "--stage", "-z").split(b"\0"):
         if not entry: continue
@@ -268,7 +269,8 @@ def capture_once(root, inputs, exclusions):
 
 def snapshot(root, inputs=(), exclusions=()):
     try:
-        exclusions = [Path(os.path.abspath(p)) for p in exclusions]
+        from posix_runtime import artifact_path
+        exclusions = [artifact_path(p) for p in exclusions]
         first, witness = capture_once(root, inputs, exclusions)
         second, later = capture_once(root, inputs, exclusions)
         if first != second or witness != later: raise ValueError("unstable snapshot capture")
@@ -329,7 +331,8 @@ def context(spec):
             error = error or "unverifiable-base-files"
     key = dict(check=c, provenance=v["provenance"], shell=spec["shell"], cwd=spec["cwd"],
                snapshot_id=snap["snapshot_id"], environment=env,
-               implementation_sha256=digest(Path(__file__).read_bytes() + Path(__file__).with_name("run_check.py").read_bytes()))
+               implementation_sha256=digest(Path(__file__).read_bytes() + Path(__file__).with_name("run_check.py").read_bytes() +
+                                            Path(__file__).with_name("posix_runtime.py").read_bytes()))
     return dict(snapshot=snap, environment=env, key=key, reason=error)
 
 
@@ -358,7 +361,11 @@ def signature(root, output):
 def evidence_valid(st, request=None):
     try:
         result_path = Path(st["run_dir"]) / "result.json"
-        if digest(result_path.read_bytes()) != load(result_path.with_name("result.sha256")): return False
+        result_bytes = result_path.read_bytes()
+        if digest(result_bytes) != load(result_path.with_name("result.sha256")): return False
+        # Validate the supplied record against the same bytes whose seal passed.
+        # A copy must not borrow an intact run's seal after changing its outcome.
+        if st != json.loads(result_bytes): return False
         e = st["evidence"]
         if (e["schema_version"] != 1 or not e["valid"] or st["state"] != "exited" or
                 not st["cleanup_verified"] or not st["logs_complete"] or st["exit_code"] is None): return False

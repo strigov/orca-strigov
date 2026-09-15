@@ -1,0 +1,10 @@
+# Portable runtime and instruction bytes. Preserve any existing UTF-8 BOM in PS1.
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+/bin/* text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf

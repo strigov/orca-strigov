@@ -135,7 +135,7 @@ class RunnerFixture:
         artifact_root = os.environ.get("ORCA_TEST_ARTIFACTS")
         if artifact_root:
             Path(artifact_root).mkdir(parents=True, exist_ok=True)
-        self.base = Path(os.path.abspath(tempfile.mkdtemp(prefix="runner-", dir=artifact_root)))
+        self.base = Path(tempfile.mkdtemp(prefix="runner-", dir=artifact_root)).resolve()
         created = self.base.lstat()
         self.base_identity = (created.st_dev, created.st_ino)
         self.git = TwoWorktrees(self.base)
@@ -217,7 +217,7 @@ class RunnerFixture:
 def selected_shell():
     if WINDOWS:
         return os.environ.get("ORCA_TEST_SHELL", os.path.join(os.environ["SystemRoot"], "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
-    return shutil.which("bash")
+    return os.environ.get('ORCA_TEST_SHELL') or shutil.which("bash")
 
 
 def installation_state(home=None):
@@ -498,12 +498,12 @@ class ProtocolFixture(VerificationFixture):
         result['page'].update(paging)
         return [dict(self.save(dict(id='fixture-fleet-' + uuid.uuid4().hex, ok=True, result=result)), cursor=None)]
 
-    def report_input(self, role='implementer', family='OpenAI', token=None, artifact=None, coverage=None, findings=None, round=1, extra=''):
+    def report_input(self, role='implementer', family='OpenAI', token=None, artifact=None, coverage=None, findings=None, round=1, extra='', assignment=None):
         artifact = artifact or self.snapshot_ref()
         obj = read_json(artifact['path']) if artifact['kind'] != 'plan' else {}
         aid = obj.get('package_id', obj.get('snapshot_id', artifact['sha256']))
         sid = obj.get('snapshot_after', obj).get('snapshot_id')
-        a = self.assignment(role, family, round)
+        a = dict(assignment) if assignment else self.assignment(role, family, round)
         a.update(artifact_id=aid, snapshot_id=sid)
         self.state['active'] = a
         b = dict(schema_version=1, **{k: a[k] for k in ('run_id','task_id','dispatch_id','role','phase','round','artifact_id','snapshot_id')})

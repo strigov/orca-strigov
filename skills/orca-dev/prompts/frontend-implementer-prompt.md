@@ -10,9 +10,9 @@ Model, effort, and profiles (`default` vs `light` tweaks) are defined in `../rol
 
 The worker has NO session context. The prompt must be fully self-contained — include plan path + phase id + visual intent + any screenshot references + relevant existing files/components to follow.
 
-Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. Resolve it once per phase as `$(bin/sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path, exactly as for the backend implementer (see SKILL.md Step 3). Fix rounds append to the same file — never mint a new report path for round 2+.
+Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. For every Dispatch allocate a unique ATTEMPT and resolve it as `<workspace>/phase-<id>-r<round>-<ATTEMPT>.md` using the platform-specific workspace helper and substitute the absolute path, exactly as for the backend implementer (see coordinator-phase.md Step 3). Every follow-up gets a fresh `[REPORT_FILE]`; supply the immutable prior report as `[PREVIOUS_REPORT_FILE]`.
 
-**Implementer retention**: the coordinator retains the implementer's terminal across review and fix rounds until the phase is committed. For follow-up rounds after the fused review (Step 4), re-inject the follow-up template into this worker's own terminal when it still exists (the thread already knows the plan and the phase); otherwise dispatch a fresh worker with the COMBINED BLOCKING list (the open ACCEPTED / PARTIALLY_ACCEPTED ledger items, merged by the coordinator from the primary review and the control review) and the same `[REPORT_FILE]`.
+**Implementer retention**: the coordinator retains the implementer's terminal across review and fix rounds until the phase is committed. For follow-up rounds after the fused review (Step 4), re-inject the follow-up template into this worker's own terminal when it still exists (the thread already knows the plan and the phase); otherwise dispatch a fresh worker with the COMBINED BLOCKING list (the open ACCEPTED / PARTIALLY_ACCEPTED ledger items, merged by the coordinator from the primary review and the control review) and a new `[REPORT_FILE]`, plus `[PREVIOUS_REPORT_FILE]` for context.
 
 ## First-round prompt template
 
@@ -53,7 +53,7 @@ Do not guess on visuals. A wrong mockup is worse than a clarifying question.
 2. Cover empty / loading / error states explicitly. Do not ship a "happy path only" UI.
 3. Match the existing component and design patterns in the repo (tokens, primitives, utilities).
 4. Write tests where they belong for this stack (component tests, snapshot / visual if established, e2e only if the plan asks).
-5. Run the meaningful bounded tests / typecheck / linters required by the phase. For a long command, read `../runtime-contracts.md` C3 on demand and use its blocking runner, explicit deadline/cancel policy, full logs and declared shared resource. Keep one owner: no model timer, Schedule task, blind PID loop or second observer. If a command terminal is necessary, use the verified C3 terminal wait. No-progress is diagnostic; apply bounded diagnosis and preserve the live preamble's heartbeat/lifecycle obligations. Report real command/result/log paths and cleanup limitations; repeat an unchanged check only for a new hypothesis or required replay within budget.
+5. Run the meaningful bounded tests / typecheck / linters required by the phase. For a long command, read `[RUNTIME_CONTRACTS_PATH]` C3 on demand and use its blocking runner, explicit deadline/cancel policy, full logs and declared shared resource. Keep one owner: no model timer, Schedule task, blind PID loop or second observer. If a command terminal is necessary, use the verified C3 terminal wait. No-progress is diagnostic; apply bounded diagnosis and preserve the live preamble's heartbeat/lifecycle obligations. Report real command/result/log paths and cleanup limitations; repeat an unchanged check only for a new hypothesis or required replay within budget.
 6. Self-review (see below) and fix issues before reporting.
 7. Write your full report to [REPORT_FILE], then send exactly one `worker_done` (see Reporting below).
 
@@ -91,7 +91,7 @@ Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding o
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line test summary (e.g. "14/14 passing"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the full detail:
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line test summary (e.g. "14/14 passing"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the full detail:
    - What you implemented (or attempted, if blocked)
    - What you tested and results (commands + output summary)
    - Files changed (paths)
@@ -121,6 +121,10 @@ Path: `<repo-root>/docs/plans/<slug>.md`, phase `<id>`. Read the plan file for s
 
 ## Combined blocking list
 
+Exact finding IDs and original accepted report references: [FIX_FINDING_REFERENCES]
+Copy addressed entries into `FIX_EVIDENCE.findings`, preserving each report path
+and raw hash alongside the required tests, commands and outputs.
+
 1. <issue 1> — file:line — <reviewer: review-primary | review-control> — <what to change>
 2. <issue 2>
 ...
@@ -138,7 +142,7 @@ Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding o
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
-1. Append a section `## Fix round <N>` to `[REPORT_FILE]` (the same report file from the first round — do not overwrite it, do not create a new one) containing ALL THREE of:
+1. Create the new `[REPORT_FILE]` with the current verdict, test summary and BINDING, then `## Fix round <N>` containing ALL THREE of:
 
    1. The names of the tests covering each fixed item
    2. The exact test command(s) you ran
@@ -146,7 +150,7 @@ Bind the completed source snapshot and actual verification results. Fix rounds i
 
    All three are mandatory — a fix-round report missing any of them is returned to you before re-review.
 
-   Then rewrite line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `NEEDS_CONTEXT` | `BLOCKED`, with the same structured fields as the first round right after it (test summary, files changed count, concerns). If NEEDS_AUTHORIZATION, NEEDS_CONTEXT or BLOCKED, put the specifics in the worker_done body as well.
+   In this NEW report, set line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `NEEDS_CONTEXT` | `BLOCKED`, with the same structured fields as the first round right after it (test summary, files changed count, concerns). If NEEDS_AUTHORIZATION, NEEDS_CONTEXT or BLOCKED, put the specifics in the worker_done body as well.
 
 2. Then, from your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble at the top of this task. `orca` is a plain shell command on PATH — run the line below through your shell/command tool exactly as written. Do not look for an `orca` tool in any tool registry or inventory: none exists, and searching for one only burns the turn.
 
@@ -156,4 +160,4 @@ orca orchestration send --from <copy the --from value from the Orca preamble> --
 4. After sending worker_done, end your turn and idle. Do not start more work. If you are blocked before completion, prefer `orca orchestration ask --question "<specific question>" --timeout-ms 90000 --json` over guessing; the coordinator answers with `reply`. The call blocks and shell tools kill long commands, so keep the timeout short: if it returns without a reply, run `orca orchestration ask --resume <message_id from the first call> --timeout-ms 90000 --json` again until the answer arrives.
 ```
 
-For verification declarations and exact evidence, load `../runtime-contracts.md` C4 on demand. Use the selected phase/checkpoint and normalized C4 runner request; report result/log paths, snapshot ids and physical repeat reasons. A textual test summary does not replace machine evidence. Reuse requires the explicit hermetic/observability contract and matching inputs/tools/environment; required independent verifier replay remains physical. Keep write Dispatch/launch receipts and the files changed for C5 authorship.
+For verification declarations and exact evidence, load `[RUNTIME_CONTRACTS_PATH]` C4 on demand. Use the selected phase/checkpoint and normalized C4 runner request; report result/log paths, snapshot ids and physical repeat reasons. A textual test summary does not replace machine evidence. Reuse requires the explicit hermetic/observability contract and matching inputs/tools/environment; required independent verifier replay remains physical. Keep write Dispatch/launch receipts and the files changed for C5 authorship.

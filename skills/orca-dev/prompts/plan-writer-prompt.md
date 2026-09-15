@@ -91,7 +91,7 @@ The one-line JSON `contracts`, `consumes` and `produces` lists must mirror the b
 
 `risk:` per phase is `none | SECURITY | DATA_LOSS | REGRESSION` — the coordinator routes the review model by it, so mark a phase that touches auth, persistence formats, deletion or migrations honestly. Every phase MUST have a declared `risk:` value.
 
-`verify:` is a deterministic check list; top-level remains the legacy default, and `--phase ID` selects `phases[].verify` without falling back from an empty list. Read `../runtime-contracts.md` C4 on demand for one-line JSON declarations, phase/checkpoint selection, deadlines, declared inputs/tools/environment, hermetic defaults and required independent replay. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
+`verify:` is a deterministic check list; top-level remains the legacy default, and `--phase ID` selects `phases[].verify` without falling back from an empty list. Read `[RUNTIME_CONTRACTS_PATH]` C4 on demand for one-line JSON declarations, phase/checkpoint selection, deadlines, declared inputs/tools/environment, hermetic defaults and required independent replay. The writer discovers and records these from the repo (e.g. `npm test`, `pytest -q`, `cargo check`).
 
 
 Body must have these H2 sections, in order:
@@ -192,6 +192,11 @@ Read it in full (including frontmatter) before editing — the file on disk is a
 The ledger is the authoritative scope for this revision. Items not appearing as ACCEPTED / PARTIALLY_ACCEPTED here are NOT authorized — do not act on them.
 
 ## Reviewer findings behind these items (context only, verbatim)
+
+Exact finding IDs and original accepted report references: [FIX_FINDING_REFERENCES]
+In the revision report add `FIX_EVIDENCE.findings` containing the addressed
+`{id,report}` entries exactly as supplied. Keep per-item changed-section notes;
+text-only revisions do not require a runtime CHECK.
 
 <paste the reviewer's BLOCKING lines for the ledger items above — they explain WHY each change is required>
 

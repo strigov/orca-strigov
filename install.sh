@@ -40,6 +40,10 @@ echo "orca-dev install ($mode)"
 # --- 1. skill link ------------------------------------------------------------
 # Python is already a runtime dependency; lstat/unlink never traverses the leaf.
 if ! command -v python3 >/dev/null 2>&1; then warn 'python3 not on PATH (required; no installation changes made)'; exit 1; fi
+if ! python3 "$here/bin/lib/run_check.py" capabilities; then
+  warn 'unsupported runner capabilities (Linux Python 3.9+; macOS Python 3.13+); no installation changes made'
+  exit 1
+fi
 link_output=$(python3 - "$here" "$user_home" "$mode" "$test_mode" <<'PY'
 import os, pathlib, sys
 here, home, mode, test = sys.argv[1:]

@@ -1,17 +1,41 @@
-# orca-strigov — agent instructions
+# orca-strigov: repository maintenance
 
-This repository ships the **orca-dev** skill: a multi-model development protocol for the Orca ADE where **Codex is the coordinator** and every other role (plan writer, reviewers, implementers, gate) runs as an Orca worker terminal on the agent/model chosen in `skills/orca-dev/roles.md`.
+This repository contains the orca-dev coordinator skill, worker templates,
+POSIX helpers, native PowerShell helpers and their tests.
 
-When a user in any repository asks for an implementation ("реализуй", "запили", "implement", "build this feature") and this skill is installed, load `~/.codex/skills/orca-dev/SKILL.md` and follow it. The skill's two hard rules apply to the coordinator regardless of model: it never writes production code and never researches the codebase itself — it dispatches.
+## Choose the correct context
 
-Layout:
+An Orca worker follows its live assignment and lifecycle preamble. Do not load
+or restart the coordinator protocol merely because the assignment asks for code.
+A standalone maintenance session may inspect and edit this repository directly.
+When a coordinator user asks for implementation ("реализуй", "запили", "implement",
+"build this feature"), automatically load the installed orca-dev skill. Explicit
+$orca-dev invocation also activates it. Standalone reviews and dispatched workers
+do not activate the coordinator workflow. The repository maintenance exception
+above permits direct authorized edits here. Never emulate unavailable Orca receipts.
 
-- `skills/orca-dev/SKILL.md` — the coordinator protocol
-- `skills/orca-dev/roles.md` — role → agent/model/effort matrix, cascades, family rule
-- `skills/orca-dev/orca-recipes.md` — launch, wait, release, blocker fixes
-- `skills/orca-dev/prompts/` — one template per role
-- `bin/` — `review-package`, `sdd-workspace`, `verify-gate`, `wait-agent-ready` (bash, no model)
-- `install.sh` (macOS / Linux / WSL2) and `install.ps1` (native Windows) — link the skill into `~/.codex/skills`, pre-trust a repo and its worktrees for Claude/Antigravity, report blockers; Windows notes in `docs/install-windows.md`
-- `docs/spikes/` — empirical findings the protocol is built on
+## Sources of truth
 
-Working on this repo itself: plain edits are fine (it is documentation and shell); keep `roles.md` the only place that names models.
+Use skills/orca-dev/roles.md for model identities, efforts, families and allowed
+fallbacks; keep those facts out of other runtime instructions. Use
+skills/orca-dev/runtime-contracts.md for machine interfaces and report binding.
+Use the version-matched live Orca orchestration reference for CLI lifecycle.
+Read platform installation notes when changing installation or launch behavior;
+read the corresponding contract when changing a runtime helper.
+
+## Change boundaries
+
+Preserve the user's working changes and environment. Do not push, alter global
+CLI configuration, disable security controls, install tools or modify production
+resources without authorization. Local isolated checks explicitly authorized by
+the task may run without asking again for each directed check. Do not assume that
+all repository tests are isolated: check their fixture and side-effect contract.
+
+A runtime semantic change requires matching POSIX and native Windows behavior,
+shared positive/negative fixtures, and explicit platform results. A Windows or
+WSL result is not a macOS result. Do not fabricate PASS or fill missing evidence
+with an old report. Preserve immutable report bytes across corrections and fixes.
+
+Report the exact commands run, results, limitations and the changed files.
+Do not repeat an unchanged full suite without a named regression hypothesis,
+a required independent replay, or a relevant source/environment change.

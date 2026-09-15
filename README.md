@@ -40,7 +40,15 @@ git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov; cd $HOME\o
 
 On Windows the workspace scripts run as native PowerShell ports (`bin\*.ps1`, PowerShell 5.1+; no bash, python3 or jq). The ChatGPT Pro web bridge is supported as an explicit opt-in planner (`--planner pro`) when configured and running (`orca-recipes.md` §7 has the Windows preflight).
 
-Runtime requirements: Bash 3.2+, Python 3.9+ (stdlib) and Git on POSIX; PowerShell 5.1 or 7 and Git on native Windows. Keep `bin/lib/` with the entry points. Python 3.9+ is also the test driver on Windows; it is not a dependency of the native `.ps1` helpers. `jq` is used only by optional recipe examples. Plans can declare additional tools for their own checks; skill validation uses the installed `quick_validate.py` and PyYAML.
+Runtime requirements: Bash 3.2+ and Git 2.36+ on POSIX, with Python 3.9+ on Linux and
+Python 3.13+ on macOS. `run-check capabilities` and the installer reject missing
+waitid/WNOWAIT or trustworthy process identity before useful command spawn.
+Native Windows requires PowerShell 5.1 or 7 and Git 2.36+; its `.ps1` runtime remains
+Python-independent. Python is a maintenance/test driver there. Keep `bin/lib/`
+with the entry points. See [platform contract and validation](docs/runtime-platforms.md)
+for native macOS NOT_RUN status, CI scenarios and reproducible release packaging.
+`jq` is used only by optional recipe examples. Plans can declare additional tools
+for their checks; skill validation uses `quick_validate.py` and PyYAML.
 
 The model workflow additionally needs Orca with orchestration enabled and the CLIs for the selected routes in [roles.md](skills/orca-dev/roles.md). At startup use `orca skills get orchestration` from the executable serving the Run; old version numbers or receipts do not certify the current lifecycle. The bridge is opt-in. Installation reports missing capabilities with a nonzero exit; that is an incomplete setup even if other checks pass.
 

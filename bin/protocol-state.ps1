@@ -23,7 +23,7 @@ function P-Ref($r) {
   P-Need $r @('path','sha256');P-Require ([IO.Path]::IsPathRooted($r.path)) 'artifact path must be absolute'
   V-Safe $r.path;P-Require ([IO.File]::Exists($r.path)) ('missing artifact: '+$r.path) 2
   $bytes=[IO.File]::ReadAllBytes($r.path);P-Require ((V-Hash $bytes) -ceq $r.sha256) ('artifact hash mismatch: '+$r.path)
-  return $VUtf8.GetString($bytes).TrimStart([char]0xfeff)
+  return $VUtf8.GetString($bytes).TrimStart([char]0xfeff).Replace("`r`n","`n")
 }
 function P-Decode([string]$text) { return ,(V-Normal ((ConvertFrom-Json -InputObject ('{"data":'+$text+'}')).data)) }
 function P-Record($r) { return ,(P-Decode (P-Ref $r)) }
@@ -34,7 +34,9 @@ function P-Line([string]$text,[string]$label,$default=$null) {
   return ,(P-Decode $rows[0].Groups[1].Value)
 }
 function P-Plan($s) {
-  if ($null -eq $s.plan) { P-Require ($s.mode -ceq 'quickfix') 'plan-less mode must be quickfix';return ,@() }
+  if ($null -eq $s.plan) {
+    if ($s.step -ceq 'bootstrap') { [void](P-Bootstrap $s) } else { P-Require ($s.mode -ceq 'quickfix') 'plan-less mode must be quickfix or authorized bootstrap' };return ,@()
+  }
   $text=P-Ref $s.plan;$m=[regex]::Match($text,'^---\r?\n(.*?)\r?\n---(?:\r?\n|$)','Singleline')
   P-Require $m.Success 'missing plan frontmatter' 2;$front=$m.Groups[1].Value
   $meta=@{}
@@ -44,6 +46,12 @@ function P-Plan($s) {
   }
   P-Require ($meta.protocol_version -ceq '2') 'legacy metadata is not certified' 2
   P-Require ($meta.orca_run -ceq $s.orca_run -and $meta.plan_base -ceq $s.plan_base) 'plan/run/base mismatch'
+  if ($s.authorization) {
+    [void](P-Ref $s.authorization)
+    $requestHash=[regex]::Matches($front,'(?m)^request_sha256:\s*(.*?)\s*$')
+    P-Require ($requestHash.Count -eq 1) 'missing plan metadata: request_sha256' 2
+    P-Require ((V-Unquote $requestHash[0].Groups[1].Value) -ceq $s.authorization.sha256) 'plan/request mismatch'
+  }
   $contracts=P-Decode $meta.contracts
   P-Require ($contracts -is [Array] -and @($contracts | Select-Object -Unique).Count -eq $contracts.Count) 'invalid contract ids'
   foreach ($c in $contracts) { P-Require ($c -is [string] -and $c -cmatch '^[A-Za-z][A-Za-z0-9_-]*$') 'invalid contract id' }
@@ -57,8 +65,80 @@ function P-Plan($s) {
   }
   P-Require ($phases.Count -gt 0 -and @($phases.id | Select-Object -Unique).Count -eq $phases.Count) 'invalid phases'
   $produced=@();foreach ($p in $phases) { P-Require (P-Subset $p.produces $contracts) 'undeclared produced contract';P-Require (P-Subset $p.consumes $produced) 'consume without an earlier producer';$produced+=@($p.produces) }
-  if ($null -ne $s.phase) { $p=@($phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and $p[0].base -ceq $s.base) 'phase/base mismatch' }
+  if ($null -ne $s.phase) { $p=@($phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and ($s.track_group -or $p[0].base -ceq $s.base)) 'phase/base mismatch' }
   return ,$phases
+}
+function P-Bootstrap($s) {
+  P-Require ($s.mode -ceq 'plan' -and $s.step -ceq 'bootstrap' -and $null -eq $s.phase -and -not $s.phase_commits.Count -and -not $s.track_group) 'invalid bootstrap state'
+  P-Require ($null -eq $s.active -or ($s.active.role -ceq 'plan-writer' -and $s.active.round -eq 1)) 'bootstrap permits only first plan-writer'
+  $r=P-Record $s.authorization;P-Need $r @('schema_version','run_id','worktree_id','plan_base','plan_path','request')
+  P-Require ($r.schema_version -eq 1 -and $r.run_id -ceq $s.orca_run -and $r.worktree_id -ceq $s.worktree_id -and $r.plan_base -ceq $s.plan_base -and $s.base -ceq $s.plan_base) 'bootstrap request binding mismatch'
+  P-Require ([IO.Path]::IsPathRooted($r.plan_path) -and [IO.Path]::GetFullPath($r.plan_path).StartsWith([IO.Path]::GetFullPath($s.worktree).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -and $r.request -is [string] -and $r.request.Trim()) 'invalid bootstrap request/plan path'
+  P-Require ($null -eq $s.plan -or $s.plan.path -ceq $r.plan_path) 'bootstrap draft path mismatch'
+  $history=@($s.accepted);if ($s.Contains('report_history')) { $history=@($s.report_history) }
+  $authors=@($history | ForEach-Object { $_.observation })
+  P-Require ((P-Eq $history $s.accepted) -and (P-Eq $authors $s.provenance)) 'unverifiable bootstrap history' 2
+  foreach ($previous in $history) {
+    P-Require ($previous.role -ceq 'plan-writer' -and $previous.binding.round -eq 1 -and $previous.step -ceq 'bootstrap' -and $previous.binding.run_id -ceq $s.orca_run -and $null -eq $previous.binding.phase -and $previous.token -cin @('BLOCKED','NEEDS_AUTHORIZATION')) 'invalid bootstrap history'
+    [void](P-AcceptedReport $s $previous.report)
+    $a=$previous.artifact;$source=if ($a.source_path) { $a.source_path } else { $a.path }
+    P-Require (($a.kind -ceq 'request' -and $a.path -ceq $s.authorization.path -and $a.sha256 -ceq $s.authorization.sha256) -or ($a.kind -ceq 'plan' -and $source -ceq $r.plan_path)) 'bootstrap history artifact mismatch'
+  }
+  return $r
+}
+function P-Tracks($s,$phases) {
+  $records=@{}
+  $raw=$VUtf8.GetString((V-Git $s.worktree @('worktree','list','--porcelain','-z')))
+  foreach ($block in $raw.Split(@("`0`0"),[StringSplitOptions]::RemoveEmptyEntries)) {
+    $fields=@{}
+    foreach ($row in $block.Split([char]0)) { if ($row) { $pair=$row -split ' ',2;$fields[$pair[0]]=if ($pair.Count -eq 2) { $pair[1] } else { '' } } }
+    if ($fields.worktree) { $records[[IO.Path]::GetFullPath($fields.worktree)]=$fields }
+  }
+  $target=[IO.Path]::GetFullPath($s.worktree);P-Require ($records.ContainsKey($target)) 'TARGET is not a Git worktree' 2
+  if (-not $s.track_group) { return }
+  $g=P-Record $s.track_group;P-Need $g @('schema_version','run_id','parent_worktree','parent_head','plan','tracks')
+  P-Require ($g.schema_version -eq 1 -and $g.run_id -ceq $s.orca_run -and (P-Eq $g.plan $s.plan)) 'track group run/immutable-plan mismatch'
+  P-Require ([IO.Path]::IsPathRooted($g.parent_worktree) -and $g.parent_head -is [string] -and $g.parent_head -cmatch '^[a-f0-9]{40}$') 'invalid track parent BASE/path'
+  $parent=[IO.Path]::GetFullPath($g.parent_worktree);P-Require ($records.ContainsKey($parent)) 'missing track parent worktree' 2
+  $planPath=[IO.Path]::GetFullPath($g.plan.path);$parentPrefix=$parent.TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+  P-Require ($planPath.StartsWith($parentPrefix,[StringComparison]::OrdinalIgnoreCase)) 'track plan outside parent'
+  $planName=$planPath.Substring($parentPrefix.Length).Replace('\','/')
+  $committedPlan=$VUtf8.GetString((V-Git $parent @('show',($g.parent_head+':'+$planName)))).TrimStart([char]0xfeff).Replace("`r`n","`n")
+  P-Require ($committedPlan -ceq (P-Ref $g.plan)) 'track plan differs from parent history'
+  [void](V-Git $s.worktree @('merge-base','--is-ancestor',$s.plan_base,$g.parent_head))
+  [void](V-Git $s.worktree @('merge-base','--is-ancestor',$g.parent_head,$records[$parent].HEAD))
+  $tracks=$g.tracks;P-Require ($tracks -is [Array] -and $tracks.Count) 'missing tracks' 2
+  $paths=@($tracks | ForEach-Object { [IO.Path]::GetFullPath($_.worktree) })
+  P-Require (@($tracks.id | Select-Object -Unique).Count -eq $tracks.Count -and @($paths | Select-Object -Unique).Count -eq $tracks.Count -and @($tracks.worktree_id | Select-Object -Unique).Count -eq $tracks.Count -and @($tracks.phase | Select-Object -Unique).Count -eq $tracks.Count) 'duplicate track binding'
+  $active=@();$selected=$null;$completed=@($s.track_commits | Where-Object { $null -ne $_ })
+  $completedIds=@($completed | ForEach-Object { $_.track_id })
+  P-Require (@($completedIds | Select-Object -Unique).Count -eq $completed.Count -and (P-Subset $completedIds $tracks.id)) 'invalid completed tracks'
+  foreach ($t in $tracks) {
+    P-Need $t @('id','worktree','worktree_id','phase','base');$path=[IO.Path]::GetFullPath($t.worktree)
+    P-Require ([IO.Path]::IsPathRooted($t.worktree)) 'absolute child worktree required'
+    P-Require ($path -ne $parent -and $records.ContainsKey($path) -and $t.base -ceq $g.parent_head) 'track BASE/worktree mismatch'
+    $childPlan=Join-Path $path $planName;V-Safe $childPlan
+    P-Require ([IO.File]::ReadAllText($childPlan,$VUtf8).Replace("`r`n","`n") -ceq (P-Ref $g.plan)) 'child changed immutable plan'
+    $p=@($phases | Where-Object { $_.id -ceq $t.phase });P-Require ($p.Count -eq 1) 'unknown track phase'
+    [void](V-Git $s.worktree @('merge-base','--is-ancestor',$p[0].base,$t.base))
+    [void](V-Git $path @('merge-base','--is-ancestor',$t.base,$records[$path].HEAD))
+    $done=@($completed | Where-Object { $_.track_id -ceq $t.id })
+    if ($done.Count) {
+      P-Require ($done[0].base -ceq $t.base) 'completed track BASE mismatch'
+      $child=P-Decode (V-Json $s);$child.worktree=$path;[void](P-Commit $done[0] $child)
+      [void](V-Git $s.worktree @('merge-base','--is-ancestor',$done[0].sha,$records[$parent].HEAD))
+    } else { $active+=,$t }
+    if ($path -eq $target) { $selected=$t }
+  }
+  P-Require ($active.Count -le 2) 'more than two active child tracks in this Run'
+  if ($target -ne $parent) { P-Require ($selected -and $selected.worktree_id -ceq $s.worktree_id -and $selected.phase -ceq $s.phase -and $selected.base -ceq $s.base) 'TARGET track binding mismatch' 2 }
+  foreach ($t in $active) {
+    $p=@($phases | Where-Object { $_.id -ceq $t.phase })[0]
+    foreach ($other in $active) { if ($t.id -cne $other.id) {
+      $q=@($phases | Where-Object { $_.id -ceq $other.phase })[0]
+      P-Require (-not @($p.produces | Where-Object { $_ -cin (@($q.consumes)+@($q.produces)) }).Count) 'parallel producer/consumer conflict'
+    } }
+  }
 }
 function P-Model($o,$start=$null) {
   $model=$o.projection.provider.model
@@ -104,11 +184,18 @@ function P-Fleet($data,$s) {
     if ($w.terminalState -ceq 'released' -and $p.liveness.verdict -ceq 'exited') { continue };$ownership+=$w.dispatchId
   }
   $s.write_ownership=$ownership;P-Require (-not $ownership.Count) 'live or unverifiable prior writer' 2
-  $s['used_fleet_ids']=@($s.used_fleet_ids)+$ids
+  $s['used_fleet_ids']=@($s.used_fleet_ids | Where-Object { $null -ne $_ })+$ids
 }
 function P-Artifact($r,$s,[bool]$current=$true) {
   $text=P-Ref $r
-  if ($r.kind -ceq 'plan') { return @{id=$r.sha256;snapshot_id=$null;files=@{};manifest=$null} }
+  if ($r.kind -cin @('plan','request')) {
+    if ($current) {
+      $target=if ($r.kind -ceq 'request') { $s.authorization } else { $s.plan }
+      $sourcePath=if ($r.Contains('source_path')) { $r.source_path } else { $r.path }
+      P-Require ($target -and $sourcePath -ceq $target.path -and $r.sha256 -ceq $target.sha256) 'assigned plan/request mismatch'
+      if ($r.kind -ceq 'request') { [void](P-Bootstrap $s) }
+    };return @{id=$r.sha256;snapshot_id=$null;files=@{};manifest=$null}
+  }
   $obj=V-Normal ($text | ConvertFrom-Json);$manifest=$null
   if ($r.kind -ceq 'package') {
     P-Require ($obj.complete -eq $true) 'incomplete package' 2
@@ -121,6 +208,7 @@ function P-Artifact($r,$s,[bool]$current=$true) {
   return @{id=$id;snapshot_id=$snap.snapshot_id;files=$snap.manifest.files;head=$snap.manifest.head;manifest=$manifest}
 }
 function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
+  $text=$text.Replace("`r`n","`n")
   $rows=@($text -split '\r?\n');$token=$rows[0];$role=$a.role
   P-Require ($PTokens.ContainsKey($role) -and $token -cin $PTokens[$role]) 'format: role verdict'
   $failed=$token -ceq 'BLOCKED' -or ($role -cin $PWrite -and $token -cin @('NEEDS_CONTEXT','NEEDS_AUTHORIZATION'))
@@ -158,7 +246,7 @@ function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
     P-Require (($token -cin @('REVIEW_BLOCKING','CHANGES_REQUESTED')) -eq $blocking) 'format: findings/verdict conflict'
     P-Require (-not $text.Contains('CANNOT_VERIFY') -or @($findings | Where-Object { $_.kind -ceq 'cannot_verify' }).Count) 'format: unstructured CANNOT_VERIFY'
   }
-  if ($role -cin @('implementer','frontend-implementer','quickfix') -and $a.round -gt 1) { $fix=P-Line $text 'FIX_EVIDENCE';P-Require ($fix.tests -and $fix.commands -and $fix.outputs) 'format: fix evidence' }
+  if ($role -cin @('implementer','frontend-implementer','quickfix') -and ($a.round -gt 1 -or $a.fix)) { $fix=P-Line $text 'FIX_EVIDENCE';P-Require ($fix.tests -and $fix.commands -and $fix.outputs) 'format: fix evidence' }
   if ($role -ceq 'quickfix') { P-Require (@($modified).Count -eq 1) 'quickfix must modify exactly one file' }
   if ($role -ceq 'gate') { P-Require ($rows.Count -gt 1 -and ($rows[1].StartsWith('verify: ') -or $rows[1] -match '^lint: .+ \| typecheck: .+ \| tests: .+')) 'format: gate summary' }
   if ($role -ceq 'synthesizer') { P-Require ($rows.Count -gt 1 -and $rows[1].StartsWith('docs/reviews/')) 'format: synthesis path' }
@@ -236,7 +324,102 @@ function P-Covered($s,$art,$roles) {
     } }
   }
 }
+function P-AcceptedReport($s,$reference) {
+  $history=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
+  $matches=@($history | Where-Object { P-Eq $_.report $reference });P-Require ($matches.Count -eq 1) 'closure report is not accepted' 2
+  $r=$matches[0];$art=P-Artifact $r.artifact $s $false;$fields=P-Report (P-Ref $r.report) $r.binding $art $r.outcome $r.modified
+  P-Require ($fields.token -ceq $r.token -and (P-Eq $fields.findings $r.findings) -and (P-Eq $fields.coverage $r.coverage)) 'closure report state mismatch'
+  $o=P-Observation $r.observation $r.binding
+  P-Require ($o.dispatch.status -ceq 'completed' -and $o.projection.evidence.durable -eq $true -and (P-Family $o) -ceq $r.family) 'closure report settlement mismatch' 2
+  return @{report=$r;artifact=$art}
+}
+function P-ReviewClosure($s,$proof,$finding,$origin) {
+  P-Need $proof @('fix_report','review_report')
+  $origin=(P-AcceptedReport $s $proof.report).report
+  $a=P-AcceptedReport $s $proof.fix_report;$b=P-AcceptedReport $s $proof.review_report
+  $fix=$a.report;$written=$a.artifact;$review=$b.report;$reviewed=$b.artifact
+  foreach ($r in $fix,$review) { P-Require ((P-Eq $r.binding.phase $origin.binding.phase) -and $r.binding.run_id -ceq $s.orca_run -and $r.step -ceq $origin.step) 'closure phase/round mismatch' }
+  P-Require ($review.binding.round -gt $origin.binding.round) 'closure phase/round mismatch'
+  P-Require ($fix.role -cin $PWrite -and $fix.token -cin @('DONE','DONE_WITH_CONCERNS','REVISED')) 'closure missing successful fix'
+  $history=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted };$positions=@()
+  foreach ($item in $origin,$fix,$review) {
+    for ($i=0;$i -lt $history.Count;$i++) { if (P-Eq $history[$i].report $item.report) { $positions+=,$i;break } }
+  }
+  P-Require ($positions.Count -eq 3 -and $positions[0] -lt $positions[1] -and $positions[1] -lt $positions[2]) 'closure report order must be finding, fix, re-review'
+  foreach ($key in 'task_id','dispatch_id') { P-Require (@($origin.binding[$key],$fix.binding[$key],$review.binding[$key] | Select-Object -Unique).Count -eq 3) 'closure requires distinct accepted attempts' 2 }
+  P-Require ($fix.role -ceq 'plan-reviser' -or $fix.binding.fix -eq $true -or $fix.binding.round -gt 1) 'closure requires an accepted fix response' 2
+  $fixed=P-Line (P-Ref $fix.report) 'FIX_EVIDENCE' @{};$addressed=$fixed.findings
+  P-Require ($addressed -is [Array] -and @($addressed | Where-Object { $_.id -ceq $finding.id -and (P-Eq $_.report $origin.report) }).Count -eq 1) 'closure fix finding binding mismatch'
+  P-Require ($review.role -cin $PReview -and $review.token -cin @('APPROVED','REVIEW_OK') -and -not @($review.findings | Where-Object { $_.id -ceq $finding.id }).Count) 'closure missing positive re-review'
+  P-Require (P-Eq $proof.artifact $review.artifact) 'closure review artifact mismatch'
+  $historical=$false
+  if ($proof.artifact.kind -ceq 'plan') {
+    P-Require ($written.id -ceq $reviewed.id) 'closure fix/review snapshot mismatch'
+    P-Require ($s.provenance.Count) 'unknown plan authors' 2
+    foreach ($author in $s.provenance) { P-Require ((P-Family (P-Record $author).result $author.start) -cne $review.family) 'same-family plan review' }
+    $source=if ($proof.artifact.Contains('source_path')) { $proof.artifact.source_path } else { $proof.artifact.path }
+    $name='repo:'+$source.Substring($s.worktree.TrimEnd('\','/').Length+1).Replace('\','/')
+    foreach ($fact in $s.phase_commits) { if ((P-Commit $fact $s).files[$name].sha256 -ceq $reviewed.id) { $historical=$true } }
+    P-Require ((V-Hash ([IO.File]::ReadAllBytes($source))) -ceq $reviewed.id -or $historical) 'stale closure source'
+  } else {
+    P-Require ($written.snapshot_id -ceq $reviewed.snapshot_id -and (P-Eq $written.files $reviewed.files) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
+    P-Independent $reviewed $review.coverage $review.family $s.provenance
+    P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
+    $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }
+    $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
+    $current=V-Snapshot $s.worktree $inputs $m.exclusions
+    foreach ($fact in $s.phase_commits) { if (P-Eq (P-Commit $fact $s).files $reviewed.files) { $historical=$true } }
+    P-Require ($current.valid -and (((P-Eq $current.manifest.files $reviewed.files) -and $current.manifest.head -ceq $reviewed.head) -or $historical)) 'stale closure source'
+  }
+}
+function P-Ledger($s) {
+  $ledger=if ($null -eq $s.ledger) { ,@() } else { ,(P-Record $s.ledger) }
+  P-Require ($ledger -is [Array] -and @($ledger.id | Select-Object -Unique).Count -eq $ledger.Count) 'invalid ledger'
+  $closed=@();$opened=@()
+  foreach ($item in $ledger) {
+    if ($item.status -cnotin @('fixed','resolved','closed','verified-by-controller')) {
+      if ($item.status -ceq 'open' -and $item.decision -cin @('ACCEPTED','PARTIALLY_ACCEPTED','ESCALATED_TO_HUMAN')) { $opened+=,$item.id };continue
+    }
+    P-Require ($null -ne $item.closure) 'missing closure evidence' 2
+    $proof=P-Record $item.closure;P-Need $proof @('schema_version','finding_id','report','artifact')
+    P-Require ($proof.schema_version -eq 1 -and $proof.finding_id -ceq $item.id) 'closure finding binding mismatch'
+    $reports=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
+    $origin=@($reports | Where-Object { P-Eq $_.report $proof.report })
+    P-Require ($origin.Count -eq 1) 'closure report is not accepted' 2;$origin=$origin[0]
+    $originalArt=@{id=$origin.artifact_id;snapshot_id=$origin.snapshot_id}
+    $fields=P-Report (P-Ref $origin.report) $origin.binding $originalArt $origin.outcome $origin.modified
+    $finding=@($fields.findings | Where-Object { $_.id -ceq $item.id });P-Require ($finding.Count -eq 1) 'closure wrong finding';$finding=$finding[0]
+    if ($finding.kind -ceq 'blocking') { P-ReviewClosure $s $proof $finding $origin;$closed+=,$item.id;continue }
+    P-Need $proof @('result','command','expect')
+    if ($finding.kind -ceq 'cannot_verify') { P-Require ((P-Eq $proof.artifact $origin.artifact) -and $proof.command -ceq $finding.check -and $proof.expect -ceq $finding.expect) 'closure CHECK binding mismatch' }
+    $art=P-Artifact $proof.artifact $s $false;$st=P-Record $proof.result
+    P-Require (V-EvidenceValid $st) 'stale or invalid closure CHECK evidence'
+    P-Require ($st.exit_code -eq 0) 'negative closure CHECK; finding remains blocking'
+    $e=$st.evidence;P-Require ($proof.command -and $proof.expect -and $e.key.check.command -ceq $proof.command) 'closure command mismatch'
+    $m=$e.source_after.manifest;P-Require ([IO.Path]::GetFullPath($m.root) -eq [IO.Path]::GetFullPath($s.worktree)) 'closure worktree mismatch'
+    if ($proof.artifact.kind -ceq 'plan') {
+      $sourcePath=if ($proof.artifact.Contains('source_path')) { $proof.artifact.source_path } else { $proof.artifact.path }
+      $name='repo:'+$sourcePath.Substring($s.worktree.TrimEnd('\','/').Length+1).Replace('\','/')
+      P-Require ($m.files[$name].sha256 -ceq $proof.artifact.sha256) 'closure plan snapshot mismatch'
+    } else { P-Require ((P-Eq $m.files $art.files) -and $m.head -ceq $art.head) 'closure snapshot mismatch' }
+    $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
+    $current=V-Snapshot $s.worktree $inputs $m.exclusions
+    $historical=$false
+    foreach ($fact in $s.phase_commits) { if ($fact.base -ceq $m.head -and (P-Eq (P-Commit $fact $s).files $m.files)) { $historical=$true } }
+    P-Require ($current.valid -and ((P-Eq $current.manifest.files $m.files) -or $historical)) 'stale closure source'
+    P-Require ($current.manifest.head -ceq $m.head -or $historical) 'stale closure HEAD'
+    $closed+=,$item.id
+  }
+  $reports=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
+  foreach ($r in $reports) { foreach ($f in $r.findings) {
+    $disposition=@($ledger | Where-Object { $_.id -ceq $f.id })
+    $scopedOut=$f.kind -ceq 'blocking' -and $disposition.Count -eq 1 -and $disposition[0].decision -cin @('REJECTED_BY_SCOPE','DEFER','NIT')
+    if ($f.id -cnotin $closed -and -not $scopedOut -and $f.id -cnotin $opened) { $opened+=,$f.id }
+  } }
+  $s.open_ledger_ids=$opened;$s['closed_ledger_ids']=$closed
+}
 function P-Barrier($s,$phases) {
+  if ($s.step -ceq 'bootstrap' -and -not $s.write_ownership.Count) { return 'awaiting_plan_writer' }
   if ($s.write_ownership.Count) { return 'awaiting_writer' }
   if ($s.open_ledger_ids.Count -or @($s.accepted | ForEach-Object { $_.findings } | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count) { return 'awaiting_resolution' }
   if ($s.commit_barrier.confirmed_sha) {
@@ -269,20 +452,30 @@ function P-Validate($data) {
   $s=P-Decode (V-Json $data.state)
   P-Need $s @('schema_version','mode','plan','ledger','orca_run','plan_base','phase','base','step','worktree','worktree_id','workspace','active','rounds','format_corrections','accepted','processed','open_ledger_ids','write_ownership','phase_commits','commit_barrier','final','provenance')
   P-Require ($s.schema_version -eq 1) 'legacy resume is unverifiable' 2
-  P-Require ($s.mode -cin @('plan','quickfix') -and $s.step -cin @('plan','phase','quickfix','final-review','delivery','completion')) 'invalid protocol mode/step'
+  P-Require ($s.mode -cin @('plan','quickfix') -and $s.step -cin @('bootstrap','plan','phase','quickfix','final-review','delivery','completion')) 'invalid protocol mode/step'
   P-Require ([IO.Path]::IsPathRooted($s.worktree) -and [IO.Path]::IsPathRooted($s.workspace)) 'absolute workspace required'
+  $starting=$s.step -ceq 'bootstrap'
+  if ($starting) {
+    $request=P-Bootstrap $s
+    P-Require ($data.action -cin @('resume','dispatch','bind-dispatch','accept-report','format-correction')) 'bootstrap action is not authorized'
+    if ($data.action -cin @('dispatch','format-correction')) {
+      P-Require ($data.proposed.role -ceq 'plan-writer' -and $data.proposed.round -eq 1 -and (-not [IO.File]::Exists($request.plan_path) -or $s.plan -or ($data.action -ceq 'format-correction' -and $data.plan))) 'bootstrap permits only first plan-writer before plan exists'
+    }
+  }
   if ($data.plan -and -not (P-Eq $data.plan $s.plan)) {
-    $authorResult=$data.action -ceq 'accept-report' -and $s.active.role -cin @('plan-writer','plan-reviser')
-    P-Require ($data.plan.path -ceq $s.plan.path -and ($authorResult -or ($null -eq $s.active -and (-not $s.accepted.Count -or $s.step -ceq 'completion')))) 'plan change after frozen assignment';$s.plan=$data.plan
+    $authorResult=$data.action -cin @('accept-report','format-correction') -and $s.active.role -cin @('plan-writer','plan-reviser')
+    $expectedPath=if ($starting) { $request.plan_path } else { $s.plan.path }
+    P-Require ($data.plan.path -ceq $expectedPath -and ($authorResult -or (-not $starting -and $null -eq $s.active -and (-not $s.accepted.Count -or $s.step -ceq 'completion')))) 'plan change after frozen assignment';$s.plan=$data.plan
   }
   $phases=P-Plan $s
-  P-Require ([regex]::Matches((V-GitText $s.worktree @('worktree','list','--porcelain')),'(?m)^worktree ').Count -le 2) 'more than two worktrees'
+  P-Tracks $s $phases
   foreach ($sha in $s.plan_base,$s.base) { P-Require ($sha -is [string] -and $sha -cmatch '^[a-f0-9]{40}$') 'missing recorded base' 2;[void](V-Git $s.worktree @('cat-file','-e',($sha+'^{commit}'))) }
   foreach ($key in $PCaps.Keys) { $n=$s.rounds[$key];P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le $PCaps[$key]) ('round cap: '+$key) }
   foreach ($n in $s.format_corrections.Values) { P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le 1) 'format-correction cap' }
-  $ledger=if ($null -eq $s.ledger) { ,@() } else { ,(P-Record $s.ledger) };P-Require ($ledger -is [Array]) 'invalid ledger'
-  $s.open_ledger_ids=@($ledger | Where-Object { $_.status -ceq 'open' -and $_.decision -cin @('ACCEPTED','PARTIALLY_ACCEPTED','ESCALATED_TO_HUMAN') } | ForEach-Object { $_.id })
-  $s['closed_ledger_ids']=@($ledger | Where-Object { $_.status -cin @('fixed','closed','resolved') } | ForEach-Object { $_.id })
+  $history=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
+  foreach ($previous in $history) { [void](P-Ref $previous.report) }
+  foreach ($previous in $s.protected_reports) { [void](P-Ref $previous) }
+  P-Ledger $s
   foreach ($fact in $s.phase_commits) { [void](P-Commit $fact $s) }
   if ($s.commit_barrier.confirmed_sha) {
     $facts=@($s.phase_commits);if ($s.final.Contains('completion')) { $facts+=,$s.final.completion }
@@ -312,10 +505,15 @@ function P-Validate($data) {
       $o=P-Observation $data.observation $a
       P-Require ($o.dispatch.status -ceq 'completed' -and $o.projection.evidence.durable -eq $true) 'missing durable settlement' 2
       P-Require ($msg.from_handle -ceq $o.dispatch.assigneeHandle) 'wrong report sender'
+      P-Require (-not @($history | Where-Object { $_.report.path -ceq $data.report.path }).Count -and -not @($s.protected_reports | Where-Object { $_.path -ceq $data.report.path }).Count) 'report path already bound to a prior attempt'
       $text=P-Ref $data.report;P-Require ($payload.reportPath -ceq $data.report.path -and $msg.subject -ceq ($text -split '\r?\n')[0]) 'report path/subject mismatch'
       $art=P-Artifact $data.artifact $s
       if ($a.role -cnotin $PWrite) { P-Require ($a.artifact_id -ceq $art.id -and (P-Eq $a.snapshot_id $art.snapshot_id)) 'assigned artifact changed' }
       $fields=P-Report $text $a $art $payload.outcome @($payload.filesModified)
+      if ($starting -and $fields.token -cnotin @('BLOCKED','NEEDS_AUTHORIZATION')) {
+        P-Require ($fields.token -ceq 'PLAN_WRITTEN' -and $null -ne $s.plan -and $data.artifact.kind -ceq 'plan') 'bootstrap writer must deliver the real plan'
+        $s.step='plan'
+      }
       if ($s.format_lock) { $lock=$s.format_lock;P-Require ($art.id -ceq $lock.artifact_id -and (P-Eq $art.snapshot_id $lock.snapshot_id) -and $a.role -ceq $lock.role -and $a.round -eq $lock.round) 'format correction changed substantive artifact' }
       $family=P-Family $o
       if ($a.role -cin $PReview -and $a.role -cne 'plan-reviewer') { P-Independent $art $fields.coverage $family $s.provenance }
@@ -324,8 +522,10 @@ function P-Validate($data) {
         report=$data.report;artifact=$data.artifact;observation=$data.observation;findings=$fields.findings;coverage=$fields.coverage;evidence=$proofs}
       if ($a.role -ceq 'plan-reviewer') { P-Require ($s.provenance.Count) 'unknown plan authors' 2;foreach ($author in $s.provenance) { P-Require ((P-Family (P-Record $author).result $author.start) -cne $family) 'same-family plan review' } }
       if ($a.role -cin $PWrite) { $s.provenance+=,$data.observation }
-      $s.accepted=@($s.accepted | Where-Object { -not ($_.role -ceq $a.role -and $_.binding.round -lt $a.round) })
+      $sameRoundFix=-not $starting -and $a.role -cin $PWrite -and $a.fix -eq $true -and $fields.token -cin @('DONE','DONE_WITH_CONCERNS','REVISED')
+      $s.accepted=@($s.accepted | Where-Object { -not ($_.role -ceq $a.role -and ($_.binding.round -lt $a.round -or ($sameRoundFix -and $_.step -ceq $s.step -and (P-Eq $_.binding.phase $a.phase) -and $_.binding.round -eq $a.round))) })
       $s.accepted+=,$accepted;$s.processed.messages+=,$msg.id
+      $s['report_history']=@($history)+@($accepted)
       if ($delivery -and (P-Subset @($r.messages | ForEach-Object { $_.id }) $s.processed.messages)) { $s.processed.deliveries+=,$delivery }
       $s.write_ownership=@($s.write_ownership | Where-Object { $_ -cne $a.dispatch_id })
       if (@($fields.findings | Where-Object { $_.risk -cin @('SECURITY','DATA_LOSS') }).Count) { $decision='risk-escalation' }
@@ -349,6 +549,7 @@ function P-Validate($data) {
         $old=$s.active;P-Require ($null -ne $old) 'missing defective assignment' 2;$key=$old.dispatch_id
         P-Require (-not $s.format_corrections[$key]) 'format-correction exhausted'
         $o=P-Observation $data.observation $old;P-Require ($o.dispatch.status -ceq 'completed') 'format correction before settlement' 2
+        if ($old.role -cin $PWrite) { $old.artifact_id=$art.id;$old.snapshot_id=$art.snapshot_id }
         P-Require ($old.artifact_id -ceq $art.id -and (P-Eq $old.snapshot_id $art.snapshot_id)) 'format correction changed original artifact'
         $bad=P-Ref $data.report;$defective=$false
         try { [void](P-Report $bad $old $art $data.outcome $data.files_modified) }
@@ -356,6 +557,7 @@ function P-Validate($data) {
         P-Require $defective 'report has no format defect'
         P-Require ($p.role -ceq $old.role -and $p.round -eq $old.round -and $p.dispatch_id -cne $old.dispatch_id) 'format correction requires one new same-role Dispatch'
         $s.format_corrections[$key]=1;$p['format_corrected']=$true;$s['format_lock']=@{artifact_id=$art.id;snapshot_id=$art.snapshot_id;role=$old.role;round=$old.round}
+        $s['protected_reports']=@($s.protected_reports | Where-Object { $null -ne $_ })+@($data.report)
       } else {
         $s.Remove('format_lock')
         $groups=@{'plan-reviewer'='plan_review';'review-primary'='fused_review';'review-control'='fused_review';'review-final'='final_review'};$group=$groups[$p.role];if ($p.gate_fix) { $group='gate_fix' }

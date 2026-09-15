@@ -18,6 +18,7 @@ import tempfile
 import time
 import uuid
 import verification
+from posix_runtime import artifact_path, capabilities, host_boot, identity
 
 
 def now():
@@ -26,7 +27,7 @@ def now():
 
 def safe(path):
     """Reject links in every existing component, including the leaf."""
-    p = Path(os.path.abspath(path))
+    p = artifact_path(path)
     for part in (*reversed(p.parents), p):
         if part.is_symlink():
             raise ValueError("symlink in owned artifact path: " + str(part))
@@ -48,30 +49,12 @@ def atomic(path, data):
     os.replace(tmp, p)
 
 
-def identity(pid):
-    # Linux exposes a boot-scoped start tick, not merely a recyclable PID.
-    try:
-        stat = Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()
-        if stat[0] == "Z":
-            return False  # confirmed exit, even when the parent's wait is delayed
-        return {"pid": pid, "start": stat[19],
-                "boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                "host": socket.gethostname()}
-    except FileNotFoundError:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            pass
-        return None
-    except (OSError, IndexError):
-        return None
-
-
 def alive(record):
     if not record:
         return None
+    try:
+        if host_boot() != (record.get("host"), record.get("boot")): return None
+    except (OSError, ValueError, AttributeError): return None
     current = identity(record["pid"])
     if current is None:
         return None
@@ -211,6 +194,9 @@ def claim(path, binding):
 
 
 def run(s):
+    capabilities()  # Before useful fork, run-directory writes or resource claims.
+    if group_alive(os.getpgrp()) is None:
+        raise ValueError('process-group observation unavailable')
     r = spec_valid(s)
     r.parent.mkdir(exist_ok=True)
     try:
@@ -225,7 +211,7 @@ def run(s):
     for name in ("stdout.log", "stderr.log"):
         (r / name).touch(exist_ok=False)
     started = time.monotonic()
-    st = dict(schema_version=1, run_id=s["run_id"], run_dir=str(r), owner=s["owner"],
+    st = dict(schema_version=1, run_id=s["run_id"], run_dir=s["run_dir"], owner=s["owner"],
               supervisor=identity(os.getpid()), command=s["command"], cwd=s["cwd"], shell=s["shell"],
               started_at=now(), finished_at=None, duration_seconds=0, exit_code=None,
               state="waiting-resource", reason=None, tree=None, cleanup_verified=False,
@@ -297,6 +283,9 @@ def run(s):
                     raise RuntimeError("child setup failed")
                 os.close(ready_r)
                 st["tree"] = {"kind": "posix-group", "pgid": child, "leader": identity(child)}
+                if not st["tree"]["leader"]:
+                    os.close(go_w)  # Child cannot exec; it exits through its handshake.
+                    raise RuntimeError('child process identity unavailable before exec')
                 st["state"] = "running"
                 atomic(r / "status.json", st)
                 os.write(go_w, b"1"); os.close(go_w)
@@ -394,6 +383,8 @@ def code(st):
 
 def main():
     args = sys.argv[1:]
+    if args == ["capabilities"]:
+        print(json.dumps(capabilities())); return 0
     if len(args) == 2 and args[0] == "run":
         return run(read(args[1]))
     if len(args) in (2, 3) and args[0] == "wait":

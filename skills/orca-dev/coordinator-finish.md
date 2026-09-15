@@ -1,0 +1,40 @@
+# Coordinator reference: finish
+
+Detailed baseline protocol. Read with SKILL.md and prompt-routing.md.
+REPORT_FILE always names the current Dispatch's fresh report; previous
+reports are immutable. Standard template references do not override
+role/profile selection. No runtime barrier is waived by this split.
+
+### Step 5 — final whole-branch review (once per plan, cap 2)
+
+For final-fix tasks, supply `[FIX_FINDING_REFERENCES]` from the original accepted
+final-review reports through prompt-routing.md, including exact IDs, paths and
+raw hashes. Closure requires the actual fix response followed by independent
+review of its current artifact, in accepted history order.
+
+After positive commit evidence for the last phase, with top-level `status: in-progress`, before archival. `MERGE_BASE` = the frontmatter's `plan_base:` (the full SHA recorded at plan commit; fallback only when not `main`/`master`: `git merge-base main HEAD`). Package: `"$RPKG" <MERGE_BASE> HEAD "$dir/review-final-r1-<base7>.diff"` (WORKTREE mode for an authorized final-fix wave; a skipped last phase commit remains at its commit barrier) — an `EMPTY` result from the script means a wrong base, never a clean branch.
+
+`review-final` worker(s) per `roles.md`. In a mixed-author branch, ensure independent reviewer assignments cover every unit of change by a family outside its authors. `REVIEW_OK` → required delivery verification and final bookkeeping below; top-level status remains `in-progress`. `REVIEW_BLOCKING` → ledger (`review-final`, `FR<round>-B<n>`; `plan-mandated` → human) → ONE fixer: a fresh implementer (current cascade model, fresh-fallback re-brief, whole-plan scope, `[REPORT_FILE]` = `$dir/final-fix-r<round>-<ATTEMPT>.md`) with the complete list (BLOCKING + `MUST_FIX_BEFORE_MERGE` triages). Then Step 3.5 on the fixed tree (BASE = `plan_base:`), and round 2: fresh WORKTREE package, fresh reviewer with the fix list inlined. Still blocking → escalate. Clean → commit the fixes (`fix: address final-review findings for <slug>`) through the Commit Barrier, keeping top-level `in-progress`, then finish delivery verification and bookkeeping below.
+
+**Delivery verification and final bookkeeping:** Keep top-level `in-progress` until final review is clean, all required source commits are confirmed, and the plan's required delivery checks/acceptance have positive evidence for the accepted tree. Use the existing gate role for declared delivery checks not already covered by valid evidence; an unavailable required check remains incomplete. Record the outcomes, report paths and pending final action in the existing plan-workspace reports/Orca records so resume can recover this barrier.
+
+Only then prepare top-level `status: done` for a separate plan-only commit (`docs(plans): complete <slug>`). Explicitly verify this completion metadata change and refresh the applicable gate/package evidence before committing; the accepted final review continues to cover the unchanged implementation. Do not silently bundle source edits: changed implementation or hook edits return to the required verification/review barrier within the existing caps. A failed/skipped completion commit leaves the marker as intent and final bookkeeping pending; resume uses Git and the recorded final evidence even if the working-tree frontmatter says `done`. Positive completion commit receipt (or its verified recovery from Git) is required before reporting the plan finished or offering archival.
+
+
+## Auto-commit (after a clean fused review)
+
+Prepare frontmatter intent before the concluding Step 3.5 gate and Step 4 package: phase `status: done` + `commits: "<base7>.."` (parallel groups: full `<base7>..<head7>`); next pending → `in-progress` as intent only; top-level stays `in-progress`, including after the last phase. On entry to commit, confirm the accepted gate/reviews cover this candidate; any later tracked change restores the necessary verification/package/review barrier within the existing caps. Stage by name (from `git status --porcelain`; never `-A`; exclude the ledger and unrelated files), the plan file, the synthesis file if any. Conventional subject referencing the phase, 1–2 sentence why-body, `Co-Authored-By: <coordinator model> <noreply@openai.com>` trailer. Never `--no-verify`, `--amend`, or `push` without explicit approval in this session. Skip when the user said "no commit"/"не коммить", when unrelated uncommitted changes exist (warn; the ledger does not count), or when a hook fails (report it; a hook failure is fixed by a quickfix worker, never by hand).
+
+**Commit Barrier:** Accepted content is not equal to a finished phase until positive commit receipt, recorded with the actual SHA/range in the existing delivery records. Prepared frontmatter is intent; state is `awaiting_commit` only when required verification/reviews are accepted, otherwise their unfinished barrier remains. Recovery verifies Git before repeating a commit. **After a failed or skipped commit do not start the next phase** — its BASE would swallow this phase's diff; report and wait for the user. Inside a parallel track the plan file is never edited: both phases' frontmatter flips happen in the main tree at group step 6. Report `Committed: <sha> <subject>`.
+
+After a successful commit, request release of the finished phase's settled workers per recipes §5, or retain the implementer for an immediate follow-up on the same agent. Record actual settlement/release receipts for both paths: `retained`, `external`, `user_takeover`, `release_pending`, `release_unknown`, no-owned-resource and no-op results leave the terminal open. A release request is not actual release; never substitute forced `terminal close`.
+
+
+## Plan archival (after Step 5, delivery verification and completion commit)
+
+Ask once: `План реализован. Переместить в docs/plans/finished/? [y/N]`. Yes → `git mv`, separate commit `chore: archive <slug>`, delete the ledger, report `Archived: <sha>`. Otherwise silent. Never between phases, never for quickfixes.
+
+
+## Multi-phase plans
+
+Steps 1–2 cover all phases up front; Steps 3–4 run per phase; after a phase's commit **immediately** start the next (`Ф1 committed <sha>. Starting Ф2: <scope>.`) — no "shall I proceed?". Pause only for: cap hit, BLOCKED beyond context, a phase invalidating a later phase's scope, an explicit user pause, or irreversible side-effects ahead (prod migrations, external writes, destructive git).

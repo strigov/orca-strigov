@@ -7,7 +7,7 @@ import shutil
 import sys
 import unittest
 
-from support import VerificationFixture, WINDOWS, read_json, write_json
+from support import VerificationFixture, ROOT, WINDOWS, command, read_json, write_json
 
 
 class VerificationTests(unittest.TestCase):
@@ -143,6 +143,34 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(counter.read_text(),"2")
         second["exit_code"]=7; path=Path(second["run_dir"])/"result.json"; write_json(path,second)
         self.assertNotEqual(f.helper("validate-evidence",path)[0],0)
+
+    def test_copied_evidence_must_match_sealed_result(self):
+        f=self.fx
+        rc,negative=f.verified_run(code="raise SystemExit(7)")
+        self.assertEqual(rc,7,negative)
+        original=Path(negative['run_dir'])/'result.json'; original_bytes=original.read_bytes()
+        copied=f.workspace/'copied-result.json'
+        # A faithful copy remains valid evidence of the negative outcome.
+        write_json(copied,negative)
+        self.assertEqual(f.helper('validate-evidence',copied)[0],0)
+        write_json(copied,dict(negative,exit_code=0))
+        self.assertNotEqual(f.helper('validate-evidence',copied)[0],0)
+        self.assertEqual(original.read_bytes(),original_bytes)
+        if WINDOWS:
+            # Deterministic serialization fixture over the completed owned run:
+            # fix only its enclosing timestamp and seal, then exercise the live
+            # in-memory shape. This fixture is not presented as live evidence.
+            quote=lambda value: "'"+str(value).replace("'","''")+"'"
+            script=f.workspace/'sealed-timestamp-fixture.ps1'
+            script.write_text("$ErrorActionPreference='Stop'\n. "+quote(ROOT/'bin/lib/verification.ps1')+
+                "\n$path="+quote(original)+"\n$st=V-Load $path\n"+
+                "$st.started_at='2026-09-15T18:30:57.1234560Z'\nV-Save $path $st\n"+
+                "V-Save (Join-Path $st.run_dir 'result.sha256') (V-Hash ([IO.File]::ReadAllBytes($path)))\n"+
+                "if (-not (V-EvidenceValid $st)) { throw 'literal timestamp differs from sealed JSON' }\n"+
+                "$st.exit_code=0\nif (V-EvidenceValid $st) { throw 'changed outcome borrowed the seal' }\n",
+                encoding='utf-8-sig')
+            rc,out,err=command([f.shell,'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(script)],f.git.root)
+            self.assertEqual(rc,0,(out,err))
 
     def test_phase_checkpoint_legacy_parser_and_unsupported_objects(self):
         f=self.fx; plan=f.base/"plan.md"; out=f.base/"parsed.json"

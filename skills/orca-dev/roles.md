@@ -128,3 +128,11 @@ Fix rounds after a fallback: the ledger plus the report file carry the context; 
 | Codex Luna as synthesizer fallback | `--effort medium` |
 | Antigravity Flash | `--effort high` |
 | Pro | none — the bridge fixes the ChatGPT mode; Codex-side effort flags are ignored |
+
+## Prompt profile selection
+
+Prompt profiles change only instruction shape, not the roles, efforts, families,
+experimental opt-ins or fallback eligibility above. Selection and assembly live
+in prompt-routing.md. The coordinator recommendation remains unchanged.
+
+PROMPT_PROFILES: {"gpt-6-astra":"outcome-v1"}

@@ -45,7 +45,7 @@ Read the plan file first — YAML frontmatter + the `## <id>:` section at minimu
 
 This is a phase-scoped gate, not a merge review — a broad whole-branch review happens separately after all phases are complete.
 
-1. Read `../runtime-contracts.md` C5 on demand, then `[DIFF_FILE].manifest.json` and all assigned parts in bounded ranges. Record package id/hash, snapshot and coverage of every assigned part/file and both sides of every contract.
+1. Read `[RUNTIME_CONTRACTS_PATH]` C5 on demand, then `[DIFF_FILE].manifest.json` and all assigned parts in bounded ranges. Record package id/hash, snapshot and coverage of every assigned part/file and both sides of every contract.
 2. Check the frozen package identity before reading and before acceptance. Missing/stale/changed parts or incomplete coverage are `CANNOT_VERIFY`; request a fresh complete package through the live lifecycle.
 3. Read extra source context only for a named risk or required binary/oversize inspection; record the check. Diff context may suffice for ordinary hunks.
 4. A missing package cannot be replaced by an ad hoc diff that omits untracked files. Unknown authorship or insufficient independent family coverage is unresolved.
@@ -170,4 +170,4 @@ For round 2+ in Step 4, first verify each ACCEPTED ledger item from the AUTHORIZ
 - Do not fix code yourself. You are reviewing, not implementing.
 ```
 
-Verification checkpoints and reuse follow `../runtime-contracts.md` C4. Use directed checks for a named change/risk, integration for changed contracts, and preserve required independent replay. Record evidence paths/origin ids and every physical repeat reason; a role change alone does not require rerunning an unchanged suite.
+Verification checkpoints and reuse follow `[RUNTIME_CONTRACTS_PATH]` C4. Use directed checks for a named change/risk, integration for changed contracts, and preserve required independent replay. Record evidence paths/origin ids and every physical repeat reason; a role change alone does not require rerunning an unchanged suite.

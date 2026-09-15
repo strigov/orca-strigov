@@ -7,6 +7,7 @@ import re
 import sys
 
 import verification as v
+from posix_runtime import artifact_path
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 REVIEW = {"plan-reviewer", "review-primary", "review-control", "review-final"}
@@ -43,13 +44,15 @@ def need(obj, keys):
 
 def ref(refspec):
     need(refspec, ("path", "sha256"))
-    p = Path(refspec["path"])
+    p = artifact_path(refspec["path"])
+    require(Path(refspec["path"]).is_absolute(), "artifact path must be absolute")
     require(p.is_absolute(), "artifact path must be absolute")
     require(not any(x.is_symlink() for x in (p, *p.parents)), "linked artifact path", 2)
     require(p.is_file(), "missing artifact: " + str(p), 2)
     data = p.read_bytes()
     require(v.digest(data) == refspec["sha256"], "artifact hash mismatch: " + str(p))
-    return data.decode("utf-8-sig")
+    # Hash the original bytes, then parse LF and CRLF identically on both backends.
+    return data.decode("utf-8-sig").replace("\r\n", "\n")
 
 
 def record(refspec):
@@ -65,7 +68,10 @@ def line_json(text, label, default=None):
 
 def plan_facts(state):
     if state["plan"] is None:
-        require(state["mode"] == "quickfix", "plan-less mode must be quickfix")
+        if state["step"] == "bootstrap":
+            bootstrap(state)
+        else:
+            require(state["mode"] == "quickfix", "plan-less mode must be quickfix or authorized bootstrap")
         return []
     text = ref(state["plan"])
     match = re.match(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", text, re.S)
@@ -77,6 +83,9 @@ def plan_facts(state):
         return v.unquote(found[0])
     require(scalar("protocol_version") == "2", "legacy metadata is not certified", 2)
     require(scalar("orca_run") == state["orca_run"] and scalar("plan_base") == state["plan_base"], "plan/run/base mismatch")
+    if state.get("authorization"):
+        ref(state["authorization"])
+        require(scalar("request_sha256") == state["authorization"]["sha256"], "plan/request mismatch")
     contracts = json.loads(scalar("contracts"))
     require(isinstance(contracts, list) and len(set(contracts)) == len(contracts), "invalid contract ids")
     require(all(isinstance(x, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", x) for x in contracts), "invalid contract id")
@@ -99,8 +108,110 @@ def plan_facts(state):
         produced.update(p["produces"])
     if state["phase"] is not None:
         phase = next((p for p in phases if p["id"] == state["phase"]), None)
-        require(phase is not None and phase.get("base") == state["base"], "phase/base mismatch")
+        require(phase is not None, "phase/base mismatch")
+        if not state.get("track_group"):
+            require(phase.get("base") == state["base"], "phase/base mismatch")
     return phases
+
+
+def bootstrap(state):
+    require(state["mode"] == "plan" and state["step"] == "bootstrap" and state["phase"] is None and
+            not state["phase_commits"] and not state.get("track_group"), "invalid bootstrap state")
+    active = state["active"]
+    require(active is None or (active["role"] == "plan-writer" and active["round"] == 1), "bootstrap permits only first plan-writer")
+    request = record(state.get("authorization"))
+    need(request, ("schema_version", "run_id", "worktree_id", "plan_base", "plan_path", "request"))
+    require(request["schema_version"] == 1 and request["run_id"] == state["orca_run"] and
+            request["worktree_id"] == state["worktree_id"] and request["plan_base"] == state["plan_base"] and
+            state["base"] == state["plan_base"], "bootstrap request binding mismatch")
+    p = Path(request["plan_path"])
+    require(p.is_absolute() and p.is_relative_to(Path(state["worktree"])) and
+            isinstance(request["request"], str) and request["request"].strip(), "invalid bootstrap request/plan path")
+    require(state["plan"] is None or state["plan"]["path"] == request["plan_path"], "bootstrap draft path mismatch")
+    # Failed attempts remain evidence, not permission to start plan consumers.
+    history = state.get("report_history", state["accepted"])
+    require(history == state["accepted"] and state["provenance"] == [r["observation"] for r in history],
+            "unverifiable bootstrap history", 2)
+    for r in history:
+        require(r["role"] == "plan-writer" and r["binding"]["round"] == 1 and r["step"] == "bootstrap" and
+                r["binding"]["run_id"] == state["orca_run"] and r["binding"]["phase"] is None and
+                r["token"] in ("BLOCKED", "NEEDS_AUTHORIZATION"), "invalid bootstrap history")
+        accepted_report(state, r["report"])
+        a = r["artifact"]
+        require((a["kind"] == "request" and a["path"] == state["authorization"]["path"] and
+                 a["sha256"] == state["authorization"]["sha256"]) or
+                (a["kind"] == "plan" and a.get("source_path", a["path"]) == request["plan_path"]),
+                "bootstrap history artifact mismatch")
+    return request
+
+
+def track_facts(state, phases):
+    # NUL records avoid quoted paths and occurrences of 'worktree ' inside paths.
+    records = {}
+    for block in v.git(state["worktree"], "worktree", "list", "--porcelain", "-z").split(b"\0\0"):
+        fields = {}
+        for row in block.split(b"\0"):
+            if row:
+                key, _, value = row.decode("utf-8").partition(" ")
+                fields[key] = value
+        if "worktree" in fields: records[Path(fields["worktree"]).resolve()] = fields
+    require(Path(state["worktree"]).resolve() in records, "TARGET is not a Git worktree", 2)
+    if not state.get("track_group"): return
+    group = record(state["track_group"])
+    need(group, ("schema_version", "run_id", "parent_worktree", "parent_head", "plan", "tracks"))
+    require(group["schema_version"] == 1 and group["run_id"] == state["orca_run"] and
+            group["plan"] == state["plan"], "track group run/immutable-plan mismatch")
+    require(Path(group["parent_worktree"]).is_absolute() and isinstance(group["parent_head"], str) and
+            re.fullmatch(r"[a-f0-9]{40}", group["parent_head"]), "invalid track parent BASE/path")
+    parent = Path(group["parent_worktree"]).resolve()
+    require(parent in records, "missing track parent worktree", 2)
+    plan_path = Path(group["plan"]["path"]).resolve()
+    require(plan_path.is_relative_to(parent), "track plan outside parent")
+    committed_plan = v.git(parent, "show", group["parent_head"] + ":" + plan_path.relative_to(parent).as_posix())
+    require(committed_plan.decode("utf-8-sig").replace("\r\n", "\n") == ref(group["plan"]), "track plan differs from parent history")
+    v.git(state["worktree"], "merge-base", "--is-ancestor", state["plan_base"], group["parent_head"])
+    v.git(state["worktree"], "merge-base", "--is-ancestor", group["parent_head"], records[parent]["HEAD"])
+    tracks = group["tracks"]
+    require(isinstance(tracks, list) and tracks, "missing tracks", 2)
+    require(len({t["id"] for t in tracks}) == len(tracks) and
+            len({Path(t["worktree"]).resolve() for t in tracks}) == len(tracks) and
+            len({t["worktree_id"] for t in tracks}) == len(tracks) and len({t["phase"] for t in tracks}) == len(tracks), "duplicate track binding")
+    active = []; selected = None
+    completed = state.get("track_commits", [])
+    require(len({c["track_id"] for c in completed}) == len(completed) and
+            {c["track_id"] for c in completed} <= {t["id"] for t in tracks}, "invalid completed tracks")
+    for track in tracks:
+        need(track, ("id", "worktree", "worktree_id", "phase", "base"))
+        require(Path(track["worktree"]).is_absolute(), "absolute child worktree required")
+        path = Path(track["worktree"]).resolve()
+        require(path != parent and path in records and track["base"] == group["parent_head"], "track BASE/worktree mismatch")
+        child_plan = path / plan_path.relative_to(parent)
+        require(child_plan.read_bytes().decode("utf-8-sig").replace("\r\n", "\n") == ref(group["plan"]), "child changed immutable plan")
+        phase = next((p for p in phases if p["id"] == track["phase"]), None)
+        require(phase is not None, "unknown track phase")
+        # The sealed group overrides phase.base only with a verified descendant of
+        # that planned base. Workers never edit the shared plan to guess a SHA.
+        v.git(state["worktree"], "merge-base", "--is-ancestor", phase["base"], track["base"])
+        v.git(path, "merge-base", "--is-ancestor", track["base"], records[path]["HEAD"])
+        done = next((c for c in completed if c["track_id"] == track["id"]), None)
+        if done:
+            require(done["base"] == track["base"], "completed track BASE mismatch")
+            child = dict(state, worktree=str(path))
+            commit_fact(done, child)
+            v.git(state["worktree"], "merge-base", "--is-ancestor", done["sha"], records[parent]["HEAD"])
+        else:
+            active.append(track)
+        if path == Path(state["worktree"]).resolve(): selected = track
+    require(len(active) <= 2, "more than two active child tracks in this Run")
+    if Path(state["worktree"]).resolve() != parent:
+        require(selected is not None and selected["worktree_id"] == state["worktree_id"] and
+                selected["phase"] == state["phase"] and selected["base"] == state["base"], "TARGET track binding mismatch", 2)
+    for t in active:
+        p = next(p for p in phases if p["id"] == t["phase"])
+        for other in active:
+            q = next(p for p in phases if p["id"] == other["phase"])
+            if t != other:
+                require(not (set(p["produces"]) & (set(q["consumes"]) | set(q["produces"]))), "parallel producer/consumer conflict")
 
 
 def actual_model(observed, start=None):
@@ -176,7 +287,13 @@ def fleet_clear(data, state):
 
 def artifact(refspec, state, current=True):
     kind = refspec.get("kind"); raw = ref(refspec)
-    if kind == "plan": return {"id": refspec["sha256"], "snapshot_id": None, "files": {}, "manifest": None}
+    if kind in ("plan", "request"):
+        if current:
+            target = state.get("authorization") if kind == "request" else state["plan"]
+            require(target is not None and refspec["sha256"] == target["sha256"] and
+                    (refspec.get("source_path", refspec["path"]) == target["path"]), "assigned plan/request mismatch")
+            if kind == "request": bootstrap(state)
+        return {"id": refspec["sha256"], "snapshot_id": None, "files": {}, "manifest": None}
     obj = json.loads(raw)
     if kind == "package":
         require(obj.get("complete") is True, "incomplete package", 2)
@@ -189,11 +306,12 @@ def artifact(refspec, state, current=True):
             m = snap["manifest"]
             now = v.snapshot(state["worktree"], refspec.get("inputs", []), m["exclusions"])
             require(now["valid"] and now["snapshot_id"] == snap["snapshot_id"], "stale snapshot")
-    require(Path(snap["manifest"]["root"]) == Path(state["worktree"]), "artifact worktree mismatch")
+    require(artifact_path(snap["manifest"]["root"]) == artifact_path(state["worktree"]), "artifact worktree mismatch")
     return dict(id=aid, snapshot_id=snap["snapshot_id"], files=snap["manifest"]["files"], head=snap["manifest"]["head"], manifest=obj if kind == "package" else None)
 
 
 def report_fields(text, active, art, outcome, modified):
+    text = text.replace("\r\n", "\n")
     role = active["role"]; rows = text.splitlines(); token = rows[0] if rows else ""
     require(role in TOKENS and token in TOKENS[role], "format: role verdict")
     failed = token == "BLOCKED" or (role in WRITE and token in ("NEEDS_CONTEXT", "NEEDS_AUTHORIZATION"))
@@ -235,7 +353,7 @@ def report_fields(text, active, art, outcome, modified):
         blocking = any(f["kind"] == "blocking" for f in findings)
         require((token in ("REVIEW_BLOCKING", "CHANGES_REQUESTED")) == blocking, "format: findings/verdict conflict")
         require("CANNOT_VERIFY" not in text or any(f["kind"] == "cannot_verify" for f in findings), "format: unstructured CANNOT_VERIFY")
-    if role in ("implementer", "frontend-implementer", "quickfix") and active["round"] > 1:
+    if role in ("implementer", "frontend-implementer", "quickfix") and (active["round"] > 1 or active.get("fix")):
         fix = line_json(text, "FIX_EVIDENCE")
         require(all(fix.get(k) for k in ("tests", "commands", "outputs")), "format: fix evidence")
     if role == "quickfix": require(len(modified) == 1, "quickfix must modify exactly one file")
@@ -354,7 +472,124 @@ def covered(state, art, roles):
                 require(set(contract[side]) <= union, "incomplete contract " + contract["id"] + ":" + side, 2)
 
 
+def accepted_report(state, reference):
+    matches = [r for r in state.get("report_history", state["accepted"]) if r["report"] == reference]
+    require(len(matches) == 1, "closure report is not accepted", 2)
+    r = matches[0]
+    art = artifact(r["artifact"], state, current=False)
+    token, findings, coverage = report_fields(ref(r["report"]), r["binding"], art, r["outcome"], r["modified"])
+    require((token, findings, coverage) == (r["token"], r["findings"], r["coverage"]), "closure report state mismatch")
+    obs = observation(r["observation"], r["binding"])
+    require(obs["dispatch"]["status"] == "completed" and obs["projection"].get("evidence", {}).get("durable") is True and
+            family(obs) == r["family"], "closure report settlement mismatch", 2)
+    return r, art
+
+
+def review_closure(state, proof, finding, origin):
+    need(proof, ("fix_report", "review_report"))
+    origin, _ = accepted_report(state, proof["report"])
+    fix, written = accepted_report(state, proof["fix_report"])
+    review, reviewed = accepted_report(state, proof["review_report"])
+    require(all(r["binding"]["phase"] == origin["binding"]["phase"] and r["binding"]["run_id"] == state["orca_run"]
+                for r in (fix, review)) and fix["step"] == review["step"] == origin["step"] and
+            review["binding"]["round"] > origin["binding"]["round"], "closure phase/round mismatch")
+    require(fix["role"] in WRITE and fix["token"] in ("DONE", "DONE_WITH_CONCERNS", "REVISED"), "closure missing successful fix")
+    history = state.get("report_history", state["accepted"])
+    positions = [next(i for i, r in enumerate(history) if r["report"] == item["report"]) for item in (origin, fix, review)]
+    require(positions[0] < positions[1] < positions[2], "closure report order must be finding, fix, re-review")
+    for key in ("task_id", "dispatch_id"):
+        require(len({r["binding"][key] for r in (origin, fix, review)}) == 3, "closure requires distinct accepted attempts", 2)
+    require(fix["role"] == "plan-reviser" or fix["binding"].get("fix") is True or fix["binding"]["round"] > 1,
+            "closure requires an accepted fix response", 2)
+    fixed = line_json(ref(fix["report"]), "FIX_EVIDENCE", {})
+    addressed = fixed.get("findings", []) if isinstance(fixed, dict) else []
+    require(isinstance(addressed, list) and sum(isinstance(item, dict) and item.get("id") == finding["id"] and
+            item.get("report") == origin["report"] for item in addressed) == 1, "closure fix finding binding mismatch")
+    require(review["role"] in REVIEW and review["token"] in ("APPROVED", "REVIEW_OK") and
+            not any(f["id"] == finding["id"] for f in review["findings"]), "closure missing positive re-review")
+    require(proof["artifact"] == review["artifact"], "closure review artifact mismatch")
+    if proof["artifact"]["kind"] == "plan":
+        require(written["id"] == reviewed["id"], "closure fix/review snapshot mismatch")
+        require(state["provenance"], "unknown plan authors", 2)
+        for author in state["provenance"]:
+            require(family(record(author)["result"], author.get("start")) != review["family"], "same-family plan review")
+        source = Path(proof["artifact"].get("source_path", proof["artifact"]["path"]))
+        name = "repo:" + source.relative_to(state["worktree"]).as_posix()
+        historical = any(commit_fact(c, state)["files"].get(name, {}).get("sha256") == reviewed["id"] for c in state["phase_commits"])
+        require(v.digest(source.read_bytes()) == reviewed["id"] or historical, "stale closure source")
+    else:
+        require(written["snapshot_id"] == reviewed["snapshot_id"] and written["files"] == reviewed["files"] and
+                written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
+        independent(reviewed, review["coverage"], review["family"], state["provenance"])
+        require(review["coverage"].get("files") and set(fix["modified"]) <= set(review["coverage"]["files"]),
+                "closure fix lacks review coverage", 2)
+        raw = record(proof["artifact"]); m = raw["snapshot_after"]["manifest"] if proof["artifact"]["kind"] == "package" else raw["manifest"]
+        current = v.snapshot(state["worktree"], proof["artifact"].get("inputs", []), m["exclusions"])
+        historical = any(commit_fact(c, state)["files"] == reviewed["files"] for c in state["phase_commits"])
+        require(current["valid"] and ((current["manifest"]["files"] == reviewed["files"] and current["manifest"]["head"] == reviewed["head"]) or historical), "stale closure source")
+
+
+def ledger_facts(state):
+    ledger = [] if state["ledger"] is None else record(state["ledger"])
+    require(isinstance(ledger, list) and len({x["id"] for x in ledger}) == len(ledger), "invalid ledger")
+    closed = []; opened = []
+    for item in ledger:
+        if item.get("status") not in ("fixed", "resolved", "closed", "verified-by-controller"):
+            if item.get("status") == "open" and item.get("decision") in ("ACCEPTED", "PARTIALLY_ACCEPTED", "ESCALATED_TO_HUMAN"):
+                opened.append(item["id"])
+            continue
+        require(item.get("closure") is not None, "missing closure evidence", 2)
+        proof = record(item["closure"])
+        need(proof, ("schema_version", "finding_id", "report", "artifact"))
+        require(proof["schema_version"] == 1 and proof["finding_id"] == item["id"], "closure finding binding mismatch")
+        reports = state.get("report_history", state["accepted"])
+        origin = next((r for r in reports if r["report"] == proof["report"]), None)
+        require(origin is not None, "closure report is not accepted", 2)
+        original_art = {"id": origin["artifact_id"], "snapshot_id": origin["snapshot_id"]}
+        _, findings, _ = report_fields(ref(origin["report"]), origin["binding"], original_art, origin["outcome"], origin["modified"])
+        finding = next((f for f in findings if f["id"] == item["id"]), None)
+        require(finding is not None, "closure wrong finding")
+        if finding["kind"] == "blocking":
+            review_closure(state, proof, finding, origin)
+            closed.append(item["id"])
+            continue
+        need(proof, ("result", "command", "expect"))
+        if finding["kind"] == "cannot_verify":
+            require(proof["artifact"] == origin["artifact"] and proof["command"] == finding["check"] and
+                    proof["expect"] == finding["expect"], "closure CHECK binding mismatch")
+        # Every closing status for cannot_verify needs the exact executable CHECK.
+        art = artifact(proof["artifact"], state, current=False)
+        st = record(proof["result"])
+        require(v.evidence_valid(st), "stale or invalid closure CHECK evidence")
+        require(st["exit_code"] == 0, "negative closure CHECK; finding remains blocking")
+        e = st["evidence"]
+        require(proof["command"] and proof["expect"] and e["key"]["check"]["command"] == proof["command"], "closure command mismatch")
+        m = e["source_after"]["manifest"]
+        require(artifact_path(m["root"]) == artifact_path(state["worktree"]), "closure worktree mismatch")
+        if proof["artifact"]["kind"] == "plan":
+            name = "repo:" + artifact_path(proof["artifact"].get("source_path", proof["artifact"]["path"])).relative_to(artifact_path(state["worktree"])).as_posix()
+            require(m["files"].get(name, {}).get("sha256") == proof["artifact"]["sha256"], "closure plan snapshot mismatch")
+        else:
+            require(m["files"] == art["files"] and m["head"] == art["head"], "closure snapshot mismatch")
+        current = v.snapshot(state["worktree"], proof["artifact"].get("inputs", []), m["exclusions"])
+        historical = any(c["base"] == m["head"] and commit_fact(c, state)["files"] == m["files"] for c in state["phase_commits"])
+        require(current["valid"] and (current["manifest"]["files"] == m["files"] or historical), "stale closure source")
+        # A recorded confirmed commit may change HEAD, never source bytes.
+        require(current["manifest"]["head"] == m["head"] or historical, "stale closure HEAD")
+        closed.append(item["id"])
+    # A later REVIEW_OK without the old item cannot erase unresolved history.
+    decisions = {x["id"]: x for x in ledger}
+    for report in state.get("report_history", state["accepted"]):
+        for f in report["findings"]:
+            disposition = decisions.get(f["id"], {})
+            scoped_out = f["kind"] == "blocking" and disposition.get("decision") in ("REJECTED_BY_SCOPE", "DEFER", "NIT")
+            if f["id"] not in closed and not scoped_out and f["id"] not in opened: opened.append(f["id"])
+    state["open_ledger_ids"] = opened
+    state["closed_ledger_ids"] = closed
+
+
 def barrier(state, phases):
+    if state["step"] == "bootstrap" and not state["write_ownership"]: return "awaiting_plan_writer"
     if state["write_ownership"]: return "awaiting_writer"
     if state["open_ledger_ids"] or any(f["id"] not in state.get("closed_ledger_ids", []) for r in state["accepted"] for f in r["findings"]): return "awaiting_resolution"
     if state["commit_barrier"].get("confirmed_sha"):
@@ -394,25 +629,33 @@ def validate(data):
     state = copy.deepcopy(data["state"])
     need(state, ("schema_version", "mode", "plan", "ledger", "orca_run", "plan_base", "phase", "base", "step", "worktree", "worktree_id", "workspace", "active", "rounds", "format_corrections", "accepted", "processed", "open_ledger_ids", "write_ownership", "phase_commits", "commit_barrier", "final", "provenance"))
     require(state["schema_version"] == 1, "legacy resume is unverifiable", 2)
-    require(state["mode"] in ("plan", "quickfix") and state["step"] in ("plan", "phase", "quickfix", "final-review", "delivery", "completion"), "invalid protocol mode/step")
+    require(state["mode"] in ("plan", "quickfix") and state["step"] in ("bootstrap", "plan", "phase", "quickfix", "final-review", "delivery", "completion"), "invalid protocol mode/step")
     require(Path(state["worktree"]).is_absolute() and Path(state["workspace"]).is_absolute(), "absolute workspace required")
+    starting = state["step"] == "bootstrap"
+    if starting:
+        request = bootstrap(state)
+        require(data["action"] in ("resume", "dispatch", "bind-dispatch", "accept-report", "format-correction"), "bootstrap action is not authorized")
+        if data["action"] in ("dispatch", "format-correction"):
+            require(data.get("proposed", {}).get("role") == "plan-writer" and data["proposed"]["round"] == 1 and
+                    (not Path(request["plan_path"]).exists() or state["plan"] or
+                     (data["action"] == "format-correction" and data.get("plan"))), "bootstrap permits only first plan-writer before plan exists")
     if data.get("plan") and data["plan"] != state["plan"]:
-        author_result = data["action"] == "accept-report" and (state["active"] or {}).get("role") in ("plan-writer", "plan-reviser")
-        require(data["plan"]["path"] == state["plan"]["path"] and (author_result or (state["active"] is None and
+        author_result = data["action"] in ("accept-report", "format-correction") and (state["active"] or {}).get("role") in ("plan-writer", "plan-reviser")
+        expected_path = request["plan_path"] if starting else state["plan"]["path"]
+        require(data["plan"]["path"] == expected_path and (author_result or (not starting and state["active"] is None and
                 (not state["accepted"] or state["step"] == "completion"))), "plan change after frozen assignment")
         state["plan"] = data["plan"]
     phases = plan_facts(state)
-    require(v.text_git(state["worktree"], "worktree", "list", "--porcelain").count("worktree ") <= 2, "more than two worktrees")
+    track_facts(state, phases)
     for sha in (state["plan_base"], state["base"]):
         require(isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha), "missing recorded base", 2)
         v.git(state["worktree"], "cat-file", "-e", sha + "^{commit}")
     for key, cap in CAPS.items():
         require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap, "round cap: " + key)
     require(all(type(n) is int and 0 <= n <= 1 for n in state["format_corrections"].values()), "format-correction cap")
-    ledger = [] if state["ledger"] is None else record(state["ledger"])
-    require(isinstance(ledger, list), "invalid ledger")
-    state["open_ledger_ids"] = [x["id"] for x in ledger if x.get("status") == "open" and x.get("decision") in ("ACCEPTED", "PARTIALLY_ACCEPTED", "ESCALATED_TO_HUMAN")]
-    state["closed_ledger_ids"] = [x["id"] for x in ledger if x.get("status") in ("fixed", "closed", "resolved")]
+    for previous in state.get("report_history", state["accepted"]): ref(previous["report"])
+    for previous in state.get("protected_reports", []): ref(previous)
+    ledger_facts(state)
     for fact in state["phase_commits"]: commit_fact(fact, state)
     if state["commit_barrier"].get("confirmed_sha"):
         facts = state["phase_commits"] + ([state["final"]["completion"]] if "completion" in state["final"] else [])
@@ -448,11 +691,16 @@ def validate(data):
         require(observed["dispatch"]["status"] == "completed" and observed["projection"].get("evidence", {}).get("durable") is True, "missing durable settlement", 2)
         require(msg.get("from_handle") == observed["dispatch"]["assigneeHandle"], "wrong report sender")
         report = data.get("report"); text = ref(report)
+        require(not any(r["report"]["path"] == report["path"] for r in state.get("report_history", state["accepted"])) and
+                not any(r["path"] == report["path"] for r in state.get("protected_reports", [])), "report path already bound to a prior attempt")
         require(payload.get("reportPath") == report["path"] and msg.get("subject") == text.splitlines()[0], "report path/subject mismatch")
         art = artifact(data.get("artifact"), state)
         if active["role"] not in WRITE:
             require(active.get("artifact_id") == art["id"] and active.get("snapshot_id") == art["snapshot_id"], "assigned artifact changed")
         token, findings, coverage = report_fields(text, active, art, payload.get("outcome"), payload.get("filesModified", []))
+        if starting and token not in ("BLOCKED", "NEEDS_AUTHORIZATION"):
+            require(token == "PLAN_WRITTEN" and state["plan"] is not None and data["artifact"]["kind"] == "plan", "bootstrap writer must deliver the real plan")
+            state["step"] = "plan"
         lock = state.get("format_lock")
         if lock:
             require((art["id"], art["snapshot_id"], active["role"], active["round"]) == (lock["artifact_id"], lock["snapshot_id"], lock["role"], lock["round"]), "format correction changed substantive artifact")
@@ -467,8 +715,14 @@ def validate(data):
                 require(family(record(author)["result"], author.get("start")) != actual_family, "same-family plan review")
         if active["role"] in WRITE:
             state["provenance"].append(data["observation"])
-        state["accepted"] = [r for r in state["accepted"] if not (r["role"] == active["role"] and r["binding"]["round"] < active["round"])]
+        if "report_history" not in state: state["report_history"] = copy.deepcopy(state["accepted"])
+        same_round_fix = (not starting and active["role"] in WRITE and active.get("fix") is True and
+                          token in ("DONE", "DONE_WITH_CONCERNS", "REVISED"))
+        state["accepted"] = [r for r in state["accepted"] if not (r["role"] == active["role"] and
+            (r["binding"]["round"] < active["round"] or (same_round_fix and r["step"] == state["step"] and
+             r["binding"]["phase"] == active["phase"] and r["binding"]["round"] == active["round"])))]
         state["accepted"].append(accepted)
+        state.setdefault("report_history", []).append(copy.deepcopy(accepted))
         state["processed"]["messages"].append(msg["id"])
         # A delivery is ackable only after every message it contains was handled.
         if delivery and all(m["id"] in state["processed"]["messages"] for m in result.get("messages", [])):
@@ -498,6 +752,8 @@ def validate(data):
             key = old["dispatch_id"]; require(state["format_corrections"].get(key, 0) == 0, "format-correction exhausted")
             settled = observation(data.get("observation"), old)
             require(settled["dispatch"]["status"] == "completed", "format correction before settlement", 2)
+            if old["role"] in WRITE:
+                old.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"])
             require(old.get("artifact_id") == art["id"] and old.get("snapshot_id") == art["snapshot_id"], "format correction changed original artifact")
             bad = ref(data.get("report"))
             try: report_fields(bad, old, art, data.get("outcome"), data.get("files_modified", []))
@@ -505,6 +761,7 @@ def validate(data):
             else: raise Rejected("report has no format defect")
             require(proposed["role"] == old["role"] and proposed["round"] == old["round"] and proposed["dispatch_id"] != old["dispatch_id"], "format correction requires one new same-role Dispatch")
             state["format_corrections"][key] = 1; proposed["format_corrected"] = True
+            state.setdefault("protected_reports", []).append(data["report"])
             state["format_lock"] = dict(artifact_id=art["id"], snapshot_id=art["snapshot_id"], role=old["role"], round=old["round"])
         else:
             state.pop("format_lock", None)
@@ -580,7 +837,7 @@ def main(args):
         require(len(args) in (2, 3) and args[0] == "validate", "usage: protocol-state validate INPUT_JSON [RESUME_OUT]")
         data = v.load(args[1]); state, decision = validate(data)
         if len(args) == 3:
-            target = Path(os.path.abspath(args[2])); workspace = Path(state["workspace"])
+            target = artifact_path(args[2]); workspace = artifact_path(state["workspace"])
             require(target.is_relative_to(workspace) and target != workspace and target.parent.is_dir(), "resume output outside existing workspace")
             require(not any(p.is_symlink() for p in (target, *target.parents)), "linked resume output")
             protected = {str(Path(args[1]).absolute())}

@@ -44,6 +44,10 @@ Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding o
 
 Bind the completed source snapshot, list exactly the one authorized modified file and actual checks; fix rounds include canonical FIX_EVIDENCE.
 
+For a fix, exact finding/report references are [FIX_FINDING_REFERENCES] (initial
+work uses `[]`). Copy addressed entries into `FIX_EVIDENCE.findings` alongside
+the existing tests, commands and outputs.
+
 1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line diff summary, one-line test summary (commands + result, or "no tooling for this file"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the detail: what you changed, what you ran, self-review findings, anything unexpected.
 
    If BLOCKED or NEEDS_CONTEXT, put the specifics in the worker_done body as well — the coordinator acts on it directly.

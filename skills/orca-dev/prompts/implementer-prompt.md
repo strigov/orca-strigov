@@ -8,7 +8,7 @@ Role: `implementer` (first round) / the same role for fix rounds — launch reci
 
 The implementer cascade, reasoning escalation, and substitution routes are defined in `../roles.md`. The template must stay model-agnostic. For a parallel-track phase, start the worker in that track's worktree so it treats the worktree as its repo root.
 
-Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. Resolve it once per phase as `$(bin/sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path. For a parallel-track phase, run `bin/sdd-workspace` inside the track's worktree so the report lands in that track's workspace. Fix rounds append to the same file — never mint a new report path for round 2+.
+Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits the coordinator's context. For every Dispatch allocate a unique ATTEMPT and resolve it as `<workspace>/phase-<id>-r<round>-<ATTEMPT>.md` using the platform-specific workspace helper and substitute the absolute path. For a parallel-track phase, run `bin/sdd-workspace` inside the track's worktree so the report lands in that track's workspace. Every follow-up gets a fresh `[REPORT_FILE]`; supply the immutable prior report as `[PREVIOUS_REPORT_FILE]`.
 
 **Implementer retention**: the coordinator retains the implementer's terminal across review and fix rounds until the phase is committed. After the fused review (Step 4), re-inject the fix-round template into the implementer's own terminal (`--terminal <handle>` / `dispatch --inject` into that same terminal) so the thread is retained — it already knows the plan and the phase, and the fix-round template only has to carry the authorized blockers. The same terminal also serves `NEEDS_CONTEXT` re-dispatches and effort upgrades in Step 3.
 
@@ -46,7 +46,7 @@ Do not guess.
 
 1. Implement exactly what the plan specifies — nothing more.
 2. Write tests that verify behavior (not that mirror the implementation).
-3. Run the meaningful bounded tests / typecheck / linters required by the phase. For a long command, read `../runtime-contracts.md` C3 on demand and use `run-check run SPEC_JSON` in one blocking shell call: one owner, full logs, explicit deadline/cancel policy and any declared shared resource. If the harness needs a command terminal, use the verified terminal wait from C3; no model timer, Schedule task, blind PID loop or second observer. A no-progress event calls for bounded diagnosis, not a kill or ownership transfer. Keep the live preamble's heartbeat and lifecycle obligations; include real commands, result/log paths and cleanup limitations in your report. Repeat an unchanged check only for a new hypothesis or required replay within the phase budget.
+3. Run the meaningful bounded tests / typecheck / linters required by the phase. For a long command, read `[RUNTIME_CONTRACTS_PATH]` C3 on demand and use `run-check run SPEC_JSON` in one blocking shell call: one owner, full logs, explicit deadline/cancel policy and any declared shared resource. If the harness needs a command terminal, use the verified terminal wait from C3; no model timer, Schedule task, blind PID loop or second observer. A no-progress event calls for bounded diagnosis, not a kill or ownership transfer. Keep the live preamble's heartbeat and lifecycle obligations; include real commands, result/log paths and cleanup limitations in your report. Repeat an unchanged check only for a new hypothesis or required replay within the phase budget.
 4. Self-review (see below) and fix issues before reporting.
 5. Write your full report to [REPORT_FILE], then send exactly one `worker_done` (see Reporting below).
 
@@ -83,7 +83,7 @@ Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding o
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
-1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line test summary (e.g. "14/14 passing"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the full detail:
+1. Write your full report to `[REPORT_FILE]`. Its FIRST line must be exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED` | `NEEDS_CONTEXT`. Immediately after line 1 put the structured fields — one-line test summary (e.g. "14/14 passing"), number of files changed (you do not commit — the diff stays in the working tree), your concerns if any — and then the full detail:
    - What you implemented (or what you attempted, if blocked)
    - What you tested and test results (commands + output summary)
    - TDD Evidence (if TDD was required for this phase):
@@ -110,7 +110,7 @@ Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 You are in the fix round of a review loop, continuing the thread in which you implemented this phase. The fused review (primary + control) found blocking issues in your diff. Fix ONLY the AUTHORIZED_BLOCKERS below, re-test, re-report.
 
-Re-inspect your current diff first — `git diff <base-sha>` plus `git status --porcelain` (files you CREATED are untracked, invisible to `git diff` against a commit — read them directly) — the tree may have moved since your last turn. Your report from the previous round is at [REPORT_FILE]; you will append your fix results to that same file.
+Re-inspect your current diff first — `git diff <base-sha>` plus `git status --porcelain` (files you CREATED are untracked, invisible to `git diff` against a commit — read them directly) — the tree may have moved since your last turn. Read the previous report at [PREVIOUS_REPORT_FILE]; write this Dispatch's results to the fresh [REPORT_FILE].
 
 ## Git
 
@@ -124,6 +124,12 @@ Format per item:
 
 1. `<ledger id>` — `<reviewer: review-primary | review-control>` — `<file:line>` — `<authorized change>`
 2. ...
+
+Exact finding IDs and original accepted report references: [FIX_FINDING_REFERENCES]
+Copy the entries you address into `FIX_EVIDENCE.findings`, retaining each raw
+report hash and path. Keep the covering tests, commands and outputs in that same
+FIX_EVIDENCE object. The previous implementation report is context, not the
+source of a reviewer's finding.
 
 A gate-fix round carries a single item `G<r>-B1` (reviewer `gate`) with the verify-gate output pasted under it: make the listed commands pass without changing what they test; the same scope rules apply.
 
@@ -151,7 +157,7 @@ Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding o
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
-1. Append a section `## Fix round <N>` to `[REPORT_FILE]` (the same report file — do not overwrite it, do not create a new one). N is the number of the fused-review round whose blockers you are fixing — the first fix round writes `## Fix round 1`. The section must contain ALL THREE of:
+1. Create the new `[REPORT_FILE]` with the current verdict, test summary and BINDING, then a section `## Fix round <N>`. Do not modify `[PREVIOUS_REPORT_FILE]`. N is the number of the fused-review round whose blockers you are fixing — the first fix round writes `## Fix round 1`. The section must contain ALL THREE of:
 
    1. The names of the tests covering each fixed blocker
    2. The exact test command(s) you ran
@@ -159,7 +165,7 @@ Bind the completed source snapshot and actual verification results. Fix rounds i
 
    All three are mandatory — a fix-round report missing any of them is returned to you before re-review.
 
-   Then rewrite line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `NEEDS_CONTEXT` | `BLOCKED`, and put the structured fields right after it:
+   In this NEW report, set line 1 of `[REPORT_FILE]` so it is exactly one bare token from: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `NEEDS_CONTEXT` | `BLOCKED`, and put the structured fields right after it:
 
    - `blockers_fixed: [<ledger ids>]`
    - `files_changed_by_blocker:`
@@ -188,16 +194,16 @@ You are in the fix round of a review loop. A previous run implemented one phase 
 
 ## Plan + phase (authoritative — read it)
 
-Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>` plus `git status --porcelain`: files the previous round CREATED are untracked and invisible to `git diff` against a commit — read them directly. The previous round's full report is at [REPORT_FILE] — read it to see what was implemented and tested; you will append your fix results to that same file.
+Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>` plus `git status --porcelain`: files the previous round CREATED are untracked and invisible to `git diff` against a commit — read them directly. The immutable previous report is at [PREVIOUS_REPORT_FILE]; read it for context and write only the new [REPORT_FILE].
 ```
 
 ## Step 5 fix wave (adapting the fix-round template)
 
-When the coordinator dispatches the final-review fix wave (SKILL.md Step 5), the fix-round template above is reused on a **FRESH worker with the fresh-fallback re-brief** (the whole-plan fix wave has no single implementer terminal to re-inject into), with these substitutions:
+When the coordinator dispatches the final-review fix wave (coordinator-finish.md Step 5), the fix-round template above is reused on a **FRESH worker with the fresh-fallback re-brief** (the whole-plan fix wave has no single implementer terminal to re-inject into), with these substitutions:
 
 - **Scope** is the WHOLE plan, not one phase: fill "Your phase" with `the whole plan (Step 5 final-review fix wave)` and drop the phase-scope line.
 - **Base** is `plan_base` (the recorded full SHA before the plan started), and the implementation is COMMITTED — inspect it via `git diff <plan_base>..HEAD` (round 2 of Step 5, fix wave still uncommitted: `git diff <plan_base>` plus `git status --porcelain`; `WORKTREE` is only the `review-package` argument, never a Git ref), not an arbitrary merge-base.
 - **AUTHORIZED_BLOCKERS reviewer values** may also be `review-final` (Step 5 findings), in addition to `review-primary | review-control`.
-- **[REPORT_FILE]** = `$dir/final-fix-report.md` and does not exist yet — create it fresh and skip "read the previous round's report"; write your fix results as `## Fix round 1`.
+- **[REPORT_FILE]** = `$dir/final-fix-r<round>-<ATTEMPT>.md` and does not exist yet; pass the latest implementation report as read-only `[PREVIOUS_REPORT_FILE]`, create the new report fresh; write your fix results as `## Fix round 1`.
 
-For verification declarations and exact evidence, load `../runtime-contracts.md` C4 on demand. Use the selected phase/checkpoint and normalized C4 runner request; report result/log paths, snapshot ids and physical repeat reasons. A textual test summary does not replace machine evidence. Reuse requires the explicit hermetic/observability contract and matching inputs/tools/environment; required independent verifier replay remains physical. Keep write Dispatch/launch receipts and the files changed for C5 authorship.
+For verification declarations and exact evidence, load `[RUNTIME_CONTRACTS_PATH]` C4 on demand. Use the selected phase/checkpoint and normalized C4 runner request; report result/log paths, snapshot ids and physical repeat reasons. A textual test summary does not replace machine evidence. Reuse requires the explicit hermetic/observability contract and matching inputs/tools/environment; required independent verifier replay remains physical. Keep write Dispatch/launch receipts and the files changed for C5 authorship.

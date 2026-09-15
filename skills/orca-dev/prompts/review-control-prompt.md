@@ -58,7 +58,7 @@ Global constraints from the spec/design that bind this phase (copied verbatim fr
 
 [GLOBAL_CONSTRAINTS]
 
-Read `../runtime-contracts.md` C5 on demand, then `[DIFF_FILE].manifest.json` and every assigned part in bounded ranges. Verify frozen identity and report package id/hash, snapshot and coverage of parts/files and both sides of each contract. Missing/stale parts, incomplete coverage or unknown independent authorship require `CANNOT_VERIFY`; request a fresh complete package, never an ad hoc diff. Read source only for a named risk or binary/oversize inspection and record that check. This role remains read-only and runs no tests; executable C4 evidence and required replay are handled by the assigned verification role.
+Read `[RUNTIME_CONTRACTS_PATH]` C5 on demand, then `[DIFF_FILE].manifest.json` and every assigned part in bounded ranges. Verify frozen identity and report package id/hash, snapshot and coverage of parts/files and both sides of each contract. Missing/stale parts, incomplete coverage or unknown independent authorship require `CANNOT_VERIFY`; request a fresh complete package, never an ad hoc diff. Read source only for a named risk or binary/oversize inspection and record that check. This role remains read-only and runs no tests; executable C4 evidence and required replay are handled by the assigned verification role.
 
 ## Your review angles (what the primary review often misses)
 

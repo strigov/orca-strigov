@@ -9,7 +9,7 @@ Prerequisites, all on `PATH`:
 | tool | how | note |
 |---|---|---|
 | Orca (Windows build) with orchestration enabled | orca.dev | `orca status --json` must report `runtime.state = ready` |
-| Git for Windows | `winget install Git.Git` | provides `git`. Bash is **not** needed: the workspace scripts have native PowerShell ports (`bin\*.ps1`). `bash` on a stock Windows `PATH` is the WSL launcher in `System32` — the protocol never calls it |
+| Git for Windows 2.36+ | `winget install Git.Git` | provides `git`, including `worktree list --porcelain -z`. Bash is **not** needed: the workspace scripts have native PowerShell ports (`bin\*.ps1`). `bash` on a stock Windows `PATH` is the WSL launcher in `System32` — the protocol never calls it |
 | Codex CLI | `npm i -g @openai/codex` | coordinator and Codex workers; `%USERPROFILE%\.codex\` |
 | Claude Code | `npm i -g @anthropic-ai/claude-code` or the native installer | judgment roles; `%USERPROFILE%\.claude.json` |
 | Antigravity CLI (`agy`) | Google's installer | selected routes and fallbacks in `roles.md` |

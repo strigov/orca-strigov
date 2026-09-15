@@ -341,7 +341,14 @@ function V-Signature([string]$root, [string]$output) {
 function V-EvidenceValid($st, $request=$null) {
   try {
     $resultPath=Join-Path $st.run_dir 'result.json'
-    if ((V-Hash ([IO.File]::ReadAllBytes($resultPath))) -cne (V-Load (Join-Path $st.run_dir 'result.sha256'))) { return $false }
+    $resultBytes=[IO.File]::ReadAllBytes($resultPath)
+    if ((V-Hash $resultBytes) -cne (V-Load (Join-Path $st.run_dir 'result.sha256'))) { return $false }
+    # Compare with the same sealed bytes, including the actual outcome.
+    $sealed=$VUtf8.GetString($resultBytes).TrimStart([char]0xfeff) | ConvertFrom-Json
+    # PS7 parses ISO dates and may omit trailing fractional zeros on serialization.
+    # Decode both sides alike, including a live supervisor's in-memory strings.
+    $supplied=(V-Json $st) | ConvertFrom-Json
+    if ((V-Json $supplied) -cne (V-Json $sealed)) { return $false }
     $e=$st.evidence
     if ($e.schema_version -ne 1 -or -not $e.valid -or $st.state -ne 'exited' -or -not $st.cleanup_verified -or -not $st.logs_complete -or $null -eq $st.exit_code) { return $false }
     if ((V-Json $e.logs) -cne (V-Json @(V-Logs $st))) { return $false }

@@ -295,8 +295,9 @@ class RunnerBehavior:
                 self.assertEqual(ctypes.get_last_error(), 87, "an unreadable process is not proven exited")
                 observation = "absent-process-error-87"
         else:
-            stat = Path("/proc/%d/stat" % pid)
-            until(lambda: not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z", 2)
+            sys.path.insert(0, str(ROOT / 'bin/lib'))
+            from posix_runtime import identity
+            until(lambda: identity(pid) is False, 2)
             observation = "absent-or-exited-zombie"
         write_json(self.fx.base / ("cleanup-" + str(pid) + ".json"),
                    {"pid": pid, "observation": observation, "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
@@ -448,7 +449,9 @@ class RunnerBehavior:
         else:
             # Keep the dead supervisor unreaped: zombie exit is known, while its
             # live process group must still prevent resource reclamation.
-            until(lambda: Path("/proc/%d/stat" % p.p.pid).read_text().rsplit(")", 1)[1].split()[0] == "Z")
+            sys.path.insert(0, str(ROOT / 'bin/lib'))
+            from posix_runtime import identity
+            until(lambda: identity(p.p.pid) is False)
         rc, out, err = self.fx.invoke("wait", s["run_dir"], "0")
         self.assertEqual(json.loads(out)["state"], "unknown", (out, err))
         try:
@@ -568,7 +571,7 @@ if WINDOWS:
     # invocation with process-only ORCA_TEST_SHELL, not a second implicit suite.
     shells = [selected or shutil.which("powershell.exe")]
 else:
-    shells = [shutil.which("bash")]
+    shells = [selected_shell()]
 for index, shell in enumerate(shells):
     if not shell:
         raise RuntimeError("required test shell unavailable")

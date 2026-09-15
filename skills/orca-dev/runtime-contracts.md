@@ -200,6 +200,13 @@ sizes/hashes, normalized failure signature, validity, invalidation reasons, `reu
 duration and actual exit. `result.sha256` seals its exact durable bytes. Mutation
 or incomplete evidence yields runner 125, retaining the actual command exit in
 JSON. Gate validates request binding, seal and full logs before classification.
+The supplied result object must equal the object decoded from those same sealed
+bytes. A faithful copy is permitted, but changing its exit or any other field
+cannot borrow the original run directory's seal to establish a positive CHECK.
+PowerShell decodes both compared objects through its JSON parser so an in-memory
+ISO timestamp and PS7's parsed DateTime receive identical canonical formatting.
+This representation step happens after the original-byte seal check and retains
+comparison of the full result, including the actual exit and evidence bindings.
 
 Reuse searches only `checks/*/result.json` in this plan workspace. Matching
 eligible evidence avoids a new command process. A new atomic result binds the
@@ -267,6 +274,25 @@ hypothesis, not an unchanged suite merely because the role/step changed. Warning
 matter when they reveal a material problem or violated requirement, not simply
 because stdout is nonempty.
 
+## POSIX capability and identity contract
+
+Linux requires Python 3.9+; Darwin requires Python 3.13+. `run-check capabilities`
+performs version/symbol/identity checks, also used by install.sh before setup
+changes. Missing waitid/WNOWAIT, fork/group operations or trustworthy local
+identity is a capability error (125), before useful command spawn. The child
+handshake also requires durable trustworthy leader identity before exec. Native
+Windows keeps its existing PowerShell Job Object backend and has no Python
+runtime dependency.
+
+Linux records boot-scoped start ticks. Darwin records libproc microsecond start
+time, kernel boot-session UUID and host UUID. Host/boot change or unreadable
+identity is unknown; PID reuse is a different process, not permission to signal
+its group. The supervisor pins its own child's PID with WNOWAIT until group
+cleanup; recovery only observes, never sends a signal to a prior group. Darwin's
+verified root-owned `/var`, `/tmp`, `/etc` aliases may expand to `/private`; every
+other link remains subject to artifact rejection. Native macOS acceptance is
+NOT_RUN in the Windows/WSL maintenance environment; see docs/runtime-platforms.md.
+
 ## Report binding
 
 Every role report contains exactly one machine-readable line after its existing
@@ -284,6 +310,13 @@ exactly equals line 1 and `outcome` must match the role verdict: `BLOCKED` and
 writer `NEEDS_CONTEXT`/`NEEDS_AUTHORIZATION` fail; a produced review/gate/diagnosis
 artifact succeeds even when its substantive verdict requires more work.
 `BLOCKED` needs `## Reason`. Existing human-readable details remain in the report.
+
+In `worker_done`, `--files-modified` / `payload.filesModified` lists changed
+deliverable files as worktree-relative POSIX paths (`src/file.py`, not absolute
+paths, backslashes or `./` prefixes). For package work these strings must match
+the package manifest entries exactly. Exclude the Dispatch report, receipts and
+runner logs; send the report through `--report-path` and evidence through the
+report fields. Omit `--files-modified` when no deliverable files changed.
 
 All reviews add `FINDINGS: <JSON array>` (including `[]`). Each entry has `id`,
 `kind` (`blocking` or `cannot_verify`), `issue`, `location`. A `cannot_verify`
@@ -310,6 +343,8 @@ one check must pass; required independent replay cannot use an origin result.
 Implementer/frontend/quickfix fix rounds add `FIX_EVIDENCE: {"tests":[],"commands":[],"outputs":[]}`
 with nonempty actual evidence. Diagnosis keeps its token-specific Context/Split/
 Plan defect/Summary section and `## Evidence`; synthesis keeps its output path.
+Fixes addressing accepted blocking findings also carry `FIX_EVIDENCE.findings`
+with exact original report references; see the ledger closure contract below.
 
 A missing required field permits exactly one format-correction Task/Dispatch,
 same role, artifact, snapshot and round, normally in the retained terminal.
@@ -317,6 +352,151 @@ Prior findings remain unresolved; a repeated defect is a protocol blocker.
 This is neither a substantive review round nor a second worker_done for the
 settled Dispatch. Conflicting identities or changed artifacts are not format-only
 defects. No verdict is inferred from prose.
+
+## Immutable attempts and byte parsing
+
+Allocate an unused `ATTEMPT` nonce before each Task/Dispatch, including initial,
+fix, context-answer, format-correction, fallback and final-fix routes. Use
+`<workspace>/<role>-<phase>-r<round>-<ATTEMPT>.md`; a round or terminal alone is
+not unique. `PREVIOUS_REPORT_FILE` is read-only. Each report contains one current
+BINDING and all applicable FIX_EVIDENCE, including a retry inside the same round
+(`proposed.fix:true` for a fix whose round remains 1). C6 retains `report_history`
+even after a later round supersedes an accepted verdict, verifies prior hashes
+on resume and refuses reuse of a previous attempt's report path. A defective
+format report is also retained as immutable input to its correction.
+
+All report hashes cover original bytes, including BOM, line endings and EOF.
+Only after checking that hash do both parsers normalize CRLF to LF. SIMPLICITY,
+BINDING, FINDINGS, COVERAGE, EVIDENCE, FIX_EVIDENCE and verdict prefixes follow
+the same parsing rule. A newline rewrite is still a hash mutation.
+
+## First-plan bootstrap
+
+Before a plan exists, the coordinator saves this authorization record in the
+workspace and puts its reference in `state.authorization`:
+
+```json
+{"schema_version":1,"run_id":"<live Run>","worktree_id":"<actual target>","plan_base":"<full existing HEAD>","plan_path":"<absolute future plan path inside worktree>","request":"<actual authorized user task and constraints>"}
+```
+
+Initialize ordinary empty state with `mode:plan`, `step:bootstrap`, `plan:null`,
+`phase:null`, `base:plan_base`. Initially reports, authors, phase commits and tracks
+are empty. `resume`, `dispatch`, `bind-dispatch`, `accept-report` and one
+format correction are the only bootstrap actions. Only a first-round plan-writer
+may be assigned; the dispatch artifact is the authorization reference with
+`kind:request`. C6 freezes its raw hash before launch. The writer receives the
+real request, produces the real target plan with `request_sha256` in frontmatter,
+and binds PLAN_WRITTEN to the plan's actual hash. Acceptance supplies `plan` and
+the matching plan artifact, then transitions to `step:plan`. Existing plan-less
+quickfix behavior is separate. Readers, revisers and implementers cannot consume
+a request as a substitute for a plan; foreign or mutated plan hashes reject.
+
+An accepted BLOCKED/NEEDS_AUTHORIZATION keeps `step:bootstrap`. Retain its report,
+settlement and author observation in their original order; after resolving the
+blocker, resume and create a fresh Task/Dispatch/ATTEMPT for plan-writer round 1.
+Only verifiable failed first-writer history is allowed during bootstrap. A draft
+supplied with a failed response or format correction may bind `state.plan` to the
+authorized path, but does not unlock readers or revisers. Only accepted
+PLAN_WRITTEN advances the step; a failed format correction also needs a fresh
+writer attempt. Keep the malformed report protected and read-only.
+
+If a failed first writer leaves an unparseable draft at the authorized plan path
+while `state.plan` is still null, the existing-file guard also blocks a new writer.
+After the attempt is settled, verify that no active or unresolved writer owns the
+path and that no accepted artifact or protected report binds that draft. Preserve
+the regular file without overwriting anything: move it to a fresh recovery path
+inside the existing workspace, recording its original path and raw SHA-256.
+Verify the preserved bytes and the absence of the original before resuming and
+validating the new first-writer dispatch against the same authorization. Do not
+clear history, alter authorization, or move a bound plan/protected report this
+way. If ownership or bindings cannot be verified, recovery remains blocked.
+
+## Child tracks and BASE
+
+Before any track dispatch, create child worktrees separately from worker launch.
+Git 2.36+ is required for literal `worktree list --porcelain -z` records.
+Save an immutable `state.track_group` reference to:
+
+```json
+{"schema_version":1,"run_id":"<live Run>","parent_worktree":"<absolute parent>","parent_head":"<verified group-start commit>","plan":{"path":"<frozen shared plan>","sha256":"<raw hash>"},"tracks":[{"id":"T1","worktree":"<absolute child>","worktree_id":"<actual Orca id>","phase":"F1","base":"<same parent_head>"}]}
+```
+
+The sealed group is the per-track BASE source. C6 parses NUL-separated Git
+worktree records, verifies parent and child membership, unique paths/IDs, actual
+commit ancestry from plan_base and the phase's planned base to parent_head, and
+that each child's HEAD descends from its recorded BASE. Target phase/worktree ID
+and state.base must match its registration. The shared plan/hash never changes
+in a child. This narrowly replaces the sequential phase.base equality check;
+it does not permit a guessed BASE. Two active producers cannot conflict or run
+with a consumer of an active producer. The parent and unrelated worktrees are
+excluded from the slot count; unknown TARGET writers still block in fleet checks.
+
+`state.track_commits` may contain `{track_id,sha,base,artifact}` only after the
+accepted child source/index matches that real commit and the commit is an
+ancestor of the actual parent HEAD (merged). A status string does not free a
+slot. Retain completed and incomplete track records on resume; C6 verifies the
+completed history and counts only the remaining active children. Archive a group
+only after its merges/integration are verified; never remove unmerged work.
+
+## Evidence-backed ledger closure
+
+Every closing status (`fixed`, `resolved`, `closed`, `verified-by-controller`)
+requires `closure:{path,sha256}` pointing to immutable evidence appropriate to
+the finding kind. For `cannot_verify`, use a CHECK receipt:
+
+```json
+{"schema_version":1,"finding_id":"<exact FINDINGS id>","report":{"path":"<accepted source report>","sha256":"<raw hash>"},"artifact":{"kind":"package","path":"<checked artifact>","sha256":"<raw hash>"},"result":{"path":"<C4 result.json>","sha256":"<raw hash>"},"command":"<executed assertion command>","expect":"<literal expectation>"}
+```
+
+The report must be in accepted history and contain that finding. For
+`cannot_verify`, artifact, command and expect must exactly match the originating
+report's assigned artifact and finding. CHECK commands must assert the literal
+expectation and return zero only when it holds; a print-only diagnostic cannot
+prove an arbitrary expectation. If the expectation needs human judgment, keep
+the finding open. For an ordinary repaired blocking finding, use this receipt
+instead of introducing another mandatory runtime CHECK:
+
+```json
+{"schema_version":1,"finding_id":"<exact id>","report":{"path":"<original accepted report>","sha256":"<hash>"},"artifact":{"kind":"plan|package","path":"<reviewed repaired artifact>","sha256":"<hash>"},"fix_report":{"path":"<accepted fix report>","sha256":"<hash>"},"review_report":{"path":"<accepted independent re-review>","sha256":"<hash>"}}
+```
+
+All three reports must be accepted and retain matching actual settlement/binding.
+Their order in `report_history` must be original finding, actual fix response,
+then independent re-review, using distinct Task/Dispatch attempts. For an older
+state without `report_history`, the ordered `accepted` list suffices only if it
+still contains all three unambiguous records; missing chronology is UNVERIFIABLE.
+Never infer order from file timestamps or round numbers alone. The fix and review
+must match the original Run, phase and step; the re-review round must follow the
+finding's round. A same-round fix uses `binding.fix:true`; a later fix round or
+plan-reviser response retains its existing role contract.
+
+The fix report's existing FIX_EVIDENCE object adds
+`"findings":[{"id":"<exact finding id>","report":{"path":"<original accepted report>","sha256":"<raw hash>"}}]`.
+Include exactly one matching entry for each addressed finding, supplied by the
+coordinator from accepted history. Tests/commands/outputs remain required for
+code fixes; a text-only plan revision needs this binding and per-item section
+notes, without a new runtime CHECK. An initial pre-finding implementation report,
+a fix for another finding/report, or a review accepted before the fix cannot
+close the item. The independent re-review must be APPROVED/REVIEW_OK and omit the
+resolved finding. Fix and review cover the same repaired plan hash or
+source/index/HEAD, and review coverage includes the fix's modified files. Recheck
+family independence and current source (or its verified historical commit).
+No runtime test is added merely for a wording correction. A REVIEW_BLOCKING
+report cannot become REVIEW_OK by changing the ledger. A later clean review
+also cannot silently erase an unresolved finding from earlier accepted history.
+
+C6 revalidates the result seal, request/check binding, exit 0, complete logs and
+unchanged source evidence. Package/snapshot files and HEAD must match; a plan's
+raw bytes must be among the checked source files. The current source must still
+match; only a verified recorded commit may explain HEAD movement. Missing,
+mutated, wrong-finding, stale or negative evidence rejects closure and preserves
+the prior state/barrier. A closure of a committed earlier delivery remains valid
+only when its complete source/index is proven by that recorded commit and actual
+ancestry; later phases require their own review. Store a negative result with the open finding and send
+it to the authorized fixer; it remains a mandatory blocker. `closed_ledger_ids`
+is recomputed from proofs on every call, never trusted from input. Re-reading the
+same valid proof is idempotent. REVIEW_OK may include cannot_verify but cannot
+pass acceptance/commit while that finding lacks its positive bound CHECK.
 
 ## C6 — protocol validation and resume
 
@@ -340,12 +520,19 @@ receipts are simulations. The validator does not authenticate a fabricated local
 receipt or reconstruct an omitted author history. Keep the original reports and
 receipts immutable; a new fix/correction report gets a new durable path.
 
+A successful same-role, same-step/phase fix with `fix:true` replaces that role's
+previous same-round entry in current `accepted`, while `report_history` retains
+every immutable attempt. Existing earlier-round replacement is unchanged. This
+lets a repaired candidate resume after its fresh gate and reviews; current
+accepted artifacts still must be current, and stale current approvals reject.
+Bootstrap failures are retained, not superseded by this fix rule.
+
 Required compact `state` fields:
 
 - `schema_version:1`, `mode:plan|quickfix`, `plan` and `ledger` references (null
-  only for plan-less quickfix / no ledger), `orca_run`, full `plan_base`, current
+  only for authorized first-plan bootstrap or quickfix / no ledger), `orca_run`, full `plan_base`, current
   `phase` (null for planning/quickfix), full recorded `base`, `step`
-  (`plan|phase|quickfix|final-review|delivery|completion`).
+  (`bootstrap|plan|phase|quickfix|final-review|delivery|completion`).
 - Absolute `worktree`, its actual Orca `worktree_id`, existing `workspace`;
   `active` assignment or null; `rounds:{plan_review:0,fused_review:0,final_review:0,gate_fix:0}`;
   `format_corrections:{}`, `accepted:[]`, `processed:{messages:[],deliveries:[]}`,
@@ -362,8 +549,13 @@ started before this contract. An explicit `plan` input can update the same path'
 reference before assignment, after an authorized plan-author result, or at the
 completion metadata checkpoint; it never edits the plan.
 
-`artifact` adds `kind:plan|snapshot|package` to a file reference. A plan uses its
-raw hash; a snapshot is a valid C4 record (optional `inputs:[]`); a package is a
+`artifact` adds `kind:request|plan|snapshot|package` to a file reference. A plan uses its
+raw hash. Archive each plan revision's bytes in the workspace before acceptance;
+its artifact `path` names that immutable copy and `source_path` names the live
+plan. The current copy's SHA must equal state.plan.sha256 and source_path must
+equal state.plan.path. This preserves accepted plan evidence when later metadata
+or an authorized revision changes the live file. A snapshot is a valid C4 record
+(optional `inputs:[]`); a package is a
 complete C5 manifest. Current reader artifacts must still match the working tree.
 C4 evidence and C5 packages may have different exclusion lists/IDs: cross-role
 checks compare actual manifest files and HEAD, while each binding retains its
@@ -416,8 +608,9 @@ workspace is null, provided ownership is not external/user-owned/pre-existing
 and release is not pending/unknown. Other null-workspace records remain unknown.
 Unknown/external ownership
 or pending/unknown release blocks the affected worktree. An unbound writer intent
-also blocks: bind/reconcile it before another proposal. There may be at most two
-worktrees; independent work in the other identified worktree is not serialized.
+also blocks: bind/reconcile it before another proposal. The limit is two active
+child tracks of this Run; the parent and unrelated worktrees do not consume slots.
+TARGET ownership is still checked against the complete fresh fleet.
 
 Caps remain plan review 4, fused review 4 per phase, final review 2, consecutive
 gate-fix 2 and one format correction. Complementary independent reports use the
