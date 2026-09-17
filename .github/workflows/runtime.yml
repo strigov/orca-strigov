@@ -55,7 +55,17 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/orca-evidence" | Out-Null
           $PSVersionTable | Out-File "$env:RUNNER_TEMP/orca-evidence/environment.log"
           git rev-parse HEAD | Out-File -Append "$env:RUNNER_TEMP/orca-evidence/environment.log"
-          python -B -m unittest discover -s tests -v *> "$env:RUNNER_TEMP/orca-evidence/integration.log"
+          # PS5.1 treats redirected native stderr as PowerShell errors under Stop.
+          # Let Python retain both streams and propagate the actual suite exit.
+          $testDriver = @'
+          import subprocess, sys
+          with open(sys.argv[1], 'wb') as log:
+              result = subprocess.run(
+                  [sys.executable, '-B', '-m', 'unittest', 'discover', '-s', 'tests', '-v'],
+                  stdout=log, stderr=subprocess.STDOUT)
+          raise SystemExit(result.returncode)
+          '@
+          python -B -c $testDriver "$env:RUNNER_TEMP/orca-evidence/integration.log"
           $suiteCode=$LASTEXITCODE
           Get-Content "$env:RUNNER_TEMP/orca-evidence/integration.log"
           if ($suiteCode -ne 0) { exit $suiteCode }
