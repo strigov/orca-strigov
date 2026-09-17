@@ -38,13 +38,15 @@ jobs:
       matrix:
         shell: [powershell, pwsh]
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Native PowerShell integration suite
-        shell: ${{ matrix.shell }}
         run: |
           $env:ORCA_TEST_SHELL=(Get-Process -Id $PID).Path
           $env:ORCA_TEST_ARTIFACTS="$env:RUNNER_TEMP/orca-evidence/artifacts"
