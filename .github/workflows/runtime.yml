@@ -32,6 +32,7 @@ jobs:
         with:
           name: runtime-${{ matrix.os }}
           path: ${{ runner.temp }}/orca-evidence
+          include-hidden-files: true
   windows:
     strategy:
       fail-fast: false
@@ -67,7 +68,7 @@ jobs:
           '@
           python -B -c $testDriver "$env:RUNNER_TEMP/orca-evidence/integration.log"
           $suiteCode=$LASTEXITCODE
-          Get-Content "$env:RUNNER_TEMP/orca-evidence/integration.log"
+          Get-Content -Encoding UTF8 "$env:RUNNER_TEMP/orca-evidence/integration.log"
           if ($suiteCode -ne 0) { exit $suiteCode }
           git diff --check
       - uses: actions/upload-artifact@v4
@@ -75,3 +76,4 @@ jobs:
         with:
           name: runtime-windows-${{ matrix.shell }}
           path: ${{ runner.temp }}/orca-evidence
+          include-hidden-files: true

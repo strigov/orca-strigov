@@ -434,7 +434,11 @@ class VerificationFixture(RunnerFixture):
         plan = self.workspace / "plan.md"
         plan.write_text("---\nslug: runner-fixture\nverify:\n" +
                         "".join("  - " + json.dumps(c, ensure_ascii=False) + "\n" for c in declarations) + "---\n", encoding="utf-8")
-        return command(self.argv("verify-gate", plan, base or self.git.base, self.git.root, *options), self.git.root)
+        # The gate can run both HEAD and BASE, including snapshots and worktree
+        # setup. Its outer watchdog must cover those sequential native launches;
+        # each check still enforces its own declared deadline (including 0.3s).
+        return command(self.argv("verify-gate", plan, base or self.git.base, self.git.root, *options),
+                       self.git.root, timeout=60)
 
 
 class ProtocolFixture(VerificationFixture):
