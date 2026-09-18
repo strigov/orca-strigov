@@ -168,8 +168,9 @@ class RunnerFixture:
         write_json(path, s)
         return path, s
 
-    def start(self, spec):
-        p = Process(self.argv("run-check", "run", spec), self.git.root, log_stem=str(spec) + '.wrapper')
+    def start(self, spec, seconds=14):
+        p = Process(self.argv("run-check", "run", spec), self.git.root,
+                    seconds=seconds, log_stem=str(spec) + '.wrapper')
         self.processes.append(p)
         return p
 

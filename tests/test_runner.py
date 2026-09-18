@@ -1,4 +1,5 @@
 """C3 acceptance on actual short processes. Full contention lives only here."""
+from contextlib import contextmanager
 import datetime
 import json
 import os
@@ -64,6 +65,35 @@ class RunnerBehavior:
 
     def status(self, s):
         return read_json(Path(s["run_dir"]) / "status.json")
+
+    @contextmanager
+    def held_resource(self, key):
+        ready = self.fx.base / (key + "-ready")
+        release = self.fx.base / (key + "-release")
+        code = ("from pathlib import Path\nimport time\n"
+                "release = Path(" + repr(str(release)) + ")\n"
+                "deadline = time.monotonic() + 35\n"
+                "Path(" + repr(str(ready)) + ").touch()\n"
+                "while not release.exists():\n"
+                "    if time.monotonic() >= deadline:\n"
+                "        raise TimeoutError('resource release signal missing')\n"
+                "    time.sleep(0.04)\n")
+        # The owner must outlive readiness (10s) and the other run's watchdog
+        # (14s). Only the release signal permits success; the child's own bound
+        # also prevents an orphan if its supervisor unexpectedly dies.
+        path, spec = self.fx.spec(code, resource_key=key, timeout_seconds=30)
+        owner = self.fx.start(path, seconds=40)
+        try:
+            until(lambda: ready.exists() and self.status(spec)["state"] == "running", timeout=10)
+            self.assertIsNone(owner.p.poll(), self.status(spec))
+            self.assertEqual(self.status(spec)["state"], "running")
+            yield owner, spec, release
+        finally:
+            release.touch()
+            reply = owner.finish()
+        self.assertEqual(reply[0], 0, reply)
+        result = read_json(Path(spec["run_dir"]) / "result.json")
+        self.assertTrue(result["cleanup_verified"] and result["logs_complete"], result)
 
     def native_reader(self, path, share):
         """Pin one real Windows file incarnation until this binary reader closes."""
@@ -351,20 +381,19 @@ class RunnerBehavior:
 
     def test_shared_resource_two_worktrees(self):
         key = "shared-" + str(time.time_ns())
-        marker = self.fx.base / (key + "-started")
-        a, sa = self.fx.spec("import pathlib,time;pathlib.Path(" + repr(str(marker)) + ").touch();time.sleep(2)", resource_key=key)
-        pa = self.fx.start(a)
-        until(lambda: marker.exists())
-        b, sb = self.fx.spec(root=self.fx.git.other, resource_key=key)
-        pb = self.fx.start(b)
-        state = until(lambda: self.status(sb))
-        self.assertEqual(state["state"], "waiting-resource")
-        self.assertEqual(pa.finish()[0], 0)
-        self.assertEqual(pb.finish()[0], 0)
+        with self.held_resource(key) as (pa, sa, release):
+            code = ("from pathlib import Path; assert Path(" + repr(str(release)) +
+                    ").exists(), 'shared command started before resource release'")
+            b, sb = self.fx.spec(code, root=self.fx.git.other, resource_key=key)
+            pb = self.fx.start(b)
+            state = until(lambda: self.status(sb))
+            self.assertEqual(state["state"], "waiting-resource")
+            self.assertIsNone(pa.p.poll())
+        reply = pb.finish()
+        self.assertEqual(reply[0], 0, reply)
         ra = read_json(Path(sa["run_dir"]) / "result.json")
         rb = read_json(Path(sb["run_dir"]) / "result.json")
         self.assertEqual(ra["resource_lock"], rb["resource_lock"])
-        self.assertGreater(rb["duration_seconds"], 0.5)
         self.assertFalse(Path(ra["resource_lock"]).exists())
         self.assertTrue(ra["cleanup_verified"] and rb["cleanup_verified"])
 
@@ -407,14 +436,21 @@ class RunnerBehavior:
             if lock.exists(): lock.unlink()
 
     def test_unrelated_run_is_not_serialized(self):
-        path, s = self.fx.spec("import time;print('holding');time.sleep(3)", resource_key="independent-" + str(time.time_ns()))
-        p = self.fx.start(path)
-        until(lambda: self.status(s)["state"] == "running")
-        rc, result, out, err = self.fx.run(root=self.fx.git.other)
-        self.assertEqual(rc, 0, (out, err))
-        self.assertIsNone(result["resource_lock"])
-        self.assertIsNone(p.p.poll(), "an unrelated run must not wait for the held key")
-        self.assertEqual(p.finish()[0], 0)
+        for delay in (0, 3.5):
+            with self.subTest(unrelated_delay=delay):
+                key = "independent-" + str(time.time_ns())
+                with self.held_resource(key) as (owner, spec, release):
+                    # Deliberate latency beyond the old three-second hold must
+                    # still pass: completion is ordered by signals, not speed.
+                    code = "import time;time.sleep(" + repr(delay) + ");print('OK')"
+                    rc, result, out, err = self.fx.run(code=code, root=self.fx.git.other)
+                    self.assertEqual(rc, 0, (out, err))
+                    self.assertIsNone(result["resource_lock"])
+                    self.assertFalse(release.exists())
+                    self.assertIsNone(owner.p.poll(), "unrelated run waited for the held key")
+                    held = self.status(spec)
+                    self.assertEqual(held["state"], "running", held)
+                    self.assertEqual(read_json(held["resource_lock"])["run_id"], spec["run_id"])
 
     def test_symlink_or_junction_artifact_rejected(self):
         target = self.fx.base / ("foreign-" + str(time.time_ns()))
