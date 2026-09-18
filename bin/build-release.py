@@ -29,6 +29,8 @@ RELEASE_PATHS = (
     Path("bin/verify-gate.ps1"),
     Path("bin/wait-agent-ready"),
     Path("bin/wait-agent-ready.ps1"),
+    Path("bin/wait-worker-event"),
+    Path("bin/wait-worker-event.ps1"),
     Path("docs/install-windows.md"),
     Path("docs/runtime-platforms.md"),
     Path("docs/controlled-pipeline-validation.md"),
@@ -43,6 +45,7 @@ EXECUTABLE_PATHS = frozenset((
     Path("bin/sdd-workspace"),
     Path("bin/verify-gate"),
     Path("bin/wait-agent-ready"),
+    Path("bin/wait-worker-event"),
 ))
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)

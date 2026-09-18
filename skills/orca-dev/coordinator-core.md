@@ -48,7 +48,8 @@ bookkeeping reads above; `orca skills get orchestration`, `orca status`,
 `orca orchestration run-* / task-create / task-list / worker-list / worker-start /
 dispatch / worker-show / check`; `orca terminal create / wait / read`; helper-path
 resolution; `sdd-workspace --name <slug>`; `run-check capabilities` on POSIX;
-`wait-agent-ready`; and `protocol-state validate INPUT_JSON [RESUME_OUT]`.
+`wait-agent-ready`; `wait-worker-event REQUEST_JSON`; and
+`protocol-state validate INPUT_JSON [RESUME_OUT]`.
 Create the original-request, spec, state and raw receipt files needed by those
 commands only in the owned workspace. Hash those files without reading source.
 Native Windows uses the equivalent `.ps1` helpers and PowerShell invocation `&`;
@@ -208,6 +209,11 @@ Fixers receive only open ACCEPTED / PARTIALLY_ACCEPTED items; reviewers receive 
 
 One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, model per roles.md)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and family-rule substitutions are always stated.
 
+Wait through recipes §4/C7. An empty CLI window, keepalive or tool-harness yield
+is not a protocol iteration or a reason for `worker-show`/`worker-read`/screen
+reads. Keep the same pending waiter; use the longest tool wait permitted by the
+host. Inspect workers when the waiter returns a delivery, attention or error.
+
 
 ## Red flags — never
 
@@ -230,4 +236,4 @@ One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, mo
 - `./roles.md` — who runs what (models, efforts, cascades, family rule, planning profiles)
 - `./orca-recipes.md` — launch paths A/B, blockers, waiting, release, retries
 - `./prompts/plan-writer-prompt.md` (Mode A / Mode B), `plan-reviewer-prompt.md`, `implementer-prompt.md`, `frontend-implementer-prompt.md`, `verification-gate-prompt.md`, `review-primary-prompt.md`, `review-control-prompt.md`, `synthesize-review-prompt.md`, `final-review-prompt.md`, `quickfix-prompt.md`, `diagnosis-prompt.md`
-- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready` (+ their `.ps1` ports for Windows)
+- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`, `../../bin/wait-worker-event` (+ their `.ps1` ports for Windows)

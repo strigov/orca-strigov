@@ -33,6 +33,9 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.assertIn(prefix + "install.ps1", names)
                 self.assertIn(prefix + "skills/orca-dev/SKILL.md", names)
                 self.assertIn(prefix + "bin/verify-gate", names)
+                self.assertIn(prefix + "bin/wait-worker-event", names)
+                self.assertIn(prefix + "bin/wait-worker-event.ps1", names)
+                self.assertIn(prefix + "bin/lib/wait_worker_event.py", names)
                 self.assertNotIn(prefix + "bin/build-release.py", names)
                 self.assertFalse(any(name.endswith("/.DS_Store") for name in names))
                 self.assertFalse(any(name.startswith(prefix + "tests/") for name in names))
@@ -45,6 +48,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                     "bin/sdd-workspace",
                     "bin/verify-gate",
                     "bin/wait-agent-ready",
+                    "bin/wait-worker-event",
                 }
                 for info in archive.infolist():
                     with self.subTest(path=info.filename):

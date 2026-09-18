@@ -62,3 +62,42 @@ suites are repeated only for a concrete failure, source change or required repla
 Synthetic lifecycle fixtures are explicitly labeled. The maintenance worker
 uses real Orca lifecycle for its own task, while live C6 workflow acceptance is
 coordinated separately. No prepared state or fixture is described as a live run.
+
+## C7 waiter validation — 2026-09-19
+
+This targeted maintenance check ran on native macOS (Darwin), `/bin/bash`
+3.2.57 and Python 3.14.6. It does not replace the earlier C3–C6 platform evidence.
+
+| Exact command | Result |
+| --- | --- |
+| `python3 -B -m unittest discover -s tests -p test_worker_wait.py -v` | PASS, 11 tests, including shared positive/negative subcases |
+| `python3 -B -m unittest discover -s tests -p test_release_archive.py -v` | PASS, 3 tests |
+| `/bin/bash -n bin/wait-worker-event` | PASS, exit 0 |
+| `python3 /Users/strigov/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev` | PASS, `Skill is valid!` |
+| `git diff --check` | PASS, exit 0 |
+
+The waiter fixtures use a finite synthetic CLI in owned temporary directories,
+never a real Orca inbox. They cover whole mixed FIFO batches, raw receipt bytes,
+silent keepalives/empty waits, one-shot coordinator-authorized acknowledgment,
+scoped paginated health checks, stale/no-action continuation, exit/attention,
+malformed evidence, disconnects, nonzero exits and refusal to overwrite receipts.
+The selected CLI's live guide and `orchestration check --help` were read; this
+does not constitute a live delivery test or a measured token-savings benchmark.
+
+Native Windows PowerShell 5.1/7: **NOT_RUN** (neither shell is available on this
+host). The native port uses the same fixture scenarios through the existing
+Windows CI matrix. Linux: **NOT_RUN** for this change. Full repository suite and
+live worker lifecycle: **NOT_RUN**; only the directed checks above were run.
+
+Changed files for this maintenance change:
+
+- Runtime: `bin/wait-worker-event`, `bin/lib/wait_worker_event.py`,
+  `bin/wait-worker-event.ps1`.
+- Skill: `skills/orca-dev/SKILL.md`, `coordinator-core.md`, `orca-recipes.md`,
+  `runtime-contracts.md` in that same directory.
+- Packaging/tests: `bin/build-release.py`, `tests/test_release_archive.py`,
+  `tests/test_worker_wait.py`, `tests/fixtures/orca_wait_cli.py`.
+- Documentation: `docs/install-windows.md`, `docs/runtime-platforms.md`.
+
+The local installed skill is already a symlink to this checkout, so no installer,
+global hook/configuration change, worker launch, commit or push was performed.

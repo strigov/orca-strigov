@@ -93,6 +93,10 @@ transitions, availability substitutions and unresolved barriers; do not narrate
 polling. Ask the user only for missing authority, a material product decision or
 an unresolvable blocker. Delegate technical research to the appropriate worker.
 
+Wait for workers through `wait-worker-event` (orca-recipes.md §4, runtime C7).
+Empty windows and keepalives stay inside that process. If the tool harness yields,
+resume the same call; do not inspect workers or start another waiter on each yield.
+
 Runtime contracts define authorized first-plan bootstrap, Run-owned child tracks,
 and evidence-backed ledger closure. Linux requires Python 3.9+; Darwin requires
 Python 3.13+ and successful capability preflight. Native macOS and live Orca

@@ -102,18 +102,43 @@ Before the first dispatch of a session run `install.sh --check <repo>` (read-onl
 
 For a worker-owned long shell command, load [runtime-contracts.md](runtime-contracts.md#c3--one-local-command-owner) C3 on demand. Use `run-check run SPEC_JSON` (native Windows: `run-check.ps1`) and let the shell block. Its owner receives full log/result paths, explicit deadline/cancel policy, diagnostic progress and an optional shared local resource key. `run-check wait` observes a new diagnostic state or completion; it never transfers ownership. The coordinator receives significant findings from the owner rather than observing the same log. Silence/no-progress permits bounded diagnosis, not a kill, new writer or resource takeover. Do not add Schedule/model timers, monitoring workers or an Orca process API. A required command terminal uses the verified `orca terminal wait --terminal <handle> --for exit --timeout-ms ...`; this waits for that terminal, not an arbitrary PID. Preserve heartbeat and settlement duties from the live preamble.
 
-The following wait is for **worker settlement**, not for a test process:
+For **worker settlement**, run one C7 waiter in the coordinator's shell. Prepare
+its request in the existing plan workspace using the actual CLI, Run and awaited
+Dispatch IDs; the [C7 contract](runtime-contracts.md#c7--worker-event-waiter) gives
+the JSON shape. Allocate a fresh output directory per invocation.
 
 ```bash
-orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 540000 --json
+"$BIN/wait-worker-event" "$dir/wait-<ATTEMPT>.json"
 ```
 
-- Rolling windows; a timeout or `{count:0}` is a checkpoint, not a failure. Coding turns run 15–60 min; planning turns run 10–30 min.
-- The command prints `{"_keepalive":true,...}` heartbeat lines before the final JSON — parse only the last line.
-- From a Codex coordinator the blocking wait is safe: use ≤ 9-minute windows.
-- Process **every** message in a Delivery, then `check --ack <delivery_id> --wait ...` for the next one. Reply to `question` messages with `orca orchestration reply --id <msg_id> --body "<answer>" --json` before acknowledging.
-- Liveness checkpoint when a window returns nothing: `orca orchestration worker-show --dispatch <id> --json`, or `orca terminal read --terminal <handle> --json`.
-- **After 3 empty waits**: do not poll blindly; run `orca orchestration task-list` / fleet inspection to verify whether the worker is active or if nextAction is needed. Activity means alive — never stop a worker for being slow.
+- The helper blocks on `check --wait --types "worker_done,escalation,question"`
+  in fixed 9-minute windows. Empty timeouts renew inside the process; keepalives
+  go to stderr log files. Neither wakes the coordinator with a status report.
+- After three empty windows it reads this Run's paginated fleet, including remote
+  workers. A live worker or stale-only observation with no requested action keeps
+  waiting. An awaited worker's exit, attention or nextAction returns a diagnostic;
+  malformed evidence, a missing expected Dispatch or transport failure returns an
+  error. These observations never authorize automatic stop, retry or release.
+- Read the single result line and its saved raw receipt: `delivery` → process
+  **every** message in the FIFO batch, including older statuses/heartbeats;
+  `attention`/`error` → inspect the recorded evidence and follow §6. `nextAction`
+  is advice for the coordinator, never executed by the helper.
+- After all messages and terminal ownership decisions are processed, put the
+  accepted Delivery ID in the next request's `ack_delivery_id`. The helper passes
+  `--ack` only on its first check. Reply to questions before acknowledgment.
+  If using `check --ack ... --json` directly, process any next Delivery it returns
+  too; do not discard that response. C6 acceptance still applies.
+- Keep one consuming waiter per coordinator Run. If the tool returns a running
+  session/cell ID, resume **that same call** using the longest wait the host allows.
+  A harness yield is not an Orca timeout: do not restart the helper, shorten its
+  window, read a worker screen/log, add a timer, or dispatch a monitoring agent.
+  Tool-imposed wakeups may remain; they require no worker inspection. Report
+  meaningful changes at the host's required cadence, without polling narration.
+
+Native Windows uses `& "$BIN\wait-worker-event.ps1" "$dir\wait-<ATTEMPT>.json"`.
+Readiness checks before injection and receipt checks at real lifecycle barriers
+remain unchanged. A missing/broken helper is a setup issue to report, not a reason
+to reconstruct a model-driven short polling loop.
 
 `worker_done` fields the protocol reads: `subject` (the verdict token), `payload.outcome` (`succeeded|failed`), `payload.reportPath` (the report file — the coordinator reads only what SKILL.md allows), `payload.filesModified`.
 
@@ -123,7 +148,8 @@ Before accepting it, save the exact accepted send/check receipt and a current
 `orca orchestration worker-show --dispatch <id> --json` observation. Pass their
 paths/raw hashes, the selected message ID, report and frozen artifact to C6
 `accept-report`; only then store the returned resume and acknowledge a complete
-Delivery with `check --ack <delivery_id> --json`. Stale/duplicate/heartbeat results
+Delivery through §4's next waiter request (or a direct `check --ack`, processing
+any batch it returns). Stale/duplicate/heartbeat results
 do not create a second completion or consume another substantive round.
 
 Decide the terminal's fate **before** acknowledging the Delivery:
@@ -181,7 +207,7 @@ Bridge down or doctor not `ready` → fall back to the default `astra` profile.
 
 Installed with `install.ps1` (see `docs/install-windows.md`). Differences from macOS that the coordinator must apply:
 
-- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7 — both work). Every workspace script has a native PowerShell port: `& "$env:ORCA_DEV_HOME\bin\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `run-check.ps1`, `protocol-state.ps1`), same arguments, exit codes and output as the bash originals. Keep their `bin/lib/` dependencies. For Path B, inspect `$LASTEXITCODE` immediately after the readiness helper and inject only on success; nonzero stops the launch sequence for the evidence/recovery checks in §6. Never call `bash` or the extension-less originals on Windows: `bash` there is the WSL launcher in `System32`. `verify-gate.ps1` runs the plan's `verify:` commands in a child PowerShell, so write them as PowerShell / native commands (`pytest -q`, `npm test`), not as bash one-liners. Paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
+- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7 — both work). Every workspace script has a native PowerShell port: `& "$env:ORCA_DEV_HOME\bin\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `run-check.ps1`, `protocol-state.ps1`), same arguments, exit codes and output as the bash originals. Keep their `bin/lib/` dependencies. For Path B, inspect `$LASTEXITCODE` immediately after the readiness helper and inject only on success; nonzero stops the launch sequence for the evidence/recovery checks in §6. Never call `bash` or the extension-less originals on Windows: `bash` there is the WSL launcher in `System32`. `verify-gate.ps1` runs the plan's `verify:` commands in a child PowerShell, so write them as PowerShell / native commands (`pytest -q`, `npm test`), not as bash one-liners. Paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
 - `orca orchestration check --types "worker_done,escalation,question"` — quote comma-separated lists in PowerShell. Where a recipe pipes `--json` into `jq -r .result.terminal.handle`, use `(… --json | ConvertFrom-Json).result.terminal.handle` instead.
 - Path A works unchanged for `claude`; Codex still requires Path B for proven native multi-agent disabling, independent of hook trust. Path B argv is the same text; Antigravity (`agy`) on native Windows is unverified — if `agy` is missing, the implementer cascade continues with its fallback per `roles.md` and the gate/synthesizer fallbacks apply; say so once.
 - The skill is linked into `%USERPROFILE%\.codex\skills\orca-dev` (symlink or junction). Locate `bin\` through the verified Process `ORCA_DEV_HOME`. Before launch, this checkout's `install.ps1 -Check <repo>` reports its source/link, User value and Process value separately. When only Process is stale, restart Orca or use the explicitly authorized checkout in a process-only `$env:ORCA_DEV_HOME` assignment; do not rewrite real User settings. Never use Git Bash `readlink -f` to infer a junction target. Installation refuses ordinary directories and writes through foreign links; check mode never repairs them.
