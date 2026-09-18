@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# C6: collect the all-Run inventory without creating an Orca terminal.
+set -eu
+FLEET_BIN=$(cd "$(dirname "$0")" && pwd)
+exec python3 -B "$FLEET_BIN/lib/collect_worker_fleet.py" "$@"

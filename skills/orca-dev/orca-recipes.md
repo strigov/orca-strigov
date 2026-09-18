@@ -207,7 +207,7 @@ Bridge down or doctor not `ready` → fall back to the default `astra` profile.
 
 Installed with `install.ps1` (see `docs/install-windows.md`). Differences from macOS that the coordinator must apply:
 
-- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7 — both work). Every workspace script has a native PowerShell port: `& "$env:ORCA_DEV_HOME\bin\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `run-check.ps1`, `protocol-state.ps1`), same arguments, exit codes and output as the bash originals. Keep their `bin/lib/` dependencies. For Path B, inspect `$LASTEXITCODE` immediately after the readiness helper and inject only on success; nonzero stops the launch sequence for the evidence/recovery checks in §6. Never call `bash` or the extension-less originals on Windows: `bash` there is the WSL launcher in `System32`. `verify-gate.ps1` runs the plan's `verify:` commands in a child PowerShell, so write them as PowerShell / native commands (`pytest -q`, `npm test`), not as bash one-liners. Paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
+- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7 — both work). Every workspace script has a native PowerShell port: `& "$env:ORCA_DEV_HOME\bin\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `collect-worker-fleet.ps1`, `run-check.ps1`, `protocol-state.ps1`), same arguments, exit codes and output as the bash originals. Keep their `bin/lib/` dependencies. For Path B, inspect `$LASTEXITCODE` immediately after the readiness helper and inject only on success; nonzero stops the launch sequence for the evidence/recovery checks in §6. Never call `bash` or the extension-less originals on Windows: `bash` there is the WSL launcher in `System32`. `verify-gate.ps1` runs the plan's `verify:` commands in a child PowerShell, so write them as PowerShell / native commands (`pytest -q`, `npm test`), not as bash one-liners. Paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
 - `orca orchestration check --types "worker_done,escalation,question"` — quote comma-separated lists in PowerShell. Where a recipe pipes `--json` into `jq -r .result.terminal.handle`, use `(… --json | ConvertFrom-Json).result.terminal.handle` instead.
 - Path A works unchanged for `claude`; Codex still requires Path B for proven native multi-agent disabling, independent of hook trust. Path B argv is the same text; Antigravity (`agy`) on native Windows is unverified — if `agy` is missing, the implementer cascade continues with its fallback per `roles.md` and the gate/synthesizer fallbacks apply; say so once.
 - The skill is linked into `%USERPROFILE%\.codex\skills\orca-dev` (symlink or junction). Locate `bin\` through the verified Process `ORCA_DEV_HOME`. Before launch, this checkout's `install.ps1 -Check <repo>` reports its source/link, User value and Process value separately. When only Process is stale, restart Orca or use the explicitly authorized checkout in a process-only `$env:ORCA_DEV_HOME` assignment; do not rewrite real User settings. Never use Git Bash `readlink -f` to infer a junction target. Installation refuses ordinary directories and writes through foreign links; check mode never repairs them.
@@ -220,12 +220,34 @@ For phase/checkpoint selection and exact reuse, load [runtime-contracts.md](runt
 ## C6 validation before lifecycle effects
 
 Read [runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume)
-for the single input schema and Report binding. Save current
-`orca orchestration worker-list --json --limit 100` output, then each additional
-`--cursor <nextCursor>` page until `hasMore:false`, without filtering to one run.
-Use actual workspace IDs and all relevant live/unknown/release observations.
-Each new proposal needs a new complete observation; no timer or guessed process
-API. Settled retained terminals do not hold write ownership.
+for the single input schema and Report binding. For each proposal that requires
+fresh fleet evidence, run the collector **in the existing coordinator shell**:
+
+```sh
+"$BIN/collect-worker-fleet" "$dir/fleet-request-<ATTEMPT>.json"
+```
+
+Native Windows: `& "$BIN\collect-worker-fleet.ps1" "$dir\fleet-request-<ATTEMPT>.json"`.
+The [C6 collector contract](runtime-contracts.md#c6-fleet-collector-no-orca-terminal)
+defines the small request. On exit 0 read the
+one-line result and load its `fleet_file` with JSON tools; set the proposal's
+`fleet` to that file's `fleet` array (path/hash/cursor references). Do not retype
+or reserialize the original receipts. The collector follows all pages at limit
+100 directly into files. The coordinator receives no per-page dump.
+
+**Why the helper is required:** in a bound terminal, `worker-list` without
+`--run` defaults to that Run, not all Runs. The collector removes inherited
+terminal/pane identity only in its read-only child and marks it identity-less,
+preventing active-pane guessing; it checks every actual response for `scope:all`.
+It does not unbind the coordinator or change connection settings. Never apply
+that child environment to lifecycle commands or the C7 inbox waiter.
+
+On error keep the partial evidence and stop the transition. Do not create or
+reuse a scratch Orca terminal as a workaround, reduce the page size, relay JSON
+via base64/terminal reads, fabricate `scope:all`, or settle for Run-scoped data.
+Existing unrelated/agent terminals stay untouched; this is not cleanup authority.
+Each required proposal still needs a fresh complete observation; no timer or
+guessed process API. Settled retained terminals do not hold write ownership.
 
 After task creation, `dispatch` validates the proposed role/model/coverage with
 `dispatch_id:null`. Only after VALID use the existing launch recipe; immediately

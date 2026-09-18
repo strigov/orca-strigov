@@ -17,6 +17,8 @@ RELEASE_PATHS = (
     Path("install.ps1"),
     Path("skills/orca-dev"),
     Path("bin/lib"),
+    Path("bin/collect-worker-fleet"),
+    Path("bin/collect-worker-fleet.ps1"),
     Path("bin/protocol-state"),
     Path("bin/protocol-state.ps1"),
     Path("bin/review-package"),
@@ -39,6 +41,7 @@ RELEASE_PATHS = (
 # permissions (Windows does not expose Unix executable bits).
 EXECUTABLE_PATHS = frozenset((
     Path("install.sh"),
+    Path("bin/collect-worker-fleet"),
     Path("bin/protocol-state"),
     Path("bin/review-package"),
     Path("bin/run-check"),

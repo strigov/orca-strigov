@@ -101,3 +101,58 @@ Changed files for this maintenance change:
 
 The local installed skill is already a symlink to this checkout, so no installer,
 global hook/configuration change, worker launch, commit or push was performed.
+
+## C6 headless fleet collector validation — 2026-09-19
+
+Native macOS, `/bin/bash` 3.2.57, Python 3.14.6, live Orca 1.4.205. This fixes
+inventory transport, not C6 ownership/acceptance rules or existing terminal cleanup.
+The `skill-creator` workflow led to a deterministic helper plus focused routing
+instructions; the version-matched `orca-cli` guide and installed scope/identity
+resolver established why omitting `--run` alone does not request all Runs.
+
+| Exact command | Result |
+| --- | --- |
+| `python3 -B -m unittest discover -s tests -p test_worker_fleet.py -v` | PASS, 8 tests with shared positive/negative subcases |
+| `python3 -B -m unittest discover -s tests -p test_worker_wait.py -v` | PASS, 11 tests after extending the shared fake CLI |
+| `python3 -B -m unittest discover -s tests -p test_protocol_state.py -k test_fleet_live_unknown_external_retained_pages_and_pending -v` | PASS, 1 existing C6 ownership/pagination regression test |
+| `python3 -B -m unittest discover -s tests -p test_release_archive.py -v` | PASS, 3 tests including both collector entrypoints and executable ZIP mode |
+| `/bin/bash -n bin/collect-worker-fleet` | PASS, exit 0 |
+| `python3 /Users/strigov/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/orca-dev` | PASS, `Skill is valid!` |
+| `git diff --check` | PASS, exit 0 |
+| `env -u ORCA_TERMINAL_HANDLE -u ORCA_PANE_KEY ORCA_STRUCTURED_SESSION=1 /usr/local/bin/orca orchestration worker-list --limit 100 --json` | Live read-only compatibility probe: exit 0, `scope.source:all`, 65 records, one page |
+| `bin/collect-worker-fleet /private/tmp/orca-fleet-live.W1niAz/request.json` | Live helper: exit 0, `event:collected`, 65 records, one page; immutable receipts and manifest under that owned temporary directory |
+
+The live request used `orca_argv:["/usr/local/bin/orca"]` and
+`output_dir:/private/tmp/orca-fleet-live.W1niAz/receipts`. The temporary root was
+allocated by `mktemp -d /tmp/orca-fleet-live.XXXXXX`; a replay needs a fresh leaf.
+Only read-only inventory was queried, with no Run, Task, mailbox, terminal or
+configuration mutations. No claim of live C6 dispatch/commit acceptance is made.
+
+Fixtures cover identity-less child context with original connection settings,
+unchanged parent identity, raw BOM/CRLF receipts and hashes, exact opaque cursors,
+100-row pages, empty inventory, incomplete/corrupt/scoped responses, runtime
+changes, duplicate IDs, nonzero exits, refusal to overwrite and no terminal/retry
+fallback. A collected manifest feeds the real C6 validator in an owned temporary
+Git fixture: an active cross-Run writer or external owner still blocks; durable
+settlement permits the existing transition. An initial test import failed on an
+escaped cursor literal; it was corrected before the passing checks above.
+
+Native Windows PowerShell 5.1/7 and Linux: **NOT_RUN** for this change. Neither
+PowerShell is installed on this host. The same fixture scenarios select the
+native port in the existing Windows CI matrix; fixture definitions are not a
+Windows PASS. Full repository suite: **NOT_RUN**; only the directed checks above.
+
+Changed files:
+
+- Runtime: `bin/collect-worker-fleet`, `bin/collect-worker-fleet.ps1`,
+  `bin/lib/collect_worker_fleet.py`.
+- Skill: `skills/orca-dev/SKILL.md`, `coordinator-core.md`, `orca-recipes.md`,
+  `runtime-contracts.md` in that directory.
+- Packaging/tests: `bin/build-release.py`, `tests/test_release_archive.py`,
+  `tests/test_worker_fleet.py`, `tests/fixtures/orca_wait_cli.py`.
+- Documentation: `docs/install-windows.md`, `docs/runtime-platforms.md`.
+
+The installed skill link already targets this checkout. Existing agent contexts
+must reread the updated skill/recipes; modifying these files does not inject a
+message into a running coordinator. Bureau's existing terminals were not closed
+or modified. No install, global environment edit, commit or push was performed.

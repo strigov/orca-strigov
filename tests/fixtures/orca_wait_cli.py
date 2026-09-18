@@ -1,5 +1,6 @@
-"""Synthetic CLI only: consume a finite response list inside an owned fixture."""
+"""Synthetic wait/inventory CLI: finite responses inside an owned fixture only."""
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -14,6 +15,13 @@ if index >= len(steps) or arguments[:2] != ["orchestration", steps[index]["comma
     sys.stderr.write("unexpected CLI invocation\n")
     sys.exit(90)
 step = steps[index]
+for name, expected in step.get("environment", {}).items():
+    if os.environ.get(name) != expected:
+        sys.stderr.write("unexpected child environment: " + name + "\n")
+        sys.exit(91)
+if step.get("stdin_closed") and sys.stdin.buffer.read() != b"":
+    sys.stderr.write("unexpected child stdin\n")
+    sys.exit(92)
 sys.stderr.write('{"_keepalive":true,"_heartbeat":true}\n')
 sys.stderr.flush()
 time.sleep(step.get("delay", 0))

@@ -48,7 +48,7 @@ bookkeeping reads above; `orca skills get orchestration`, `orca status`,
 `orca orchestration run-* / task-create / task-list / worker-list / worker-start /
 dispatch / worker-show / check`; `orca terminal create / wait / read`; helper-path
 resolution; `sdd-workspace --name <slug>`; `run-check capabilities` on POSIX;
-`wait-agent-ready`; `wait-worker-event REQUEST_JSON`; and
+`wait-agent-ready`; `wait-worker-event REQUEST_JSON`; `collect-worker-fleet REQUEST_JSON`; and
 `protocol-state validate INPUT_JSON [RESUME_OUT]`.
 Create the original-request, spec, state and raw receipt files needed by those
 commands only in the owned workspace. Hash those files without reading source.
@@ -83,6 +83,10 @@ on demand. Keep the compact JSON resume in the existing plan workspace. VALID
 permits only the proposed action; INVALID/UNVERIFIABLE never permits completion.
 Supply fresh complete fleet receipts before new ownership/review/commit, actual
 Task/Dispatch observations, report bindings, C4/C5 artifacts and Git commit facts.
+Use `collect-worker-fleet` for C6 inventory; it saves all pages without creating
+Orca terminals. Copy its manifest's `fleet` array mechanically into the proposal,
+not the receipt bodies into the conversation. A scoped/incomplete collection is
+a barrier, never permission to create a scratch terminal or weaken C6.
 Stage only authorized candidate paths before the gate/package freeze so the
 reviewed source and semantic index are the actual commit candidate. Later index
 or source changes invalidate that acceptance and require refreshed evidence.
@@ -227,6 +231,7 @@ host. Inspect workers when the waiter returns a delivery, attention or error.
 - Re-dispatch a phase with verified completion; treat prepared `done` as commit evidence; advance after failed/skipped commit or unresolved review; accept a phase with an open CANNOT_VERIFY; one fixer per finding in Step 5; report the whole plan done before final review, delivery verification and completion commit.
 - Two writers in one working tree, more than two tracks, or parallelizing phases the plan did not group.
 - Stop, close, retry or cascade because of timeout/idle alone. Forget to record a settled worker's reuse, retention or actual release result; retained/external/uncertain ownership is a reason to preserve an open terminal.
+- Open a terminal per bookkeeping command, fleet page or wait; base64/copy receipt bodies through terminal reads. Use the existing shell helpers, keeping raw stdout in files.
 - Resolve merge conflicts between tracks; delete a worktree with unmerged work; push, force-push, skip hooks, `--amend`; start on `main` without consent.
 - Let a nit block progress.
 
@@ -236,4 +241,4 @@ host. Inspect workers when the waiter returns a delivery, attention or error.
 - `./roles.md` — who runs what (models, efforts, cascades, family rule, planning profiles)
 - `./orca-recipes.md` — launch paths A/B, blockers, waiting, release, retries
 - `./prompts/plan-writer-prompt.md` (Mode A / Mode B), `plan-reviewer-prompt.md`, `implementer-prompt.md`, `frontend-implementer-prompt.md`, `verification-gate-prompt.md`, `review-primary-prompt.md`, `review-control-prompt.md`, `synthesize-review-prompt.md`, `final-review-prompt.md`, `quickfix-prompt.md`, `diagnosis-prompt.md`
-- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`, `../../bin/wait-worker-event` (+ their `.ps1` ports for Windows)
+- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`, `../../bin/wait-worker-event`, `../../bin/collect-worker-fleet` (+ their `.ps1` ports for Windows)

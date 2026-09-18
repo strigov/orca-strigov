@@ -97,6 +97,10 @@ Wait for workers through `wait-worker-event` (orca-recipes.md §4, runtime C7).
 Empty windows and keepalives stay inside that process. If the tool harness yields,
 resume the same call; do not inspect workers or start another waiter on each yield.
 
+Collect C6 all-Run fleet receipts through `collect-worker-fleet` in the existing
+shell (orca-recipes.md C6). Never open an Orca terminal to list workers, paginate
+receipts or wait for events, and never relay receipt JSON through base64/screens.
+
 Runtime contracts define authorized first-plan bootstrap, Run-owned child tracks,
 and evidence-backed ledger closure. Linux requires Python 3.9+; Darwin requires
 Python 3.13+ and successful capability preflight. Native macOS and live Orca

@@ -612,6 +612,64 @@ also blocks: bind/reconcile it before another proposal. The limit is two active
 child tracks of this Run; the parent and unrelated worktrees do not consume slots.
 TARGET ownership is still checked against the complete fresh fleet.
 
+### C6 fleet collector (no Orca terminal)
+
+`bin/collect-worker-fleet REQUEST_JSON` (native Windows:
+`bin/collect-worker-fleet.ps1`) collects that inventory in a normal child process
+of the coordinator's existing shell. Use the same selected CLI as the live guide.
+It never creates/reads/sends/closes terminals, starts workers, consumes mail or
+changes a Run binding. This is distinct from C7's Run-scoped health check.
+
+Write this UTF-8 request in the existing plan workspace:
+
+```json
+{
+  "schema_version": 1,
+  "orca_argv": ["/absolute/path/to/the-selected-orca"],
+  "output_dir": "/absolute/plan-workspace/fleet-<fresh-attempt>"
+}
+```
+
+`orca_argv` is an argv prefix, not shell source. The absolute output leaf must
+be new and its parent must exist. Existing leaves are refused, including after
+an interrupted attempt. Original request bytes go to `request.json`. Each page's
+exact stdout goes to `NNNNNN-worker-list.json`, stderr to its `.stderr.log`.
+No receipt is copied through a PTY, base64-encoded, edited or reconstructed.
+
+The selected CLI runs only `orchestration worker-list --limit 100 --json`, then
+the same command plus the exact opaque `--cursor`. Orca 1.4.205 infers a bound
+Run even when `--run` is absent. For this read-only child only, the helper omits
+`ORCA_TERMINAL_HANDLE` and `ORCA_PANE_KEY` and sets `ORCA_STRUCTURED_SESSION=1`.
+That CLI marker prevents guessing a sibling/active pane; it grants no identity.
+All connection/target/auth settings and the parent's environment/binding remain
+unchanged. This compatibility behavior was checked against the installed CLI;
+another build must still prove `scope.source:all` on every page. Never use this
+environment for `check`, `send`, dispatch or other lifecycle operations.
+
+The collector verifies `ok:true`, distinct receipt IDs, a stable
+`_meta.runtimeId`, all-Run scope with no Run filter, limit 100, stable total,
+unique Dispatch IDs, complete pagination and no partial-host error. Changed,
+missing, malformed or scoped evidence fails closed, with no retry or terminal
+fallback. It does not decide writer safety; the existing C6 validator still
+checks the original worker rows and rejects unknown/external ownership.
+
+Only a complete collection publishes `fleet.json`:
+`{schema_version:1,fleet:[{path,sha256,cursor},...],runtime_id,worker_count,page_count}`.
+Copy its `fleet` array mechanically into the C6 proposal. Original page bytes
+remain authoritative and hashed; this manifest is not an Orca receipt and does
+not authorize a transition by itself. Collect fresh receipts for the next
+required proposal; prior receipt IDs cannot be reused.
+
+Stdout is one JSON line. Exit 0: `event:collected`, `fleet_file`, `output_dir`,
+`page_count`, `worker_count`, `schema_version:1`. Exit 1: `event:error`, `reason`
+and, when available, `receipt`/`output_dir`; partial receipts remain for diagnosis
+but no success manifest is published. Never respond to error by opening a
+terminal, shrinking pages, rewriting scope or accepting only the current Run.
+
+Shared isolated fixtures: `python3 -B -m unittest discover -s tests
+-p test_worker_fleet.py -v`; native Windows uses `python` and `ORCA_TEST_SHELL`
+for each PowerShell. The finite fake CLI cannot contact real Orca/settings.
+
 Caps remain plan review 4, fused review 4 per phase, final review 2, consecutive
 gate-fix 2 and one format correction. Complementary independent reports use the
 same final round; rerunning the same role/family substantively needs a new round.

@@ -33,6 +33,9 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.assertIn(prefix + "install.ps1", names)
                 self.assertIn(prefix + "skills/orca-dev/SKILL.md", names)
                 self.assertIn(prefix + "bin/verify-gate", names)
+                self.assertIn(prefix + "bin/collect-worker-fleet", names)
+                self.assertIn(prefix + "bin/collect-worker-fleet.ps1", names)
+                self.assertIn(prefix + "bin/lib/collect_worker_fleet.py", names)
                 self.assertIn(prefix + "bin/wait-worker-event", names)
                 self.assertIn(prefix + "bin/wait-worker-event.ps1", names)
                 self.assertIn(prefix + "bin/lib/wait_worker_event.py", names)
@@ -42,6 +45,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.assertFalse(any(name.startswith(prefix + "docs/plans/") for name in names))
                 executables = {
                     "install.sh",
+                    "bin/collect-worker-fleet",
                     "bin/protocol-state",
                     "bin/review-package",
                     "bin/run-check",
