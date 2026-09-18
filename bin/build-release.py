@@ -33,6 +33,17 @@ RELEASE_PATHS = (
     Path("docs/runtime-platforms.md"),
     Path("docs/controlled-pipeline-validation.md"),
 )
+# ZIP permissions are part of the release format, independent of checkout
+# permissions (Windows does not expose Unix executable bits).
+EXECUTABLE_PATHS = frozenset((
+    Path("install.sh"),
+    Path("bin/protocol-state"),
+    Path("bin/review-package"),
+    Path("bin/run-check"),
+    Path("bin/sdd-workspace"),
+    Path("bin/verify-gate"),
+    Path("bin/wait-agent-ready"),
+))
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 
@@ -80,7 +91,7 @@ def build_release(repo, version, output):
             info = zipfile.ZipInfo(prefix + relative.as_posix(), ZIP_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
-            mode = source.stat().st_mode & 0o777
+            mode = 0o755 if relative in EXECUTABLE_PATHS else 0o644
             info.external_attr = (0o100000 | mode) << 16
             archive.writestr(info, source.read_bytes())
 

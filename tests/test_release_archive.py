@@ -37,8 +37,40 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.assertFalse(any(name.endswith("/.DS_Store") for name in names))
                 self.assertFalse(any(name.startswith(prefix + "tests/") for name in names))
                 self.assertFalse(any(name.startswith(prefix + "docs/plans/") for name in names))
-                install_mode = archive.getinfo(prefix + "install.sh").external_attr >> 16
-                self.assertNotEqual(install_mode & 0o111, 0)
+                executables = {
+                    "install.sh",
+                    "bin/protocol-state",
+                    "bin/review-package",
+                    "bin/run-check",
+                    "bin/sdd-workspace",
+                    "bin/verify-gate",
+                    "bin/wait-agent-ready",
+                }
+                for info in archive.infolist():
+                    with self.subTest(path=info.filename):
+                        expected = 0o100755 if info.filename[len(prefix):] in executables else 0o100644
+                        self.assertEqual(info.create_system, 3)
+                        self.assertEqual(info.external_attr >> 16, expected)
+
+    def test_archive_is_identical_without_source_executable_bits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            files = BUILD_RELEASE.release_files(ROOT)
+            for relative in files:
+                target = source / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+                target.chmod(0o600)
+
+            first = root / "without-executable-bits.zip"
+            BUILD_RELEASE.build_release(source, "1.2.3", first)
+            for relative in files:
+                (source / relative).chmod(0o755)
+            second = root / "with-executable-bits.zip"
+            BUILD_RELEASE.build_release(source, "1.2.3", second)
+
+            self.assertEqual(first.read_bytes(), second.read_bytes())
 
     def test_version_rejects_path_characters(self):
         with tempfile.TemporaryDirectory() as tmp:
