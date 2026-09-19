@@ -37,9 +37,13 @@ def within(path, parent):
     return path != parent and parent in path.parents
 
 
-def session_path(root, sid):
+def session_path(root, sid, host="codex"):
     require(isinstance(sid, str) and SID.fullmatch(sid), "invalid session identity")
-    return safe(str(root / ".superpowers" / "sdd" / ".sessions" / (sid + ".json")))
+    require(host in ("codex", "claude"), "unsupported coordinator host")
+    directory = root / ".superpowers" / "sdd" / ".sessions"
+    if host == "claude":
+        directory = directory / "claude"
+    return safe(str(directory / (sid + ".json")))
 
 
 def root_for(cwd):
@@ -51,12 +55,13 @@ def root_for(cwd):
     return safe(os.fsdecode(result.stdout).strip())
 
 
-def load_session(path, root, sid):
+def load_session(path, root, sid, host="codex"):
     value = v.load(path)
     require(value.get("schema_version") == 1 and value.get("session_id") == sid
             and value.get("worktree") == str(root) and value.get("role") == "coordinator",
             "session binding mismatch")
     require(value.get("status") in ("active", "held"), "invalid session status")
+    require(value.get("host", "codex") == host, "coordinator host mismatch")
     return value
 
 
@@ -105,11 +110,13 @@ def progress(state):
 def operate(action, request):
     root = root_for(request["worktree"])
     require(str(root) == str(safe(request["worktree"])), "bind the actual worktree root")
-    sid = request.get("session_id") or os.environ.get("CODEX_THREAD_ID")
-    expected = os.environ.get("CODEX_THREAD_ID")
+    host = request.get("host", "codex")
+    require(host in ("codex", "claude"), "unsupported coordinator host")
+    expected = os.environ.get("CODEX_THREAD_ID") if host == "codex" else None
+    sid = request.get("session_id") or expected
     require(not expected or sid == expected, "cannot bind another Codex session")
     require(os.environ.get("ORCA_STRIGOV_WORKER") != "1", "workers cannot become coordinators")
-    path = session_path(root, sid)
+    path = session_path(root, sid, host)
     if action == "bind":
         workspace = safe(request["workspace"])
         require(workspace.is_dir() and within(workspace, root / ".superpowers" / "sdd")
@@ -117,18 +124,18 @@ def operate(action, request):
         objective = request["objective"]
         require(isinstance(objective, str) and objective.strip(), "objective required")
         if path.exists():
-            binding = load_session(path, root, sid)
+            binding = load_session(path, root, sid, host)
             require(binding["objective"] == objective and binding["workspace"] == str(workspace),
                     "session already bound; reconcile it instead of replacing the objective")
             return binding
-        path.parent.mkdir(exist_ok=True)
-        binding = dict(schema_version=1, role="coordinator", session_id=sid,
+        path.parent.mkdir(parents=True, exist_ok=True)
+        binding = dict(schema_version=1, role="coordinator", session_id=sid, host=host,
                        worktree=str(root), workspace=str(workspace), objective=objective,
                        status="active", orca_run=None, proposal=None, progress=None,
-                       stop_attempts=0, hold=None)
+                       stop_attempts=0, hold=None, turn_open=(host == "claude"))
     else:
         require(path.is_file(), "bind this coordinator before changing its state")
-        binding = load_session(path, root, sid)
+        binding = load_session(path, root, sid, host)
         if action == "status":
             return binding
         if action == "checkpoint":
@@ -150,6 +157,11 @@ def operate(action, request):
             evidence = request.get("evidence")
             require(evidence is not None, "hold needs a hashed user-request or blocker record")
             protocol.ref(evidence)
+            if (request["kind"] == "status_only" and binding["status"] == "held"
+                    and binding["hold"]["kind"] != "status_only"):
+                # A persistent hold already allows an incomplete status answer.
+                # Do not turn it into a one-prompt hold that clears implicitly.
+                return binding
             binding.update(status="held", hold=dict(kind=request["kind"], reason=request["reason"],
                                                    evidence=evidence))
         elif action == "resume":
@@ -191,7 +203,8 @@ def editing_allowed(payload, binding):
     return True
 
 
-def hook(payload):
+def hook(payload, host="codex"):
+    require(host in ("codex", "claude"), "unsupported coordinator host")
     event = payload.get("hook_event_name")
     if os.environ.get("ORCA_STRIGOV_WORKER") == "1":
         return {}
@@ -205,20 +218,21 @@ def hook(payload):
         root = root_for(payload["cwd"])
     except (ValueError, OSError, subprocess.SubprocessError):
         return {}
-    path = session_path(root, sid)
+    path = session_path(root, sid, host)
     if not path.exists():
         if event in ("SessionStart", "UserPromptSubmit") and os.environ.get("ORCA_TERMINAL_HANDLE"):
             return context(event, "Orca Strigov: a live Task/Dispatch preamble means worker, not coordinator. "
                            "Otherwise implementation requests load " + str(PLUGIN / "skills/orca-dev/SKILL.md")
                            + " and bind this session before source work. No existing Run is required. "
-                           "Standalone plugin maintenance and reviews remain direct. Session ID: " + sid)
+                           "Standalone plugin maintenance and reviews remain direct. Host: " + host
+                           + ". Session ID: " + sid)
         return {}
-    binding = load_session(path, root, sid)
+    binding = load_session(path, root, sid, host)
     message = ("[orca-strigov] This session is the coordinator only; delegate source research, code, "
                "tests and reviews. Restore " + str(path) + ". Read "
                + str(PLUGIN / "skills/orca-dev/SKILL.md") + ". Objective: " + binding["objective"]
                + ". Continue the pending authorized stage; a status summary is not completion.")
-    if event == "Interrupt":
+    if event == "Interrupt" and host == "codex":
         binding.update(status="held", hold=dict(kind="user_pause", reason="User interrupted this turn"))
         save(path, binding)
         return {}
@@ -226,9 +240,16 @@ def hook(payload):
         if event == "UserPromptSubmit":
             prompt_hash = hashlib.sha256(payload.get("prompt", "").encode("utf-8")).hexdigest()
             if prompt_hash != binding.get("continuation_sha256"):
+                if host == "claude" and binding.get("turn_open") and binding["status"] == "active":
+                    # Claude does not emit Stop on interruption. Do not invent an
+                    # Interrupt receipt or automatically restart a lost turn.
+                    binding.update(status="held", hold=dict(kind="unreconciled_turn",
+                        reason="Previous Claude turn has no verified Stop. Reconcile the user's latest intent before explicit resume."))
                 binding["stop_attempts"] = 0
                 if (binding.get("hold") or {}).get("kind") == "status_only":
                     binding.update(status="active", hold=None)
+            if host == "claude":
+                binding["turn_open"] = True
             save(path, binding)
         if binding["hold"]:
             message += " Held incomplete: " + binding["hold"]["reason"] + ". Resume only when the user resolves it."
@@ -245,10 +266,16 @@ def hook(payload):
     if binding["status"] == "held":
         if binding["hold"].get("evidence"):
             protocol.ref(binding["hold"]["evidence"])
+        if host == "claude":
+            binding["turn_open"] = False
+            save(path, binding)
         return {"systemMessage": "Orca objective remains incomplete: " + binding["hold"]["reason"]}
     try:
         state, complete = read_proposal(binding)
         if complete:
+            if host == "claude":
+                binding["turn_open"] = False
+                save(path, binding)
             return {}
         pending = "reconcile the existing active Dispatch and wait" if active_pending(state) else state["barrier"]
         if pending == "complete":
@@ -272,17 +299,20 @@ def hook(payload):
 
 def main(args):
     payload = None
+    is_hook = bool(args and args[0] == "hook")
     try:
-        if args == ["hook"]:
+        if is_hook:
             payload = json.load(sys.stdin)
-            result = hook(payload)
+            require(args in (["hook"], ["hook", "--host", "codex"], ["hook", "--host", "claude"]),
+                    "usage: hook [--host codex|claude]")
+            result = hook(payload, args[2] if len(args) == 3 else "codex")
         else:
             require(len(args) == 2, "usage: coordinator-session bind|checkpoint|hold|resume|status REQUEST_JSON; or hook")
             result = operate(args[0], v.load(args[1]))
         print(json.dumps(result, ensure_ascii=True))
         return 0
     except (ValueError, OSError, KeyError, TypeError, protocol.Rejected, subprocess.SubprocessError) as exc:
-        if args == ["hook"]:
+        if is_hook:
             event = (payload or {}).get("hook_event_name")
             message = "Orca coordinator guard could not verify state: " + str(exc)
             if event == "Stop":

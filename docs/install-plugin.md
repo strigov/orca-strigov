@@ -1,11 +1,55 @@
 # Install and migrate to the Orca Strigov plugin
 
-This repository is a Codex plugin root, not a marketplace. Install the **whole
-folder**: `.codex-plugin/plugin.json`, all three `skills/`, `hooks/`, `bin/` and
+> [!CAUTION]
+> **Mandatory: remove the native Orca skills before enabling this plugin.**
+> Remove the old `orca-cli`, `orchestration` and any standalone `orca-dev` from
+> active skill discovery. Do not load both instruction stacks. Keep the three
+> replacements inside `orca-strigov`, Orca itself, its CLI and its runtime hooks.
+> Follow [the removal checklist](#remove-the-instruction-conflict-not-the-runtime) first.
+
+This repository is a Codex and Claude Code plugin root, not a marketplace.
+Install the **whole folder**: `plugin.json`, `.codex-plugin/plugin.json`,
+`.claude-plugin/plugin.json`, all three `skills/`, `hooks/`, `bin/` and
 their companion files. Copying just `orca-dev/SKILL.md` is not an installation.
 The release ZIP is `orca-strigov-<version>.zip`; its single root is
 `orca-strigov/`, matching the manifest name. Source changes are not published or
 installed merely because this repository was edited.
+
+## Install from the maintained marketplaces
+
+Complete the mandatory removal checklist first. Codex CLI 0.155.0 or newer is
+the tested packaging baseline; it must support portable `plugin.json` and its
+OpenAI hook override. Do not remove that manifest or fall back to the Claude
+default hooks in an older Codex. Claude Code 2.1.278 is the tested baseline;
+its hooks additionally require Node.js 18+ on PATH. No dependency is installed
+automatically. Worker CLIs and platform prerequisites still apply.
+
+For Codex:
+
+```sh
+codex plugin marketplace add https://github.com/strigov/strigov-codex-plugins.git
+codex plugin add orca-strigov@strigov-codex-plugins
+```
+
+If a marketplace with that name is already configured locally, do not add a
+second conflicting source: use the existing catalog, or explicitly migrate its
+registration. Creating a public repository does not change a local registration.
+
+For Claude Code:
+
+```text
+/plugin marketplace add https://github.com/strigov/strigov-cc-plugins.git
+/plugin install orca-strigov@strigov-cc-plugins
+```
+
+An HTTPS catalog entry does not make a private source public: GitHub access is
+required while the plugin source is private. Review/enable the plugin hooks in
+the chosen host and start a fresh session inside Orca. Use `$orca-dev <task>` in
+Codex, or `/orca-strigov:orca-dev <task>` in Claude Code. Do not simultaneously
+activate another development coordinator (for example superpowers-strigov-ver)
+for the same objective; its pipeline cannot own the same work alongside Orca.
+
+The shared protocol and host differences are in [host-adapters.md](host-adapters.md).
 
 ## Initial personal installation
 
@@ -34,7 +78,7 @@ scripts from your Codex installation:
 3. Copy/extract the complete plugin bundle into that newly created plugin
    directory, replacing the generated **scaffold**, not an unrelated plugin.
    In particular replace its placeholder manifest with this bundle's manifest.
-   Keep hidden `.codex-plugin/` and `hooks/hooks.json`.
+   Keep both hidden host manifests, root `plugin.json` and both hook configs.
 4. Validate it with
    `python3 <plugin-creator>/scripts/validate_plugin.py <absolute-plugin-directory>`.
    Read the actual marketplace name, then run
@@ -51,11 +95,16 @@ install <path>` is not a command in the verified CLI (0.155.0).
 
 ## Remove the instruction conflict, not the runtime
 
-Before enabling the plugin, inspect the effective Codex skill catalog and the
-exact entries under `.agents/skills/`, `.codex/skills/`, project-local skill
-folders and other enabled plugins. Disable or move outside discovery the old
-`orchestration`, `orca-cli` and standalone `orca-dev` entries. A backup within a
-scanned skills directory can still be discovered: store it elsewhere. Preserve
+Before enabling the plugin, inspect the effective host skill catalog and the
+exact entries under `.agents/skills/`, `.codex/skills/`, `.claude/skills/`, project-local skill
+folders and other enabled plugins. **Remove the old `orchestration`, `orca-cli`
+and standalone `orca-dev` entries from active discovery. This is mandatory:
+do not enable the plugin while they remain discoverable.** For a filesystem
+entry, remove the old entry after preserving
+its backup outside discovery; for skills supplied by another plugin, disable
+that conflicting provider. Do not delete the replacements inside `orca-strigov`.
+A backup within a scanned skills directory can still be discovered: store it
+elsewhere. Preserve
 the original bytes and link targets for rollback. Do not recursively delete a
 shared skills directory or follow a symlink to its source.
 

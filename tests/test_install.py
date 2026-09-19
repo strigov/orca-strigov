@@ -124,5 +124,20 @@ class InstallTests(unittest.TestCase):
         self.assertIn('potential duplicate skill', out)
         self.assertEqual(directory_state(f.home), before)
 
+    def test_host_manifest_missing_and_claude_duplicate_are_reported(self):
+        f = self.f
+        duplicate = f.home / '.claude/skills/orchestration'
+        duplicate.mkdir(parents=True)
+        before = directory_state(f.home)
+        rc, out, err = f.install(check=True, legacy=False)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(str(duplicate), out)
+        # Only an owned fixture file is removed to exercise incomplete packaging.
+        (f.checkout / 'plugin.json').unlink()
+        rc, out, err = f.install(check=True, legacy=False)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn('missing plugin component: plugin.json', out)
+        self.assertEqual(directory_state(f.home), before)
+
 
 if __name__ == '__main__': unittest.main()

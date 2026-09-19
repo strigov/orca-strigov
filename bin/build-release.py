@@ -11,7 +11,9 @@ import zipfile
 
 
 RELEASE_PATHS = (
+    Path("plugin.json"),
     Path(".codex-plugin/plugin.json"),
+    Path(".claude-plugin/plugin.json"),
     Path("THIRD_PARTY_NOTICES.md"),
     Path("hooks"),
     Path("README.md"),
@@ -25,6 +27,7 @@ RELEASE_PATHS = (
     Path("bin/collect-worker-fleet.ps1"),
     Path("bin/coordinator-session"),
     Path("bin/coordinator-session.ps1"),
+    Path("bin/claude-hook.cjs"),
     Path("bin/protocol-state"),
     Path("bin/protocol-state.ps1"),
     Path("bin/review-package"),
@@ -41,6 +44,7 @@ RELEASE_PATHS = (
     Path("bin/wait-worker-event.ps1"),
     Path("docs/install-windows.md"),
     Path("docs/install-plugin.md"),
+    Path("docs/host-adapters.md"),
     Path("docs/plugin-validation.md"),
     Path("docs/runtime-platforms.md"),
     Path("docs/controlled-pipeline-validation.md"),
@@ -110,7 +114,7 @@ def build_release(repo, version, output):
             mode = 0o755 if relative in EXECUTABLE_PATHS else 0o644
             info.external_attr = (0o100000 | mode) << 16
             data = source.read_bytes()
-            if relative == Path(".codex-plugin/plugin.json"):
+            if relative in (Path("plugin.json"), Path(".codex-plugin/plugin.json"), Path(".claude-plugin/plugin.json")):
                 manifest = json.loads(data)
                 if manifest.get("name") != "orca-strigov":
                     raise ValueError("unexpected plugin identity")

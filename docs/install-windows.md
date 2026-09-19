@@ -26,7 +26,8 @@ Prerequisites, all on `PATH`:
 | Orca (Windows build) with orchestration enabled | orca.dev | `orca status --json` must report `runtime.state = ready` |
 | Git for Windows 2.36+ | `winget install Git.Git` | provides `git`, including `worktree list --porcelain -z`. Bash is **not** needed: the workspace scripts have native PowerShell ports (`bin\*.ps1`). `bash` on a stock Windows `PATH` is the WSL launcher in `System32` — the protocol never calls it |
 | Codex CLI | `npm i -g @openai/codex` | coordinator and Codex workers; `%USERPROFILE%\.codex\` |
-| Claude Code | `npm i -g @anthropic-ai/claude-code` or the native installer | judgment roles; `%USERPROFILE%\.claude.json` |
+| Claude Code | `npm i -g @anthropic-ai/claude-code` or the native installer | coordinator or worker roles; `%USERPROFILE%\.claude.json` |
+| Node.js 18+ | Node.js installer | required only for the Claude coordinator hook adapter; it invokes native PowerShell without Bash/Python |
 | Antigravity CLI (`agy`) | Google's installer | selected routes and fallbacks in `roles.md` |
 | Python 3.9+ | test driver only | the `.ps1` helpers do not use it; a plan's own `verify:` commands may |
 | jq | optional | the `.ps1` scripts and `install.ps1` parse JSON with `ConvertFrom-Json`; recipes' `jq` one-liners have PowerShell equivalents (`orca-recipes.md` §9) |
@@ -59,7 +60,11 @@ What it does differently from `install.sh`:
 - The ChatGPT Pro bridge (`codex-chatgpt-web`) has a native Windows build (4.0.8 verified 2026-09-02, `%USERPROFILE%\.codex-chatgpt-web`, daemon `bun.exe … cli.js serve`): the opt-in `--planner pro` route is available when it is running; `install.ps1` reports it. Inside Orca the bridge doctor must be run with `CODEX_HOME` cleared (Orca points that variable at its own Codex home and the doctor then calls the integration "inconsistent") — the exact preflight is in `skills/orca-dev/orca-recipes.md` §7. Its log is `%APPDATA%\Codex Web GPT\logs\launcher.jsonl`.
 - Repo paths with spaces produce a WARN: the bash scripts quote paths, but Orca argv and agy's trust matching are unverified with spaces.
 
-Coordinator usage is the same (`$orca-dev <task>` in a Codex terminal inside Orca) with the differences listed in `skills/orca-dev/orca-recipes.md` §9: `.ps1` script calls, quoted `--types` lists, `ConvertFrom-Json` instead of `jq`, absolute Windows paths in worker prompts.
+Coordinator usage is `$orca-dev <task>` in Codex or `/orca-strigov:orca-dev <task>`
+in Claude Code inside Orca. The differences listed in `skills/orca-dev/orca-recipes.md`
+§9 apply: `.ps1` calls, quoted `--types`, `ConvertFrom-Json`, absolute Windows paths.
+Claude hooks use exec-form Node arguments and native `powershell.exe`; the
+coordinator's regular commands must invoke the `.ps1` helpers in PowerShell.
 
 ## B. WSL2
 
@@ -79,5 +84,5 @@ Tests set `ORCA_DEV_TEST_HOME` only in a child environment, to an existing owned
 Check helpers independently from model routing. Use the bundled orchestration
 references and actual CLI help/receipts, not stock `orca skills get` policy.
 The ninth helper, `coordinator-session.ps1`, implements C8 natively and is selected
-by `commandWindows` in the plugin hooks. Its runtime needs PowerShell and Git,
+by `commandWindows` in the Codex hooks or by the Claude Node adapter. Its runtime needs PowerShell and Git,
 not Bash/Python. A retained process, timeout or old smoke is not current certification.

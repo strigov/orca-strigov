@@ -2,253 +2,261 @@
   <a href="./README.md">English</a> · <a href="./README.ru.md">Русский</a>
 </p>
 
-<p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="orca-dev turns one product request into a plan, implementation, verification, and independent review in Orca">
-</p>
+> [!CAUTION]
+> **REMOVE THE NATIVE ORCA SKILLS BEFORE ENABLING THIS PLUGIN.**
+>
+> Remove the old **`orca-cli`** and **`orchestration`** skills, plus any standalone
+> **`orca-dev`**, from your active skill catalog. This is **mandatory**, not optional:
+> loading both instruction stacks creates conflicting coordinator instructions.
+> Keep the replacements bundled inside `orca-strigov`. **Do not remove Orca itself,
+> its CLI or its runtime hooks.** See [the mandatory cleanup step](#0-remove-the-native-orca-skills--mandatory).
 
 <p align="center">
-  <a href="https://github.com/strigov/orca-strigov/actions/workflows/runtime.yml"><img alt="Runtime contracts" src="https://github.com/strigov/orca-strigov/actions/workflows/runtime.yml/badge.svg"></a>
-  <a href="https://github.com/strigov/orca-strigov/releases/latest"><img alt="Download release ZIP" src="https://img.shields.io/badge/download-release%20ZIP-2A9D8F"></a>
-  <img alt="macOS, Linux, and Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-172033">
+  <img src="./assets/readme/hero.svg" width="100%" alt="orca-strigov: a coordinator delegates code, verification and review to separate workers, then advances to the next authorized phase">
 </p>
 
-`orca-strigov` is a Codex plugin with three coordinated skills: `orca-cli`,
-`orchestration` and `orca-dev`. It replaces the two native orchestration guides
-and the standalone development skill as one versioned bundle. A shared role
-contract and session hooks guard against role drift and premature stopping.
-See [migration and hook limitations](docs/install-plugin.md).
+**A Codex and Claude Code plugin for supervised, multi-model development in [Orca](https://orca.dev).**
+Describe the outcome; the coordinator delegates the work, checks the evidence and
+carries the plan across phases. Three skills, one shared role contract.
 
-`orca-dev` helps you build software with several AI models inside
-[Orca](https://orca.dev). You describe what the product should do. The system turns that request
-into a plan, code, tests, and independent reviews — while keeping evidence of what was checked.
+For engineers and vibe coders who want more than a single agent's “done.”
+This is a local workflow using your model CLIs, not a hosted no-code service.
 
-It is designed for experienced engineers **and for vibe coders who can describe the desired
-result but do not yet know how to judge architecture, tests, or implementation details.** It does
-not replace product decisions, but it adds a disciplined engineering process around your request.
+[Install](#install) · [First use](#first-use) · [Checks and evidence](#checks-and-evidence)
 
-## The simple version
+> **Historical runtime baseline:** four CI jobs passed on macOS, Linux and native Windows
+> PowerShell 5.1 / 7. [Inspect the run at `5d22ac4`](https://github.com/strigov/orca-strigov/actions/runs/35422197544).
+> These are isolated integration tests, not a live Orca acceptance run.
+> For the dual-host version, see [current CI](https://github.com/strigov/orca-strigov/actions/workflows/runtime.yml)
+> and [host adapter details](docs/host-adapters.md).
 
-You ask:
+## One request, several accountable roles
 
-> Add password reset. It should work by email, expire after 15 minutes, and be understandable on mobile.
+```text
+$orca-dev Implement password reset.
+Use email links that expire
+after 15 minutes. Support mobile.
+Add tests and user documentation.
+```
 
-Then `orca-dev` coordinates five steps:
+1. **Plan** — a worker studies the repository; a separate reviewer checks the plan.
+2. **Build** — an implementer changes code and tests for one authorized phase.
+3. **Verify** — a gate worker runs declared commands and preserves their full logs.
+4. **Review** — independent model families inspect the candidate; findings feed a bounded fix loop.
+5. **Advance or finish** — the coordinator records accepted work and starts the next
+   authorized phase. Final completion requires its own evidence.
 
-1. **Plan** — one AI studies the project and breaks the request into safe stages.
-2. **Build** — another AI changes the code and writes tests.
-3. **Verify** — real commands run and their complete logs are saved.
-4. **Review** — independent AI families look for mistakes and risky assumptions.
-5. **Deliver** — accepted work is recorded in Git with traceable evidence.
+A completed worker is not a completed phase. A committed phase is not a completed plan.
+The coordinator owns dispatch, evidence reconciliation and Git bookkeeping;
+implementation belongs to workers.
 
-The key rule is simple: **the AI that writes a change is not the only AI allowed to judge it.**
+## Three skills, one policy
 
-## Is this for me?
+| Skill | Responsibility |
+| --- | --- |
+| [`orca-dev`](skills/orca-dev/SKILL.md) | Development phases, verification and acceptance |
+| [`orchestration`](skills/orchestration/SKILL.md) | Worker assignments, messages and lifecycle |
+| [`orca-cli`](skills/orca-cli/SKILL.md) | Orca terminals, worktrees and runtime operations |
 
-Use `orca-dev` if any of these sound familiar:
+The bundle replaces the stock `orchestration` / `orca-cli` instructions and the
+standalone `orca-dev` skill. Their [shared role contract](skills/orchestration/role-contract.md)
+keeps a coordinator from treating “continue” or a phase boundary as a new role.
+Workers follow their live assignment without restarting the coordinator workflow.
 
-- you can explain the feature you want, but are not confident reviewing the generated code;
-- a single AI chat often says “done” before everything is actually tested;
-- you want several models to work together without writing every prompt yourself;
-- you need to know what ran, what passed, and what could not be verified;
-- your change spans several files, platforms, or stages and should not be handled as one giant edit.
-
-This is a local development workflow, not a hosted no-code service. Initial setup requires Orca,
-Git, and the model CLIs listed below. After setup, ordinary use starts with a plain-language request.
+**Replace the competing instructions, not Orca itself.** Keep its CLI, runtime
+hooks, orchestration, messaging and terminal identity.
 
 ## Install
 
-### 1. Install the required apps
+### Prerequisites
 
-You need:
+Install [Orca](https://orca.dev) with orchestration enabled, Git **2.36+**, and the
+worker CLIs: **Codex CLI, Claude Code and Antigravity CLI (`agy`)**. Sign in to each.
+The exact role/model mapping lives only in [`roles.md`](skills/orca-dev/roles.md).
 
-- [Orca](https://orca.dev) with orchestration enabled;
-- Git 2.36 or newer;
-- Codex CLI, Claude Code, and Antigravity CLI (`agy`) for the default worker roles;
-- macOS/Linux: Bash 3.2+, Python 3.9+ on Linux or Python 3.13+ on macOS;
-- native Windows: PowerShell 5.1 or 7. Python is not required by the runtime helpers.
+| Platform | Runtime requirements |
+| --- | --- |
+| macOS | Bash 3.2+ and Python 3.13+ |
+| Linux | Bash 3.2+ and Python 3.9+ |
+| Native Windows | PowerShell 5.1 or 7; Windows 10 1709+ and a filesystem supporting POSIX rename (NTFS) |
+| WSL2 | Linux runtime; Orca and model CLI availability depend on the environment |
 
-You must sign in to each model CLI once before Orca can use it. The installer checks the setup and
-prints clear `OK`, `INFO`, or `WARN` lines. It does not upgrade apps or change unrelated settings.
+Claude coordinator hooks additionally require **Node.js 18+** on every platform.
+Packaging baselines: **Codex CLI 0.155.0**, **Claude Code 2.1.278**.
+Native Windows helpers do not require Python, Bash or jq. The personal-marketplace
+registration scripts use Python separately.
+See [Windows setup](docs/install-windows.md) for shell and filesystem details.
 
-### 2. Download the correct ZIP
+### 0. Remove the native Orca skills — mandatory
 
-The easiest installation does not require Git commands:
+Before enabling the plugin:
 
-1. Open [the latest release](https://github.com/strigov/orca-strigov/releases/latest).
-2. Expand **Assets**.
-3. For a plugin-format release, download **`orca-strigov-<version>.zip`**. Older
-   `orca-dev-*.zip` releases contain the old standalone skill, not this plugin.
-4. Extract the complete `orca-strigov/` folder, including its hidden manifest.
-   Register it following [Install and migrate](docs/install-plugin.md).
+- Remove the old native **`orca-cli`** and **`orchestration`** entries and any
+  separately installed **`orca-dev`**. Check user-level and project-level
+  `.agents/skills/`, `.codex/skills/`, `.claude/skills/` and other enabled plugins.
+- Preserve a backup **outside every skill-discovery directory**. Renaming a
+  folder to `*-backup` inside a scanned directory does not remove the conflict.
+  Remove only the old entries, not shared skill directories or symlink targets.
+- Keep all three replacement skills **inside `orca-strigov`**. Keep Orca,
+  its CLI and runtime hooks. Other native integrations are not removed by this step.
 
-Plugin releases also contain `orca-strigov-<version>.zip.sha256` for verification.
+**Do not continue until the old entries are no longer discoverable.** Recheck
+after Orca integration updates: they may restore the native skill entries.
+See [safe removal and rollback](docs/install-plugin.md#remove-the-instruction-conflict-not-the-runtime).
 
-### 3. Register the plugin, then check prerequisites
+### 1. Get the whole plugin
 
-Follow [the plugin registration and conflict-removal steps](docs/install-plugin.md)
-first. Review and trust its hooks, keep Orca's runtime hooks, and start a new
-thread. The commands below **do not install/register the plugin** or recreate
-standalone skill links; they check prerequisites and optionally grant repo trust.
-
-macOS, Linux, or WSL2 — open Terminal in the extracted folder:
-
-```bash
-./install.sh
-./install.sh --repo /path/to/your/project
+```sh
+git clone https://github.com/strigov/orca-strigov.git
+cd orca-strigov
 ```
 
-Native Windows — open PowerShell in the extracted folder:
-
-```powershell
-.\install.ps1
-.\install.ps1 -Repo C:\path\to\your\project
-```
-
-Replace the example project path with the folder of the app you want to build. The second command
-allows worker CLIs to open that project and its Git worktrees. Run it once for each project.
-
-If a script is blocked on Windows, see the exact PowerShell command and WSL2 alternative in the
-[Windows installation guide](docs/install-windows.md).
-
-### 4. Confirm that setup is ready
-
-These checks do not modify anything:
-
-```bash
-./install.sh --check /path/to/your/project
-```
-
-```powershell
-.\install.ps1 -Check C:\path\to\your\project
-```
-
-- `OK` — ready;
-- `INFO` — useful context, no action required;
-- `WARN` — fix this item before relying on the workflow.
-
-The command exits with code `1` while warnings remain, so an incomplete setup cannot look successful.
+Keep `plugin.json`, hidden `.codex-plugin/` and `.claude-plugin/`, all three `skills/`, `hooks/` and
+`bin/` together. Copying one `SKILL.md` is not an installation.
 
 <details>
-<summary><strong>Prefer Git? Install from the repository</strong></summary>
+<summary>ZIP distribution</summary>
 
-macOS, Linux, or WSL2:
-
-```bash
-git clone https://github.com/strigov/orca-strigov.git ~/orca-strigov
-cd ~/orca-strigov
-./install.sh
-./install.sh --repo /path/to/your/project
-```
-
-Native Windows:
-
-```powershell
-git clone https://github.com/strigov/orca-strigov.git $HOME\orca-strigov
-cd $HOME\orca-strigov
-.\install.ps1
-.\install.ps1 -Repo C:\path\to\your\project
-```
-
-Use this route to contribute changes. Register the complete checkout through
-the [plugin installation flow](docs/install-plugin.md); `git pull` alone does
-not refresh Codex's installed plugin cache.
+When a plugin release is published, its [release assets](https://github.com/strigov/orca-strigov/releases)
+are named `orca-strigov-<version>.zip` and `orca-strigov-<version>.zip.sha256`.
+Extract the complete `orca-strigov/` folder, including hidden files.
+Old `orca-dev-*.zip` archives contain the standalone skill, not this plugin.
 
 </details>
+
+### 2. Register the plugin
+
+After mandatory cleanup, install from the appropriate marketplace.
+
+Codex:
+
+```sh
+codex plugin marketplace add https://github.com/strigov/strigov-codex-plugins.git
+codex plugin add orca-strigov@strigov-codex-plugins
+```
+
+Claude Code:
+
+```text
+/plugin marketplace add https://github.com/strigov/strigov-cc-plugins.git
+/plugin install orca-strigov@strigov-cc-plugins
+```
+
+If that marketplace is already registered, use its existing registration.
+Private plugin sources still require GitHub access. Follow
+[Install and migrate](docs/install-plugin.md) for local installation, hook trust
+and rollback. For a local checkout you can ask Codex:
+
+> Use plugin-creator to install the complete Orca Strigov plugin from
+> `<absolute checkout path>` into my personal marketplace. Show duplicate skills
+> before changing them. Preserve Orca's runtime hooks and do not bypass hook trust.
+
+Confirm that **step 0 is complete** before enabling the plugin. Review and trust
+its hooks, then start a **new session in the chosen host**. The three skills must resolve from
+`orca-strigov`, without old native or standalone copies alongside them.
+
+### 3. Check your project
+
+From the plugin folder, use the command for your platform. These checks are read-only:
+
+```bash
+./install.sh --check "/path/to/your/project"
+```
+
+```powershell
+.\install.ps1 -Check "C:\path\to\your\project"
+```
+
+`OK` means ready; `INFO` is context; `WARN` requires attention.
+Warnings produce exit code `1`.
+
+If repo trust is missing, explicitly grant it with
+`./install.sh --repo "/path/to/your/project"` or
+`.\install.ps1 -Repo "C:\path\to\your\project"`.
+These commands change Claude/Antigravity trust for that project and its worktrees.
+
+**The prerequisite scripts do not register the plugin.** Do not use
+`--legacy-skill` / `-LegacySkill` alongside it, and do not assume `git pull`
+refreshes Codex's installed plugin cache.
 
 ## First use
 
-1. Open your app's repository in Orca.
-2. Start a **Codex terminal** in that repository.
-3. Describe the outcome in normal language:
+1. Open your app's repository in Orca and start a new Codex or Claude Code session.
+2. Confirm all three skills resolve from this plugin and its hooks are trusted.
+3. Send the request from the example above. Implementation requests can also
+   activate `orca-dev` without the explicit skill tag.
 
-```text
-Implement password reset. It must work by email, expire after 15 minutes,
-look good on mobile, include tests, and update the user documentation.
-```
+Claude's explicit command is `/orca-strigov:orca-dev <task>`. Choose one
+development coordinator for an objective; do not run another orchestration plugin's
+pipeline on the same work. See [host differences](docs/host-adapters.md).
 
-Implementation requests activate `orca-dev` automatically. You can also invoke it explicitly:
+Worker terminals appear in Orca as the coordinator dispatches work. Give it
+the intended user, desired result, constraints and acceptance criteria.
+It should continue through already authorized phases, asking when a product
+decision, access or new permission is needed. An explicit pause remains a pause.
 
-```text
-$orca-dev Implement password reset with tests and documentation.
-```
+Before relying on a new installation, run the
+[disposable two-phase smoke check](docs/install-plugin.md#smoke-check-before-relying-on-it).
 
-You can watch the worker terminals appear in Orca. The coordinator reports meaningful transitions
-and asks you only when a product choice, missing access, or new authorization is required.
+## What the hooks enforce — and what they do not
 
-### How to write a good request without engineering jargon
+For a **bound development session with trusted hooks**, the guard restores the
+coordinator role on start/resume, rejects direct source/test edits through covered
+editing tools, and rejects a premature Stop with the pending action.
+Completion is checked against current Git and artifact facts, not a summary.
 
-Include four things when you know them:
+The hooks are **guardrails, not a security sandbox or a guarantee of model behavior**:
 
-- **who** will use the feature;
-- **what** they should be able to do;
-- **what must not happen**;
-- **how you will recognize success**.
+- They do not cover arbitrary shell/MCP writes, dishonest local-state changes or unbound sessions.
+- They do not override user interruption, provider limits or missing authority.
+- They do not dispatch workers themselves. Repeated no-progress stops lead to a
+  bounded escalation that reports incomplete work, not success.
 
-For example: “A customer can export their invoices to CSV. The export must not expose another
-customer's data. It should work from the billing page and include a short help note.” The planning
-worker translates this into technical steps and surfaces missing decisions.
+See the [session contract](skills/orca-dev/coordinator-session.md) for exact coverage.
+General non-development orchestration follows the shared policy, not the Git-backed guard.
 
-## What the protocol protects
+## Checks and evidence
 
-A passing test is not enough if it ran against the wrong files. A reviewer cannot approve code from
-its own model family. A timeout does not prove that a worker stopped. `orca-dev` records source
-identity, commands, logs, reviews, and ownership so common multi-agent failures do not disappear
-inside a confident summary.
+Historical pre-dual-host snapshot: **2026-09-19**, commit [`5d22ac4`](https://github.com/strigov/orca-strigov/commit/5d22ac4f94ed8f43175068ab5cd2b57c86ebce72).
+The [four-job CI run](https://github.com/strigov/orca-strigov/actions/runs/35422197544)
+preserves environment logs and test artifacts.
+
+| Environment | Integration suite |
+| --- | --- |
+| macOS · Python 3.13 | PASS · 132 tests, no skips |
+| Ubuntu · Python 3.9 | PASS · 132 tests, 1 platform skip |
+| Windows · PowerShell 5.1 | PASS · 132 tests, 4 platform skips |
+| Windows · PowerShell 7 | PASS · 132 tests, 4 platform skips |
+
+Counts include skipped cases. Both Windows jobs also passed four directed regressions.
+The suite exercises shared positive/negative fixtures, evidence binding, phase
+continuation, role restoration, installation and packaging. Synthetic Orca inputs
+do **not** certify a real multi-phase provider session or plugin installation.
+
+The [plugin conversion report](docs/plugin-validation.md) records the earlier
+local validation. Its unrun-platform notes belong to that run; the CI snapshot
+above supplies later platform evidence. Live Orca acceptance remains separate.
+
+## Go deeper
+
+- [Install, migrate, update and roll back](docs/install-plugin.md)
+- [Development protocol and role matrix](skills/orca-dev/SKILL.md)
+- [Runtime contracts](skills/orca-dev/runtime-contracts.md) and [platform notes](docs/runtime-platforms.md)
+- [Repository maintenance rules](AGENTS.md)
+- [Bundled upstream material and notices](THIRD_PARTY_NOTICES.md)
 
 <details>
-<summary><strong>Roles and engineering controls</strong></summary>
+<summary>Repository map</summary>
 
-| Role | Job |
-| --- | --- |
-| Coordinator | Dispatches work, reconciles evidence, and performs Git bookkeeping |
-| Plan writer / reviewer | Produces and independently checks the implementation plan |
-| Implementer | Changes code and tests for one authorized phase |
-| Gate | Runs declared verification commands and records complete evidence |
-| Primary / control reviewer | Reviews the delivery from independent perspectives |
-| Diagnosis | Investigates blockers without silently broadening the task |
-| Final reviewer | Checks the complete branch before delivery |
-
-Review and fix loops have explicit limits. The exact model, effort, fallback, and independence
-rules live only in [`skills/orca-dev/roles.md`](skills/orca-dev/roles.md).
+```text
+.codex-plugin/          plugin manifest
+skills/                orca-dev, orchestration and orca-cli
+hooks/                 role and continuation hooks
+bin/                   POSIX and native PowerShell helpers
+tests/                 isolated integration and maintenance tests
+docs/                  installation, contracts and validation history
+assets/readme/         English and Russian SVG covers
+install.sh / .ps1       prerequisite and repo-trust checks
+```
 
 </details>
-
-## Platform status
-
-| Platform | Runtime path | Current repository evidence |
-| --- | --- | --- |
-| Linux | Bash + Python 3.9+ | Ubuntu integration suite in GitHub Actions |
-| macOS | Bash + Python 3.13+ | Native macOS CI scenario and capability checks |
-| Windows | Native PowerShell 5.1/7 | Separate Windows PowerShell and `pwsh` integration jobs |
-| WSL2 | Linux path inside the distro | Helpers supported; Orca/model CLI availability depends on the environment |
-
-See the [platform contract](docs/runtime-platforms.md) and
-[controlled pipeline validation](docs/controlled-pipeline-validation.md) for exact evidence and
-known limits. Historical smoke runs are observations, not current certification.
-
-## Release ZIPs
-
-Publishing a GitHub Release triggers [the release workflow](.github/workflows/release.yml), which
-attaches:
-
-```text
-orca-dev-<version>.zip
-orca-dev-<version>.zip.sha256
-```
-
-The ZIP contains installers, runtime helpers, skill files, and user documentation. Tests,
-historical plans, and experiments stay in the source repository and are deliberately excluded.
-
-## Repository map
-
-```text
-skills/orca-dev/       protocol, role matrix, worker prompts, and contracts
-bin/                   POSIX and native PowerShell runtime helpers
-docs/                  installation, platform, validation, and historical evidence
-tests/                 isolated integration and maintenance tests
-install.sh             installer for macOS, Linux, and WSL2
-install.ps1            installer for native Windows
-assets/readme/         GitHub README visuals
-```
-
-For protocol internals, start with [`skills/orca-dev/SKILL.md`](skills/orca-dev/SKILL.md).

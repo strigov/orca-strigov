@@ -130,14 +130,16 @@ if (-not $LegacySkill) {
     if ($manifest.name -cne 'orca-strigov') { throw 'unexpected plugin manifest' }
     foreach ($name in 'orca-cli','orchestration','orca-dev') {
       if (-not (Test-Path -LiteralPath (Join-Path $here "skills/$name/SKILL.md") -PathType Leaf)) { throw "missing plugin skill: $name" }
-      foreach ($directory in '.agents','.codex') {
+      foreach ($directory in '.agents','.codex','.claude') {
         $candidate=Join-Path $userHome "$directory/skills/$name"
         if (Get-Item -Force -LiteralPath $candidate -ErrorAction SilentlyContinue) {
           Write-Warn2 "potential duplicate skill: $candidate; verify disabled or move this exact entry out of discovery before enabling the plugin"
         }
       }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $here 'hooks/hooks.json') -PathType Leaf)) { throw 'missing plugin hooks' }
+    foreach ($required in 'plugin.json','.claude-plugin/plugin.json','hooks/hooks.json','hooks/codex.json','bin/claude-hook.cjs') {
+      if (-not (Test-Path -LiteralPath (Join-Path $here $required) -PathType Leaf)) { throw "missing plugin component: $required" }
+    }
     Write-Ok "complete plugin source: $here"
     Write-Info 'plugin registration and hook trust are separate; see docs/install-plugin.md'
     Write-Info 'no standalone skill links or environment settings written; legacy ORCA_DEV_HOME is not used'

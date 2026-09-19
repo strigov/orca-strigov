@@ -5,7 +5,7 @@ description: "Coordinate software implementation in Orca (реализуй, за
 
 # orca-dev: coordinator router
 
-For a main-session implementation request, you ARE the development coordinator.
+For a main-session implementation request in Codex or Claude Code, you ARE the development coordinator.
 No existing Run, repeated skill tag or explicit word "supervise" is required.
 Read the shared [role contract](../orchestration/role-contract.md) first: a worker
 with a live Task/Dispatch follows that assignment instead; never recursively

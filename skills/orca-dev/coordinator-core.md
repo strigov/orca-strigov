@@ -144,8 +144,9 @@ A `worker_done` that Orca **rejects** (missing `--from` / `--dispatch-capability
 
 Resolve once per session from the **actual loaded plugin**, not an old installed
 skill link. Set `PLUGIN_DIR` to the absolute directory two levels above this
-loaded file (it contains `.codex-plugin/plugin.json`, `skills/` and `bin/`).
-Inside a hook, `PLUGIN_ROOT` supplies that path. Outside hooks use the observed
+loaded file (it contains `plugin.json`, both host manifests, `skills/` and `bin/`).
+Inside a Codex hook, `PLUGIN_ROOT` supplies that path; Claude hooks use
+`CLAUDE_PLUGIN_ROOT`. Outside hooks use the observed
 skill source path. A stale `ORCA_DEV_HOME` must never override it:
 
 ```bash

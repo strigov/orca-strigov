@@ -1,7 +1,7 @@
 {
   "name": "orca-strigov",
-  "version": "1.0.0",
-  "description": "Coordinated Orca development with persistent roles, evidence gates and continuation guards.",
+  "version": "1.1.0",
+  "description": "Orca development coordinator for Codex and Claude Code: worker-only implementation, evidence gates and guarded phase continuation.",
   "author": { "name": "strigov" },
   "repository": "https://github.com/strigov/orca-strigov",
   "skills": "./skills/",

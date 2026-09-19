@@ -1,7 +1,7 @@
 # Coordinator session continuity (C8)
 
 Read on entry and after resume/compaction. This is part of orca-dev, not a fourth
-skill. It applies to the main Codex coordinator only; workers follow their live
+skill. It applies to the main Codex or Claude Code coordinator; workers follow their live
 assignment. Hooks must be installed, enabled and explicitly trusted. Do not
 disable trust or pretend an uninstalled hook is enforcing this contract.
 
@@ -9,17 +9,21 @@ disable trust or pretend an uninstalled hook is enforcing this contract.
 
 Resolve `bin/` from the actual loaded plugin as coordinator-core describes. Use
 `sdd-workspace --name <slug>` to create the usual self-ignored plan workspace.
-Use `CODEX_THREAD_ID` (PowerShell: `$env:CODEX_THREAD_ID`), or the exact session ID
-reported by SessionStart. Do not use an Orca terminal handle as a Codex session ID.
+Codex uses `CODEX_THREAD_ID` (PowerShell: `$env:CODEX_THREAD_ID`), or the exact
+session ID reported by SessionStart. Claude Code uses only the exact ID reported
+by its SessionStart/UserPromptSubmit hook, never an inherited `CODEX_THREAD_ID`.
+Do not use an Orca terminal handle as a provider session ID. Every Claude request
+below must include `"host":"claude"`; Codex may omit `host` or use `"codex"`.
 
 Save a request in that workspace and execute `coordinator-session bind REQUEST`:
 
 ```json
-{"session_id":"<actual-session-id>","worktree":"<absolute-root>","workspace":"<absolute-plan-workspace>","objective":"<the-authorized-user-objective>"}
+{"host":"<codex-or-claude>","session_id":"<actual-session-id>","worktree":"<absolute-root>","workspace":"<absolute-plan-workspace>","objective":"<the-authorized-user-objective>"}
 ```
 
 Native Windows uses `& <plugin>\bin\coordinator-session.ps1 bind REQUEST`.
-The helper saves `.superpowers/sdd/.sessions/<session-id>.json`. Binding is
+The helper saves `.superpowers/sdd/.sessions/<session-id>.json` for Codex or
+`.superpowers/sdd/.sessions/claude/<session-id>.json` for Claude. Binding is
 idempotent, needs no Run yet and cannot replace a different objective. For a new
 objective use a new session until an explicit audited rebind is supported.
 Never bind a worker: new worker sessions do not inherit a parent binding. Add
@@ -32,7 +36,7 @@ After a C6 validation, preserve the proposal's JSON bytes at a new immutable
 path in the workspace. Pass its raw SHA-256 to `coordinator-session checkpoint`:
 
 ```json
-{"session_id":"<actual-session-id>","worktree":"<absolute-root>","proposal":{"path":"<absolute-C6-proposal.json>","sha256":"<raw-sha256>"}}
+{"host":"<codex-or-claude>","session_id":"<actual-session-id>","worktree":"<absolute-root>","proposal":{"path":"<absolute-C6-proposal.json>","sha256":"<raw-sha256>"}}
 ```
 
 C8 invokes the real C6 validator again, binds the same workspace/Run and records
@@ -55,12 +59,23 @@ a concrete `reason`, and `evidence:{path,sha256}` naming the immutable actual
 user-request/blocker record. A next phase, empty inbox, live worker or ordinary
 technical fix is not a human blocker. Holds never mark the objective complete.
 Answering a status-only question permits one final status answer; it preserves
-the objective, and the next user prompt clears that temporary hold.
+the objective, and the next user prompt clears that temporary hold. If a
+persistent pause/blocker is already held, a status-only request preserves it
+unchanged; an incidental follow-up cannot authorize continuation.
 
 After the user resolves a blocker or explicitly resumes, run
 `coordinator-session resume REQUEST` with the bound session_id/worktree, restore
 C6 and continue. User interruption persists a pause and is never overridden.
 The guard does not signal, stop or release workers when pausing.
+
+Codex persists this pause through its `Interrupt` event. Claude Code has no
+equivalent event and does not run Stop on user interruption. Its binding records
+an open turn. If the next real user prompt arrives without an allowed Stop, C8
+holds it as `unreconciled_turn`, not a fabricated user-pause receipt. Read the
+latest user request: explicit continuation authorizes `resume`; a status question
+gets an incomplete status answer, not new dispatches. Preserve this hold across
+compaction and incidental prompts until intent is resolved. API errors/process
+exit can cause the same missing-Stop condition; do not infer their cause.
 
 ## Hook behavior and limits
 

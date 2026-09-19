@@ -273,9 +273,9 @@ class InstallFixture(RunnerFixture):
         self.home = self.base / 'isolated home ü [space]'
         self.checkout = self.base / 'checkout ü [source] with space'
         self.home.mkdir(); self.checkout.mkdir()
-        for name in ('install.ps1', 'install.sh'):
+        for name in ('install.ps1', 'install.sh', 'plugin.json'):
             shutil.copyfile(ROOT / name, self.checkout / name)
-        for name in ('skills', 'bin', '.codex-plugin', 'hooks'):
+        for name in ('skills', 'bin', '.codex-plugin', '.claude-plugin', 'hooks'):
             shutil.copytree(ROOT / name, self.checkout / name, ignore=shutil.ignore_patterns('__pycache__'))
         (self.home / '.codex' / 'skills').mkdir(parents=True)
         (self.home / '.gemini' / 'antigravity-cli').mkdir(parents=True)

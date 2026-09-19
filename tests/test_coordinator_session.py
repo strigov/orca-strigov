@@ -14,15 +14,18 @@ from support import ProtocolFixture, read_json, write_json
 
 
 class CoordinatorSessionTests(unittest.TestCase):
+    host = 'codex'
+
     def setUp(self):
         self.f = ProtocolFixture(quickfix=self._testMethodName.startswith('test_complete'))
         self.addCleanup(self.f.close)
         self.sid = 'c8-fixture'
         self.env = dict(os.environ, CODEX_THREAD_ID=self.sid, ORCA_STRIGOV_WORKER='0')
         self.env.pop('ORCA_TERMINAL_HANDLE', None)
-        self.base = dict(session_id=self.sid, worktree=str(self.f.git.root))
+        self.base = dict(session_id=self.sid, worktree=str(self.f.git.root), host=self.host)
         self.binding = dict(self.base, workspace=str(self.f.workspace), objective='Implement both phases, review and deliver')
-        self.saved = self.f.git.root / '.superpowers/sdd/.sessions' / (self.sid + '.json')
+        directory = self.f.git.root / '.superpowers/sdd/.sessions'
+        self.saved = (directory / 'claude' if self.host == 'claude' else directory) / (self.sid + '.json')
 
     def call(self, action, request=None, expected=0, env=None):
         source = self.f.save(request or self.base)
@@ -33,7 +36,7 @@ class CoordinatorSessionTests(unittest.TestCase):
 
     def hook(self, event='Stop', **fields):
         payload = dict(hook_event_name=event, session_id=self.sid, cwd=str(self.f.git.root), **fields)
-        result = subprocess.run(self.f.argv('coordinator-session', 'hook'), input=json.dumps(payload).encode(),
+        result = subprocess.run(self.f.argv('coordinator-session', 'hook', '--host', self.host), input=json.dumps(payload).encode(),
                                 cwd=self.f.git.root, env=self.env, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout.decode('utf-8-sig'))
@@ -61,7 +64,11 @@ class CoordinatorSessionTests(unittest.TestCase):
         first = self.bind()
         self.assertEqual(first, self.bind())
         self.call('bind', dict(self.binding, objective='Unrelated objective'), expected=2)
-        self.call('bind', dict(self.binding, session_id='someone-else'), expected=2)
+        if self.host == 'codex':
+            self.call('bind', dict(self.binding, session_id='someone-else'), expected=2)
+        else:
+            # Claude has no CODEX_THREAD_ID equivalent in ordinary tool commands.
+            self.call('bind', dict(self.binding, session_id=None), expected=2)
         self.assertEqual(read_json(self.saved), first)
         self.assertEqual(self.hook('Stop', agent_id='different-worker'), {})
 
@@ -72,6 +79,37 @@ class CoordinatorSessionTests(unittest.TestCase):
             self.assertIn(str(self.saved), result['hookSpecificOutput']['additionalContext'])
             self.assertEqual(read_json(self.saved)['status'], 'active')
         self.assertEqual(self.hook(last_assistant_message='Готово, создана ветка следующей фазы')['decision'], 'block')
+
+    def test_interrupt_is_a_persistent_pause_only_on_codex(self):
+        self.bind()
+        self.assertEqual(self.hook('Interrupt'), {})
+        if self.host == 'claude':
+            self.assertEqual(read_json(self.saved)['status'], 'active')
+            return
+        self.assertEqual(read_json(self.saved)['hold']['kind'], 'user_pause')
+        self.hook('SessionStart', source='compact')
+        self.hook('UserPromptSubmit', prompt='Just checking the status.')
+        self.assertEqual(read_json(self.saved)['hold']['kind'], 'user_pause')
+        self.assertNotIn('decision', self.hook())
+        self.call('resume')
+        self.assertEqual(self.hook()['decision'], 'block')
+
+    def test_legacy_binding_without_host_belongs_only_to_codex(self):
+        self.bind()
+        saved = read_json(self.saved)
+        saved.pop('host')
+        saved.pop('turn_open')
+        write_json(self.saved, saved)
+        if self.host == 'claude':
+            self.call('status', expected=2)
+            self.assertIn('host mismatch', self.hook()['reason'])
+            return
+        request = dict(self.base)
+        request.pop('host')
+        request.pop('session_id')  # Legacy Codex request uses CODEX_THREAD_ID.
+        self.assertEqual(self.call('status', request), saved)
+        self.assertEqual(self.bind(), saved)
+        self.assertIn('no C6 checkpoint', self.hook()['reason'])
 
     def test_missing_checkpoint_cannot_claim_done(self):
         self.bind()
@@ -162,7 +200,8 @@ class CoordinatorSessionTests(unittest.TestCase):
         self.assertNotIn('decision', self.hook())
         self.hook('UserPromptSubmit', prompt='Continue the authorized plan')
         self.assertEqual(self.hook()['decision'], 'block')
-        self.hook('Interrupt')
+        evidence = self.f.save('User explicitly paused the objective', '.md')
+        self.call('hold', dict(self.base, kind='user_pause', reason='Explicit user pause', evidence=evidence))
         self.hook('SessionStart', source='resume')
         self.assertEqual(read_json(self.saved)['hold']['kind'], 'user_pause')
         self.assertNotIn('decision', self.hook())
@@ -173,6 +212,21 @@ class CoordinatorSessionTests(unittest.TestCase):
         self.call('hold', dict(self.base, kind='needs_authority', reason='Needs approval', evidence=evidence))
         Path(evidence['path']).write_text('Replaced evidence')
         self.assertEqual(self.hook()['decision'], 'block')
+
+    def test_status_answer_cannot_clear_a_persistent_pause(self):
+        self.bind()
+        pause = self.f.save('User explicitly paused', '.md')
+        self.call('hold', dict(self.base, kind='user_pause', reason='Wait for explicit resume', evidence=pause))
+        original = read_json(self.saved)['hold']
+        status = self.f.save('User asks only for status', '.md')
+        self.call('hold', dict(self.base, kind='status_only', reason='Status reply', evidence=status))
+        self.assertEqual(read_json(self.saved)['hold'], original)
+        self.assertNotIn('decision', self.hook())
+        self.hook('UserPromptSubmit', prompt='Thanks for the update.')
+        self.assertEqual(read_json(self.saved)['status'], 'held')
+        self.assertEqual(read_json(self.saved)['hold'], original)
+        self.call('resume')
+        self.assertEqual(read_json(self.saved)['status'], 'active')
 
     def test_heartbeat_checkpoint_preserves_pending_worker(self):
         self.bind()
@@ -247,6 +301,43 @@ class CoordinatorSessionTests(unittest.TestCase):
         self.assertEqual(f.validate(proposal)[0], 0)
         self.checkpoint(dict(schema_version=1, action='resume', state=f.state))
         self.assertIn('resume-only', self.hook()['reason'])
+
+
+class ClaudeCoordinatorSessionTests(CoordinatorSessionTests):
+    """Replay the same positive/negative C6/C8 cases on the Claude host adapter."""
+    host = 'claude'
+
+    def test_interrupted_turn_requires_intent_reconciliation_not_fake_interrupt(self):
+        self.bind()
+        self.assertEqual(self.hook('Interrupt'), {})  # No such Claude event.
+        self.assertEqual(read_json(self.saved)['status'], 'active')
+        restored = self.hook('UserPromptSubmit', prompt='Where are we?')
+        self.assertIn('Reconcile', restored['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(read_json(self.saved)['hold']['kind'], 'unreconciled_turn')
+        status = self.f.save('User asks only for status after interruption', '.md')
+        self.call('hold', dict(self.base, kind='status_only', reason='Status reply', evidence=status))
+        self.assertNotIn('decision', self.hook())
+        self.hook('UserPromptSubmit', prompt='Thanks for the update.')
+        self.assertEqual(read_json(self.saved)['hold']['kind'], 'unreconciled_turn')
+        self.hook('SessionStart', source='compact')
+        self.assertEqual(read_json(self.saved)['status'], 'held')
+        self.call('resume')
+        self.assertEqual(self.hook()['decision'], 'block')
+
+    def test_hosts_do_not_share_bindings_or_inherit_parent_codex_id(self):
+        self.env['CODEX_THREAD_ID'] = 'parent-codex'
+        self.bind()
+        self.assertEqual(read_json(self.saved)['session_id'], self.sid)
+        other = dict(self.binding, host='codex', session_id='parent-codex')
+        self.call('bind', other)
+        legacy = self.f.git.root / '.superpowers/sdd/.sessions/parent-codex.json'
+        self.assertTrue(legacy.is_file())
+        self.call('status', dict(self.base, host='codex'), expected=2)
+        self.call('bind', dict(self.binding, host='unknown'), expected=2)
+        saved = read_json(self.saved)
+        saved['host'] = 'codex'
+        write_json(self.saved, saved)
+        self.assertEqual(self.hook()['decision'], 'block')
 
 
 if __name__ == '__main__':

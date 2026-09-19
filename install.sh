@@ -66,12 +66,13 @@ try:
         for name in ('orca-cli', 'orchestration', 'orca-dev'):
             if not (pathlib.Path(here) / 'skills' / name / 'SKILL.md').is_file():
                 raise ValueError('missing plugin skill: ' + name)
-            for directory in ('.agents', '.codex'):
+            for directory in ('.agents', '.codex', '.claude'):
                 candidate = os.path.join(home, directory, 'skills', name)
                 if os.path.lexists(candidate):
                     print('WARN:potential duplicate skill: ' + candidate + '; verify disabled or move this exact entry out of discovery before enabling the plugin')
-        if not (pathlib.Path(here) / 'hooks' / 'hooks.json').is_file():
-            raise ValueError('missing plugin hooks')
+        for required in ('plugin.json', '.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/codex.json', 'bin/claude-hook.cjs'):
+            if not (pathlib.Path(here) / required).is_file():
+                raise ValueError('missing plugin component: ' + required)
         print('OK:complete plugin source: ' + here)
         print('INFO:plugin registration and hook trust are separate; see docs/install-plugin.md')
         print('INFO:no standalone skill links or environment settings written')

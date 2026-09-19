@@ -1,10 +1,9 @@
 {
-  "description": "Session-scoped Orca coordinator role and continuation guards. No worker lifecycle mutations.",
+  "description": "Claude Code coordinator guards. Codex selects hooks/codex.json through the portable manifest.",
   "hooks": {
-    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "bash \"${PLUGIN_ROOT}/bin/coordinator-session\" hook", "commandWindows": "powershell.exe -NoProfile -NonInteractive -File \"${PLUGIN_ROOT}/bin/coordinator-session.ps1\" hook", "timeout": 30}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "bash \"${PLUGIN_ROOT}/bin/coordinator-session\" hook", "commandWindows": "powershell.exe -NoProfile -NonInteractive -File \"${PLUGIN_ROOT}/bin/coordinator-session.ps1\" hook", "timeout": 30}]}],
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash \"${PLUGIN_ROOT}/bin/coordinator-session\" hook", "commandWindows": "powershell.exe -NoProfile -NonInteractive -File \"${PLUGIN_ROOT}/bin/coordinator-session.ps1\" hook", "timeout": 30}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "bash \"${PLUGIN_ROOT}/bin/coordinator-session\" hook", "commandWindows": "powershell.exe -NoProfile -NonInteractive -File \"${PLUGIN_ROOT}/bin/coordinator-session.ps1\" hook", "timeout": 30}]}],
-    "Interrupt": [{"hooks": [{"type": "command", "command": "bash \"${PLUGIN_ROOT}/bin/coordinator-session\" hook", "commandWindows": "powershell.exe -NoProfile -NonInteractive -File \"${PLUGIN_ROOT}/bin/coordinator-session.ps1\" hook", "timeout": 3}]}]
+    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.cjs"], "timeout": 30}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.cjs"], "timeout": 30}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.cjs"], "timeout": 30}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.cjs"], "timeout": 30}]}]
   }
 }

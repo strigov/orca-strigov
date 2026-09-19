@@ -30,9 +30,11 @@ class ReleaseArchiveTests(unittest.TestCase):
                 manifest = json.loads(archive.read(prefix + ".codex-plugin/plugin.json"))
                 self.assertEqual(manifest['name'], 'orca-strigov')
                 self.assertEqual(manifest['version'], '1.2.3')
+                for extra in ('plugin.json', '.claude-plugin/plugin.json'):
+                    self.assertEqual(json.loads(archive.read(prefix + extra))['version'], '1.2.3')
                 for skill in ('orca-dev', 'orchestration', 'orca-cli'):
                     self.assertIn(prefix + 'skills/' + skill + '/SKILL.md', names)
-                for bundled in ('hooks/hooks.json', 'THIRD_PARTY_NOTICES.md',
+                for bundled in ('hooks/hooks.json', 'hooks/codex.json', 'bin/claude-hook.cjs', 'THIRD_PARTY_NOTICES.md',
                                 'bin/coordinator-session', 'bin/coordinator-session.ps1',
                                 'bin/lib/coordinator_session.py', 'docs/install-plugin.md'):
                     self.assertIn(prefix + bundled, names)
