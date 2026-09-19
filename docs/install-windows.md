@@ -10,6 +10,15 @@ not evidence of native Windows behavior.
 
 ## A. Native Windows (PowerShell + Git for Windows)
 
+The C3 runner requires Windows 10 1709 or newer and a filesystem supporting
+`FileRenameInfoEx` with POSIX rename semantics (NTFS). This publishes a complete
+JSON record without a missing-name window while compatible readers retain the
+previous record. Readers denying DELETE sharing still block publication; the
+runner retries only within its existing bounded allowance and fails closed,
+retaining the complete temporary file. Unsupported filesystems do not fall back
+to a multi-step replacement. See Microsoft's
+[rename flags](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+
 Prerequisites, all on `PATH`:
 
 | tool | how | note |

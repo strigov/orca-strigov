@@ -36,6 +36,9 @@ public sealed class CheckJob : IDisposable {
   [StructLayout(LayoutKind.Sequential)] struct Accounting {
     public long a,b,c,d; public uint pageFaults, total, active, terminated;
   }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct RenameInfo {
+    public uint flags; public IntPtr root; public uint length; public char first;
+  }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr sa, string name);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref ExtendedLimit info, int length);
@@ -50,7 +53,7 @@ public sealed class CheckJob : IDisposable {
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool MoveFileEx(string from, string to, uint flags);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetFileInformationByHandle(IntPtr file, int kind, IntPtr info, uint length);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern uint GetFinalPathNameByHandle(IntPtr file, StringBuilder path, uint length, uint flags);
   IntPtr job, process;
   public uint Pid { get; private set; }
@@ -60,23 +63,51 @@ public sealed class CheckJob : IDisposable {
     if (path.StartsWith(@"\\?\")) return path;
     return path.StartsWith(@"\\") ? @"\\?\UNC\" + path.Substring(2) : @"\\?\" + path;
   }
+  static int RenameAttempt(string from, string to, IntPtr info, uint length) {
+    var sa = new SA { length = Marshal.SizeOf(typeof(SA)) };
+    var invalid = new IntPtr(-1);
+    // DELETE access, READ | WRITE | DELETE sharing, OPEN_EXISTING. Preserve
+    // sharing violations explicitly, including readers that deny DELETE.
+    IntPtr source = CreateFile(from, 0x10000, 7, ref sa, 3, 0, IntPtr.Zero);
+    if (source == invalid) return Marshal.GetLastWin32Error();
+    try {
+      IntPtr target = CreateFile(to, 0x10000, 7, ref sa, 3, 0, IntPtr.Zero);
+      if (target == invalid) {
+        int error = Marshal.GetLastWin32Error();
+        if (error != 2) return error; // first publication alone may lack a target
+      }
+      try {
+        // FileRenameInfoEx: one same-volume rename. Unlike MoveFileEx this
+        // supports compatible open readers, which retain the old incarnation.
+        if (SetFileInformationByHandle(source, 22, info, length)) return 0;
+        return Marshal.GetLastWin32Error();
+      } finally { if (target != invalid) CloseHandle(target); }
+    } finally { CloseHandle(source); }
+  }
   public static void Replace(string from, string to, int retryMilliseconds) {
     from = LongPath(from); to = LongPath(to);
     var watch = System.Diagnostics.Stopwatch.StartNew();
-    while (true) {
-      // One same-volume rename, like POSIX os.replace: no missing-name window
-      // from ReplaceFile's multiple renames. Compatible readers keep the old
-      // complete incarnation. Temp and destination are in the same owned dir;
-      // COPY_ALLOWED is deliberately absent. REPLACE_EXISTING | WRITE_THROUGH.
-      if (MoveFileEx(from, to, 9)) return;
-      int error = Marshal.GetLastWin32Error();
-      long remaining = retryMilliseconds - watch.ElapsedMilliseconds;
-      // A short-lived incompatible handle can deny either file. Keep the same
-      // temp bytes; permanent errors fail closed without deleting either name.
-      if ((error != 5 && error != 32) || remaining <= 0)
-        throw new Win32Exception(error, "atomic replacement failed (Win32 " + error + "); temporary path: " + from);
-      System.Threading.Thread.Sleep((int)Math.Min(10, remaining));
-    }
+    byte[] name = Encoding.Unicode.GetBytes(to);
+    int size = checked(Marshal.SizeOf(typeof(RenameInfo)) + name.Length + 2);
+    IntPtr info = Marshal.AllocHGlobal(size);
+    try {
+      // REPLACE_IF_EXISTS | POSIX_SEMANTICS; never ignore read-only/ACL errors.
+      var header = new RenameInfo { flags = 3, length = (uint)name.Length };
+      Marshal.StructureToPtr(header, info, false);
+      int offset = Marshal.OffsetOf(typeof(RenameInfo), "first").ToInt32();
+      Marshal.Copy(name, 0, IntPtr.Add(info, offset), name.Length);
+      Marshal.WriteInt16(info, offset + name.Length, 0);
+      while (true) {
+        int error = RenameAttempt(from, to, info, (uint)size);
+        if (error == 0) return;
+        long remaining = retryMilliseconds - watch.ElapsedMilliseconds;
+        // Keep complete temp bytes on permanent failure. No non-atomic
+        // fallback when the OS/filesystem lacks FileRenameInfoEx support.
+        if ((error != 5 && error != 32) || remaining <= 0)
+          throw new Win32Exception(error, "atomic replacement failed (Win32 " + error + "); FileRenameInfoEx required; temporary path: " + from);
+        System.Threading.Thread.Sleep((int)Math.Min(10, remaining));
+      }
+    } finally { Marshal.FreeHGlobal(info); }
   }
   public static string CanonicalDirectory(string path) {
     var sa = new SA { length = Marshal.SizeOf(typeof(SA)) };

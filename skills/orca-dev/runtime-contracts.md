@@ -4,7 +4,9 @@
 
 `bin/run-check run SPEC_JSON` blocks until exit/interruption. Native Windows uses
 `bin/run-check.ps1` with the same positional arguments; it needs PowerShell 5.1
-or 7 on Windows 10+, not Python. Bash uses Python 3 stdlib. Resolve these paths
+or 7 on Windows 10 1709+ with POSIX rename support (NTFS), not Python. See
+`docs/install-windows.md` for the native publication requirements. Bash uses
+Python 3 stdlib. Resolve these paths
 from the actual loaded plugin's `bin/`, not a stale standalone skill or global
 `ORCA_DEV_HOME`. See coordinator-core.md for path resolution.
 
