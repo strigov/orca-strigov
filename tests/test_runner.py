@@ -16,6 +16,26 @@ from unittest import mock
 from support import ROOT, WINDOWS, Process, RunnerFixture, command, read_json, selected_shell, until, write_json
 
 
+class DurationSerializationTests(unittest.TestCase):
+    def test_duration_ticks_round_trip(self):
+        path = ROOT / "tests/fixtures/duration-seconds.json"
+        cases = read_json(path)
+        if WINDOWS:
+            reply = command([selected_shell(), "-NoProfile", "-NonInteractive",
+                             "-ExecutionPolicy", "Bypass", "-File",
+                             str(ROOT / "tests/fixtures/runner_duration.ps1"),
+                             str(ROOT / "bin/run-check.ps1"), str(path)], ROOT)
+            self.assertEqual(reply[0], 0, reply)
+            values = json.loads(reply[1])
+        else:
+            sys.path.insert(0, str(ROOT / "bin/lib"))
+            from run_check import duration_seconds
+            # Match TimeSpan.TotalSeconds' multiplication, including the exact
+            # 0.99371579999999993 regression observed in native PS5.1 CI.
+            values = [duration_seconds(case["ticks"] * 1e-7) for case in cases]
+        self.assertEqual(json.loads(json.dumps(values)), [case["seconds"] for case in cases])
+
+
 class FixtureCleanupTests(unittest.TestCase):
     def test_readonly_objects_and_foreign_links(self):
         with tempfile.TemporaryDirectory(prefix="runner-foreign-") as foreign, mock.patch.dict(os.environ):

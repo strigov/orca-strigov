@@ -58,6 +58,9 @@ exit substitutes for a missing/unknown result. `run` and `wait` return the
 command code for a confirmed `exited` record, 124 for `interrupted`, 125 for
 running/unknown/invalid operations. POSIX signal exits map to 128 + signal.
 Inspect the JSON as well as the return code: a command can itself exit 124/125.
+Published `duration_seconds` uses 100ns precision on both backends, avoiding
+binary floating-point tails in copied JSON evidence. This is observation
+formatting only; deadline, grace and diagnostic clocks remain unrounded.
 
 `wait RUN_DIR [WAIT_SECONDS]` waits for completion or a **new** diagnostic event
 (default 60 seconds); zero reads the current observation. It is a read-only

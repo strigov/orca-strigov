@@ -25,6 +25,11 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def duration_seconds(elapsed):
+    """Stable observation at 100ns precision; deadline clocks stay unrounded."""
+    return round(elapsed, 7)
+
+
 def safe(path):
     """Reject links in every existing component, including the leaf."""
     p = artifact_path(path)
@@ -329,7 +334,7 @@ def run(s):
             if s["no_progress_seconds"] is not None and time.monotonic() - last_progress >= s["no_progress_seconds"] and not st["stalled"]:
                 st["stalled"] = True
                 st["diagnostic_events"] += 1
-            st["duration_seconds"] = elapsed
+            st["duration_seconds"] = duration_seconds(elapsed)
             atomic(r / "status.json", st)
             time.sleep(0.08)
     except BaseException as e:
@@ -352,7 +357,7 @@ def run(s):
     finally:
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
-    st.update(finished_at=now(), duration_seconds=time.monotonic() - started,
+    st.update(finished_at=now(), duration_seconds=duration_seconds(time.monotonic() - started),
               state="exited" if not reason and st["cleanup_verified"] else
                     "interrupted" if st["cleanup_verified"] else "unknown",
               reason=st["reason"] or reason or "exit", logs_complete=st["cleanup_verified"])

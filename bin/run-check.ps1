@@ -58,6 +58,11 @@ public sealed class CheckJob : IDisposable {
   IntPtr job, process;
   public uint Pid { get; private set; }
   static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+  public static decimal DurationSeconds(long ticks) {
+    // TimeSpan ticks are exact 100ns units. Avoid TotalSeconds' binary tail,
+    // which PS5.1 can parse differently after a faithful JSON reserialization.
+    return (decimal)ticks / TimeSpan.TicksPerSecond;
+  }
   static string LongPath(string path) {
     path = path.Replace('/', '\\');
     if (path.StartsWith(@"\\?\")) return path;
@@ -375,7 +380,7 @@ function Run($spec) {
   try {
     $lock = Resource-Path $spec; $st.resource_lock = $lock
     while ($true) {
-      $elapsed = $watch.Elapsed.TotalSeconds
+      $elapsedTime = $watch.Elapsed; $elapsed = $elapsedTime.TotalSeconds
       $cancel = Join-Path $r 'cancel.json'
       if ((Test-Path -LiteralPath $cancel) -and (Equal-Json (Read-Json $cancel $watch $spec.timeout_seconds) $spec.owner) -and -not $reason) { $reason = 'cancel' }
       if ($null -ne $spec.timeout_seconds -and $elapsed -ge $spec.timeout_seconds -and -not $reason) { $reason = 'deadline' }
@@ -423,7 +428,7 @@ function Run($spec) {
       }
       $st.output_activity = (Get-Item -LiteralPath $st.stdout_log).Length -gt 0 -or (Get-Item -LiteralPath $st.stderr_log).Length -gt 0
       if ($null -ne $spec.no_progress_seconds -and $elapsed - $lastProgress -ge $spec.no_progress_seconds -and -not $st.stalled) { $st.stalled=$true; $st.diagnostic_events++ }
-      $st.duration_seconds = $elapsed
+      $st.duration_seconds = [CheckJob]::DurationSeconds($elapsedTime.Ticks)
       Write-Json (Join-Path $r 'status.json') $st $watch $spec.timeout_seconds
       Start-Sleep -Milliseconds 80
     }
@@ -438,7 +443,7 @@ function Run($spec) {
       } catch { $st.cleanup_verified = $false }
     } else { $st.cleanup_verified = $true }
   } finally { if ($job) { $job.Dispose() } }
-  $st.finished_at = [DateTime]::UtcNow.ToString('o'); $st.duration_seconds = $watch.Elapsed.TotalSeconds
+  $st.finished_at = [DateTime]::UtcNow.ToString('o'); $st.duration_seconds = [CheckJob]::DurationSeconds($watch.Elapsed.Ticks)
   $st.state = if (-not $reason -and $st.cleanup_verified) { 'exited' } elseif ($st.cleanup_verified) { 'interrupted' } else { 'unknown' }
   if (-not $st.reason) { $st.reason = if ($reason) { $reason } else { 'exit' } }
   $st.logs_complete = $st.cleanup_verified

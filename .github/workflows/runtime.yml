@@ -47,6 +47,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Native PowerShell C3 and C4 regressions
+        run: |
+          $env:ORCA_TEST_SHELL=(Get-Process -Id $PID).Path
+          $env:ORCA_TEST_ARTIFACTS="$env:RUNNER_TEMP/orca-evidence/directed-artifacts"
+          $env:PYTHONUTF8='1'
+          $env:PYTHONDONTWRITEBYTECODE='1'
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/orca-evidence" | Out-Null
+          $PSVersionTable | Out-File "$env:RUNNER_TEMP/orca-evidence/directed-environment.log"
+          git rev-parse HEAD | Out-File -Append "$env:RUNNER_TEMP/orca-evidence/directed-environment.log"
+          $testDriver = @'
+          import subprocess, sys
+          checks = ['test_duration_ticks_round_trip',
+                    'test_status_name_stays_readable_across_replacements',
+                    'test_diagnostic_wait_does_not_kill_or_claim_progress',
+                    'test_copied_evidence_must_match_sealed_result']
+          argv = [sys.executable, '-B', '-m', 'unittest', 'discover', '-s', 'tests', '-v']
+          for check in checks:
+              argv.extend(['-k', check])
+          with open(sys.argv[1], 'wb') as log:
+              result = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT)
+          raise SystemExit(result.returncode)
+          '@
+          python -B -c $testDriver "$env:RUNNER_TEMP/orca-evidence/directed.log"
+          $suiteCode=$LASTEXITCODE
+          Get-Content -Encoding UTF8 "$env:RUNNER_TEMP/orca-evidence/directed.log"
+          if ($suiteCode -ne 0) { exit $suiteCode }
       - name: Native PowerShell integration suite
         run: |
           $env:ORCA_TEST_SHELL=(Get-Process -Id $PID).Path

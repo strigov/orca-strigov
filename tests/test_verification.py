@@ -152,8 +152,11 @@ class VerificationTests(unittest.TestCase):
         copied=f.workspace/'copied-result.json'
         # A faithful copy remains valid evidence of the negative outcome.
         write_json(copied,negative)
-        self.assertEqual(f.helper('validate-evidence',copied)[0],0)
+        reply=f.helper('validate-evidence',copied)
+        self.assertEqual(reply[0],0,(reply,negative))
         write_json(copied,dict(negative,exit_code=0))
+        self.assertNotEqual(f.helper('validate-evidence',copied)[0],0)
+        write_json(copied,dict(negative,duration_seconds=negative['duration_seconds']+0.001))
         self.assertNotEqual(f.helper('validate-evidence',copied)[0],0)
         self.assertEqual(original.read_bytes(),original_bytes)
         if WINDOWS:
