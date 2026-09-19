@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# install.sh — install the orca-dev skill for the Codex coordinator and clear the
-# known worker-startup blockers for one or more repositories.
+# install.sh — Orca Strigov prerequisites and explicitly requested repo trust.
 #
-#   ./install.sh                 # link skill into ~/.codex/skills/orca-dev, check CLIs
-#   ./install.sh --repo <path>   # + pre-trust <path> (and its git worktrees) for Claude Code and Antigravity
+#   ./install.sh                 # read-only plugin/prerequisite/conflict checks
+#   ./install.sh --repo <path>   # pre-trust this repo/worktrees for Claude and Antigravity
 #   ./install.sh --check <path>  # read-only report, changes nothing
+#   ./install.sh --legacy-skill  # explicitly install the old standalone skill (not with plugin)
 #   --repo may be given several times. Exit: 0 clean, 1 if any WARN, 2 usage error.
 set -u
 set -f  # Repo paths are literal; newline splitting below must not expand globs.
@@ -12,7 +12,7 @@ here="$(cd "$(dirname "$0")" && pwd -P)"
 user_home="${ORCA_DEV_TEST_HOME:-$HOME}"
 test_mode="${ORCA_DEV_TEST_HOME:+yes}"
 usage(){ sed -n '2,8p' "$0"; }
-mode=install; repos=""
+mode=install; repos=""; legacy=""
 add_repo(){
   local p="$1" abs
   abs="$(cd "$p" 2>/dev/null && pwd -P)" || { echo "install.sh: not a directory: $p" >&2; exit 2; }
@@ -26,6 +26,7 @@ while [ $# -gt 0 ]; do
       [ "$1" = --check ] && mode=check
       add_repo "$2"; shift 2;;
     -h|--help) usage; exit 0;;
+    --legacy-skill) legacy=yes; shift;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2;;
   esac
 done
@@ -35,7 +36,7 @@ warn(){ nwarn=$((nwarn+1)); printf '  \033[33mWARN\033[0m %s\n' "$*"; }
 info(){ printf '  \033[36mINFO\033[0m %s\n' "$*"; }   # informational: not counted, does not affect the exit code
 fix(){ printf '  \033[36mFIX\033[0m  %s\n' "$*"; }
 
-echo "orca-dev install ($mode)"
+echo "Orca Strigov prerequisites ($mode)"
 
 # --- 1. skill link ------------------------------------------------------------
 # Python is already a runtime dependency; lstat/unlink never traverses the leaf.
@@ -44,9 +45,9 @@ if ! python3 "$here/bin/lib/run_check.py" capabilities; then
   warn 'unsupported runner capabilities (Linux Python 3.9+; macOS Python 3.13+); no installation changes made'
   exit 1
 fi
-link_output=$(python3 - "$here" "$user_home" "$mode" "$test_mode" <<'PY'
-import os, pathlib, sys
-here, home, mode, test = sys.argv[1:]
+link_output=$(python3 - "$here" "$user_home" "$mode" "$test_mode" "$legacy" <<'PY'
+import json, os, pathlib, sys
+here, home, mode, test, legacy = sys.argv[1:]
 def plain(path):
     p = pathlib.Path(os.path.abspath(path))
     if any(x.is_symlink() for x in (p, *p.parents)):
@@ -58,6 +59,23 @@ try:
             raise ValueError('ORCA_DEV_TEST_HOME must be an existing isolated absolute directory')
         plain(home)
         home_valid = True
+    if not legacy:
+        manifest = pathlib.Path(here) / '.codex-plugin' / 'plugin.json'
+        with manifest.open(encoding='utf-8') as f: plugin = json.load(f)
+        if plugin.get('name') != 'orca-strigov': raise ValueError('unexpected plugin manifest')
+        for name in ('orca-cli', 'orchestration', 'orca-dev'):
+            if not (pathlib.Path(here) / 'skills' / name / 'SKILL.md').is_file():
+                raise ValueError('missing plugin skill: ' + name)
+            for directory in ('.agents', '.codex'):
+                candidate = os.path.join(home, directory, 'skills', name)
+                if os.path.lexists(candidate):
+                    print('WARN:potential duplicate skill: ' + candidate + '; verify disabled or move this exact entry out of discovery before enabling the plugin')
+        if not (pathlib.Path(here) / 'hooks' / 'hooks.json').is_file():
+            raise ValueError('missing plugin hooks')
+        print('OK:complete plugin source: ' + here)
+        print('INFO:plugin registration and hook trust are separate; see docs/install-plugin.md')
+        print('INFO:no standalone skill links or environment settings written')
+        sys.exit(0)
     src = os.path.realpath(os.path.join(here, 'skills', 'orca-dev'))
     target = os.path.join(home, '.codex', 'skills', 'orca-dev')
     print('INFO:skill source: ' + src)
@@ -86,11 +104,12 @@ while IFS= read -r line; do
 done <<<"$link_output"
 [ "$link_rc" -eq 2 ] && exit 2
 [ "$link_rc" -ne 0 ] && warn 'skill link validation failed'
-if [ -n "${ORCA_DEV_HOME:-}" ]; then
+if [ -n "$legacy" ] && [ -n "${ORCA_DEV_HOME:-}" ]; then
   process_home=$(cd "$ORCA_DEV_HOME" 2>/dev/null && pwd -P)
   if [ "$process_home" = "$here" ]; then ok "Process ORCA_DEV_HOME = $ORCA_DEV_HOME"
   else warn "Process ORCA_DEV_HOME is '$ORCA_DEV_HOME', expected '$here'; restart the parent or export ORCA_DEV_HOME to this checkout for the worker launch"; fi
-else info 'Process ORCA_DEV_HOME unset; bootstrap resolves the installed skill link'; fi
+elif [ -n "$legacy" ]; then info 'Process ORCA_DEV_HOME unset; legacy bootstrap resolves the installed skill link'
+else info 'Plugin helpers resolve from the loaded plugin; legacy ORCA_DEV_HOME is not used'; fi
 info 'User environment: install.sh does not write shell profiles or persistent environment'
 [ -n "$test_mode" ] && info 'isolated test home: external CLI/runtime probes, upgrades and registration are skipped'
 
@@ -119,7 +138,7 @@ if [ -f "$hooks" ] && [ -f "$cfg" ]; then
   trusted=${trusted:-0}
   if [ "$declared" -gt "$trusted" ]; then
     warn "codex hooks: $declared declared, $trusted trusted → 'Hooks need review' will block worker-start for codex"
-    fix "press '2. Trust all and continue' once in a Codex terminal inside Orca, or use Path B (--dangerously-bypass-hook-trust) per orca-recipes.md"
+    fix 'review and explicitly trust the expected hooks in Codex; this script never bypasses hook trust'
   else ok "codex hooks trusted ($trusted/$declared)"; fi
 fi
 grep -q '^model = "chatgpt-web/pro"' "$cfg" 2>/dev/null && info "codex default model is chatgpt-web/pro — every protocol launch must pass an explicit --model (roles.md does)"

@@ -12,6 +12,12 @@
   <img alt="macOS, Linux, and Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-172033">
 </p>
 
+`orca-strigov` is a Codex plugin with three coordinated skills: `orca-cli`,
+`orchestration` and `orca-dev`. It replaces the two native orchestration guides
+and the standalone development skill as one versioned bundle. A shared role
+contract and session hooks guard against role drift and premature stopping.
+See [migration and hook limitations](docs/install-plugin.md).
+
 `orca-dev` helps you build software with several AI models inside
 [Orca](https://orca.dev). You describe what the product should do. The system turns that request
 into a plan, code, tests, and independent reviews — while keeping evidence of what was checked.
@@ -70,13 +76,19 @@ The easiest installation does not require Git commands:
 
 1. Open [the latest release](https://github.com/strigov/orca-strigov/releases/latest).
 2. Expand **Assets**.
-3. Download **`orca-dev-<version>.zip`**. Do not choose GitHub's automatic “Source code” ZIP.
-4. Extract it to a permanent folder such as `Documents/orca-dev`. The installed skill points to
-   this folder, so do not delete or move it later without reinstalling.
+3. For a plugin-format release, download **`orca-strigov-<version>.zip`**. Older
+   `orca-dev-*.zip` releases contain the old standalone skill, not this plugin.
+4. Extract the complete `orca-strigov/` folder, including its hidden manifest.
+   Register it following [Install and migrate](docs/install-plugin.md).
 
-Each release also contains `orca-dev-<version>.zip.sha256` for download verification.
+Plugin releases also contain `orca-strigov-<version>.zip.sha256` for verification.
 
-### 3. Run the installer
+### 3. Register the plugin, then check prerequisites
+
+Follow [the plugin registration and conflict-removal steps](docs/install-plugin.md)
+first. Review and trust its hooks, keep Orca's runtime hooks, and start a new
+thread. The commands below **do not install/register the plugin** or recreate
+standalone skill links; they check prerequisites and optionally grant repo trust.
 
 macOS, Linux, or WSL2 — open Terminal in the extracted folder:
 
@@ -137,7 +149,9 @@ cd $HOME\orca-strigov
 .\install.ps1 -Repo C:\path\to\your\project
 ```
 
-Use this route if you want to update with `git pull` or contribute changes.
+Use this route to contribute changes. Register the complete checkout through
+the [plugin installation flow](docs/install-plugin.md); `git pull` alone does
+not refresh Codex's installed plugin cache.
 
 </details>
 

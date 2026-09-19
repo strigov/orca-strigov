@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# C8 coordinator binding / provider hooks; no Orca lifecycle mutations.
+set -euo pipefail
+exec python3 "$(cd "$(dirname "$0")" && pwd -P)/lib/coordinator_session.py" "$@"

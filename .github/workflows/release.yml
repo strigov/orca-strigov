@@ -33,8 +33,8 @@ jobs:
           python3 bin/build-release.py \
             --repo "$GITHUB_WORKSPACE" \
             --version "$version" \
-            --out "$RUNNER_TEMP/orca-release/orca-dev-$version.zip"
-          unzip -l "$RUNNER_TEMP/orca-release/orca-dev-$version.zip"
+            --out "$RUNNER_TEMP/orca-release/orca-strigov-$version.zip"
+          unzip -l "$RUNNER_TEMP/orca-release/orca-strigov-$version.zip"
       - name: Upload archive to the GitHub Release
         if: github.event_name == 'release'
         env:
@@ -44,11 +44,11 @@ jobs:
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/orca-release/orca-dev-$version.zip" \
-            "$RUNNER_TEMP/orca-release/orca-dev-$version.zip.sha256" \
+            "$RUNNER_TEMP/orca-release/orca-strigov-$version.zip" \
+            "$RUNNER_TEMP/orca-release/orca-strigov-$version.zip.sha256" \
             --clobber
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:
-          name: orca-dev-${{ inputs.version }}
+          name: orca-strigov-${{ inputs.version }}
           path: ${{ runner.temp }}/orca-release/*

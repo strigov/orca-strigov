@@ -1,19 +1,20 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  install.ps1 — Windows installer for the orca-dev skill (native Windows, no WSL).
+  install.ps1 — Orca Strigov prerequisites (native Windows, no WSL).
 
 .DESCRIPTION
   Mirrors install.sh:
-    .\install.ps1                    link the skill into %USERPROFILE%\.codex\skills\orca-dev, check CLIs
+    .\install.ps1                    read-only plugin/prerequisite/conflict checks
     .\install.ps1 -Repo <path>       + pre-trust <path> (and its git worktrees) for Claude Code and Antigravity
     .\install.ps1 -Check <path>      read-only report, changes nothing
+    .\install.ps1 -LegacySkill       explicitly install the old standalone skill (not with plugin)
   -Repo may be given several times (-Repo a -Repo b, or -Repo a,b).
   Exit: 0 clean, 1 if any WARN, 2 usage error.
 
   What it writes (install mode only):
-    %USERPROFILE%\.codex\skills\orca-dev   symbolic link (Developer Mode / admin) or directory junction
-    user environment variable ORCA_DEV_HOME = this checkout (the protocol resolves bin\ through it)
+    Only with -LegacySkill: old skill link and User ORCA_DEV_HOME.
+    Only with -Repo:
     %USERPROFILE%\.claude.json             projects[<path>].hasTrustDialogAccepted = true
     %USERPROFILE%\.gemini\antigravity-cli\settings.json   trustedWorkspaces += <path>
   All JSON edits are atomic (temp file + rename) and preserve unrelated keys.
@@ -28,6 +29,7 @@
 param(
   [string[]]$Repo = @(),
   [string[]]$Check = @(),
+  [switch]$LegacySkill,
   [switch]$Help
 )
 Set-StrictMode -Version 2.0
@@ -119,9 +121,28 @@ foreach ($p in @($Repo) + @($Check)) {
   if (-not $repos.Contains($abs)) { $repos.Add($abs) }
 }
 
-Write-Host "orca-dev install ($mode) — Windows"
+Write-Host "Orca Strigov prerequisites ($mode) — Windows"
 
 # ---- 1. skill link ---------------------------------------------------------------------
+if (-not $LegacySkill) {
+  try {
+    $manifest=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $here '.codex-plugin/plugin.json') | ConvertFrom-Json
+    if ($manifest.name -cne 'orca-strigov') { throw 'unexpected plugin manifest' }
+    foreach ($name in 'orca-cli','orchestration','orca-dev') {
+      if (-not (Test-Path -LiteralPath (Join-Path $here "skills/$name/SKILL.md") -PathType Leaf)) { throw "missing plugin skill: $name" }
+      foreach ($directory in '.agents','.codex') {
+        $candidate=Join-Path $userHome "$directory/skills/$name"
+        if (Get-Item -Force -LiteralPath $candidate -ErrorAction SilentlyContinue) {
+          Write-Warn2 "potential duplicate skill: $candidate; verify disabled or move this exact entry out of discovery before enabling the plugin"
+        }
+      }
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $here 'hooks/hooks.json') -PathType Leaf)) { throw 'missing plugin hooks' }
+    Write-Ok "complete plugin source: $here"
+    Write-Info 'plugin registration and hook trust are separate; see docs/install-plugin.md'
+    Write-Info 'no standalone skill links or environment settings written; legacy ORCA_DEV_HOME is not used'
+  } catch { Write-Warn2 $_.Exception.Message }
+} else {
 $src = Join-Path (Join-Path $here 'skills') 'orca-dev'
 $skillsDir = Join-Path (Join-Path $userHome '.codex') 'skills'
 $target = Join-Path $skillsDir 'orca-dev'
@@ -183,6 +204,7 @@ if (-not (Test-Path -LiteralPath $src -PathType Container)) {
   if ((Resolve-Physical $env:ORCA_DEV_HOME) -eq $here) { Write-Ok "Process ORCA_DEV_HOME = $env:ORCA_DEV_HOME" }
   else { Write-Warn2 "Process ORCA_DEV_HOME is '$env:ORCA_DEV_HOME', expected '$here'; restart Orca or set `$env:ORCA_DEV_HOME = '$($here.Replace("'", "''"))' in this process/worker launch" }
 }
+}
 if ($testMode) { Write-Info 'isolated test home: User environment is file-backed; external CLI/runtime probes and registration are skipped' }
 
 # ---- 2. CLIs -----------------------------------------------------------------------------
@@ -230,7 +252,7 @@ if ((Test-Path -LiteralPath $hooks) -and (Test-Path -LiteralPath $cfg)) {
   $trusted = @(Select-String -LiteralPath $cfg -Pattern 'trusted_hash' -SimpleMatch).Count
   if ($declared -gt $trusted) {
     Write-Warn2 "codex hooks: $declared declared, $trusted trusted → 'Hooks need review' will block worker-start for codex"
-    Write-Fix  "press '2. Trust all and continue' once in a Codex terminal inside Orca, or use Path B (--dangerously-bypass-hook-trust) per orca-recipes.md"
+    Write-Fix 'review and explicitly trust the expected hooks in Codex; this script never bypasses hook trust'
   } else { Write-Ok "codex hooks trusted ($trusted/$declared)" }
 }
 if ((Test-Path -LiteralPath $cfg) -and (Select-String -LiteralPath $cfg -Pattern '^model = "chatgpt-web/pro"' -Quiet)) {

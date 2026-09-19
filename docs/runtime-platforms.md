@@ -1,5 +1,9 @@
 # Runtime platforms and maintenance validation
 
+For the three-skill plugin conversion and C8 guard, use the current
+[plugin validation report](plugin-validation.md). The platform table and
+maintenance evidence below are historical, not a certification of new changes.
+
 One semantic contract is implemented by POSIX Python/Bash and native PowerShell.
 All C6 changes update both backends and runtime-contracts.md together. Automatic
 coordinator activation on implementation requests is preserved; maintenance and

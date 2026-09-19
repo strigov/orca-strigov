@@ -1,0 +1,17 @@
+{
+  "name": "orca-strigov",
+  "version": "1.0.0",
+  "description": "Coordinated Orca development with persistent roles, evidence gates and continuation guards.",
+  "author": { "name": "strigov" },
+  "repository": "https://github.com/strigov/orca-strigov",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Orca Strigov",
+    "shortDescription": "Coordinate, verify and finish multi-agent work in Orca.",
+    "longDescription": "A coordinated replacement for the native Orca skills, with orca-dev, shared role routing, lifecycle contracts and completion guards.",
+    "developerName": "strigov",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use $orca-dev to implement my request through supervised Orca workers."
+  }
+}

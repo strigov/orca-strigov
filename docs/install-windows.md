@@ -1,6 +1,12 @@
-# Installing orca-dev on Windows
+# Installing the Orca Strigov plugin on Windows
 
-**Native** is the layout `install.ps1` sets up; **WSL2** reuses the Linux installer inside a distro. Native PowerShell 5.1/7 and isolated Ubuntu WSL helper tests are recorded in [controlled-pipeline-validation.md](controlled-pipeline-validation.md). WSL helper execution does not prove Orca can launch every model CLI inside that distro.
+Follow [plugin registration and migration](install-plugin.md) first. This is a
+three-skill plugin with native PowerShell helpers and hooks, not a standalone
+skill link. `install.ps1` checks prerequisites; `-Repo` explicitly grants repo
+trust. Prior helper results in [controlled-pipeline-validation.md](controlled-pipeline-validation.md)
+do not certify the new plugin/C8 guard. Current limits are recorded in
+[plugin-validation.md](plugin-validation.md). WSL is a separate Linux runtime,
+not evidence of native Windows behavior.
 
 ## A. Native Windows (PowerShell + Git for Windows)
 
@@ -21,7 +27,7 @@ Install:
 ```powershell
 git clone git@github.com:strigov/orca-strigov.git $HOME\orca-strigov
 cd $HOME\orca-strigov
-.\install.ps1                              # links the skill, sets ORCA_DEV_HOME, checks CLIs and hooks
+.\install.ps1                              # checks plugin source, duplicate skills and prerequisites
 .\install.ps1 -Repo C:\path\to\your\repo   # pre-trusts the repo and its git worktrees for Claude Code and Antigravity
 .\install.ps1 -Check C:\path\to\your\repo  # read-only report; exit 1 on any WARN
 ```
@@ -30,8 +36,14 @@ If PowerShell refuses to run the script: `Set-ExecutionPolicy -Scope CurrentUser
 
 What it does differently from `install.sh`:
 
-- The skill link is a **symbolic link** when allowed (Developer Mode or an elevated shell), otherwise a **directory junction**. Canonical source and target are compared, including stale/dangling links. Only the leaf link can be removed, without recursion; its old target remains intact. An ordinary directory or an unknown reparse point is refused. Writes through linked parent directories or linked trust files are refused too.
-- The installer writes User `ORCA_DEV_HOME` only after verifying the installed link points to this checkout. It reports User and Process values separately and does not change Process or Machine environment. Restart Orca to inherit User changes. For an explicitly authorized checkout in an existing terminal, use a process-only assignment such as `$env:ORCA_DEV_HOME = 'D:/Projects/orca-strigov'`; this example is this delivery's location, not an installer default. `-Check` diagnoses differences without repairing them.
+- Default mode writes no standalone skill link or User environment. Helpers
+  resolve from the actual loaded plugin. Ignore stale `ORCA_DEV_HOME`; never use
+  it to select a different helper version. Plugin registration and explicit
+  hook trust remain separate from this prerequisite script.
+- Only explicit `-LegacySkill` retains old symlink/junction installation and
+  User `ORCA_DEV_HOME` behavior. It refuses ordinary directories and foreign
+  linked parents, replaces only an inspected leaf link, and leaves the old
+  target intact. Do not enable legacy and plugin installations together.
 - All eight native entry points ship together with `bin\lib\`: `sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `collect-worker-fleet.ps1`, `run-check.ps1`, `protocol-state.ps1`. Runtime needs PowerShell and Git, with no Bash/python3/jq dependency. Gate commands run through the same owned runner with stdin closed, durable full logs and explicit deadlines. Packages preserve raw Git bytes. The fleet collector uses a headless read-only child, never a new Orca terminal or a global environment change. CLI interfaces and supported verification declarations are defined in [runtime-contracts.md](../skills/orca-dev/runtime-contracts.md).
 - Per-repo trust: under pwsh 7 the installer parses `.claude.json` with `ConvertFrom-Json -AsHashtable`, because real files contain project keys that differ only in case (`D:/x` vs `d:/x`) and the default PSCustomObject form rejects them (Windows PowerShell 5.1 does too — run `install.ps1 -Repo` under pwsh if you hit that WARN). Claude Code on Windows keys `projects[]` with forward slashes (`C:/repo`); older builds used backslashes — the installer accepts either as trusted and writes the forward-slash key. Antigravity's `trustedWorkspaces` uses backslashes (verified on a real settings.json).
 - Codex is not upgraded automatically (no Homebrew); an "Update available" prompt blocks worker input — keep Codex current yourself.
@@ -55,4 +67,8 @@ git clone git@github.com:strigov/orca-strigov.git ~/orca-strigov && cd ~/orca-st
 
 Tests set `ORCA_DEV_TEST_HOME` only in a child environment, to an existing owned absolute directory. Both installers redirect trust/skill files there and skip external runtime/version/registration probes. PowerShell additionally reads/writes the simulated User value in `<test-home>/.orca-dev-user-environment.json`, preserving other keys; it never writes the real registry in this mode. Tests do not override HOME/USERPROFILE, and compare actual settings/registry digests before and after. A redirected test-home link is rejected. Temporary cleanup verifies ownership and never follows symlinks/junctions.
 
-Check helpers independently from model routing. Use `orca skills get orchestration` for the Run's executable and preserve actual launch/release receipts; a retained process, timeout or old successful smoke is not current certification. The delivery evidence names missing platforms/capabilities explicitly and leaves the independent final suite pending until its owner records a real result.
+Check helpers independently from model routing. Use the bundled orchestration
+references and actual CLI help/receipts, not stock `orca skills get` policy.
+The ninth helper, `coordinator-session.ps1`, implements C8 natively and is selected
+by `commandWindows` in the plugin hooks. Its runtime needs PowerShell and Git,
+not Bash/Python. A retained process, timeout or old smoke is not current certification.

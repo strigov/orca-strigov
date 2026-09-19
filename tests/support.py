@@ -275,7 +275,7 @@ class InstallFixture(RunnerFixture):
         self.home.mkdir(); self.checkout.mkdir()
         for name in ('install.ps1', 'install.sh'):
             shutil.copyfile(ROOT / name, self.checkout / name)
-        for name in ('skills', 'bin'):
+        for name in ('skills', 'bin', '.codex-plugin', 'hooks'):
             shutil.copytree(ROOT / name, self.checkout / name, ignore=shutil.ignore_patterns('__pycache__'))
         (self.home / '.codex' / 'skills').mkdir(parents=True)
         (self.home / '.gemini' / 'antigravity-cli').mkdir(parents=True)
@@ -309,13 +309,14 @@ class InstallFixture(RunnerFixture):
             if rc: raise AssertionError((rc, out, err))
         else: path.symlink_to(target, target_is_directory=True)
 
-    def install(self, check=False, env=None):
+    def install(self, check=False, env=None, legacy=True):
         self.calls += 1
         if WINDOWS:
             argv = [self.shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                     str(self.checkout / 'install.ps1'), '-Check' if check else '-Repo', str(self.git.root)]
         else:
             argv = [self.shell, str(self.checkout / 'install.sh'), '--check' if check else '--repo', str(self.git.root)]
+        if legacy: argv.append('-LegacySkill' if WINDOWS else '--legacy-skill')
         p = Process(argv, self.git.root, env=env or self.env, log_stem=self.base / ('install-' + str(self.calls)))
         self.processes.append(p)
         result = p.finish()

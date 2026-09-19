@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ SPEC.loader.exec_module(BUILD_RELEASE)
 class ReleaseArchiveTests(unittest.TestCase):
     def test_archive_is_compact_reproducible_and_installable(self):
         with tempfile.TemporaryDirectory() as tmp:
-            first = Path(tmp) / "orca-dev-1.2.3.zip"
+            first = Path(tmp) / "orca-strigov-1.2.3.zip"
             second = Path(tmp) / "copy.zip"
             count, digest, checksum = BUILD_RELEASE.build_release(ROOT, "1.2.3", first)
             BUILD_RELEASE.build_release(ROOT, "1.2.3", second)
@@ -25,7 +26,16 @@ class ReleaseArchiveTests(unittest.TestCase):
 
             with zipfile.ZipFile(first) as archive:
                 names = set(archive.namelist())
-                prefix = "orca-dev-1.2.3/"
+                prefix = "orca-strigov/"
+                manifest = json.loads(archive.read(prefix + ".codex-plugin/plugin.json"))
+                self.assertEqual(manifest['name'], 'orca-strigov')
+                self.assertEqual(manifest['version'], '1.2.3')
+                for skill in ('orca-dev', 'orchestration', 'orca-cli'):
+                    self.assertIn(prefix + 'skills/' + skill + '/SKILL.md', names)
+                for bundled in ('hooks/hooks.json', 'THIRD_PARTY_NOTICES.md',
+                                'bin/coordinator-session', 'bin/coordinator-session.ps1',
+                                'bin/lib/coordinator_session.py', 'docs/install-plugin.md'):
+                    self.assertIn(prefix + bundled, names)
                 self.assertIn(prefix + "README.md", names)
                 self.assertIn(prefix + "README.ru.md", names)
                 self.assertIn(prefix + "assets/readme/hero.svg", names)
@@ -46,6 +56,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                 executables = {
                     "install.sh",
                     "bin/collect-worker-fleet",
+                    "bin/coordinator-session",
                     "bin/protocol-state",
                     "bin/review-package",
                     "bin/run-check",

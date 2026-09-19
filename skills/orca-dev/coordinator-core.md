@@ -44,12 +44,13 @@ Both rules are model-independent. If you find yourself arguing a rule away, that
 On resume restore the unfinished barrier and use its permitted commands. Before
 the first writer the closed allowlist permits: reading these skill references and
 repository instructions; frontmatter and plan-directory listings; the Git
-bookkeeping reads above; `orca skills get orchestration`, `orca status`,
+bookkeeping reads above; bundled orchestration references, `orca --version`, `orca status`,
 `orca orchestration run-* / task-create / task-list / worker-list / worker-start /
 dispatch / worker-show / check`; `orca terminal create / wait / read`; helper-path
 resolution; `sdd-workspace --name <slug>`; `run-check capabilities` on POSIX;
 `wait-agent-ready`; `wait-worker-event REQUEST_JSON`; `collect-worker-fleet REQUEST_JSON`; and
-`protocol-state validate INPUT_JSON [RESUME_OUT]`.
+`protocol-state validate INPUT_JSON [RESUME_OUT]`; and the C8
+`coordinator-session bind / checkpoint / status / hold / resume` commands.
 Create the original-request, spec, state and raw receipt files needed by those
 commands only in the owned workspace. Hash those files without reading source.
 Native Windows uses the equivalent `.ps1` helpers and PowerShell invocation `&`;
@@ -141,23 +142,30 @@ A `worker_done` that Orca **rejects** (missing `--from` / `--dispatch-capability
 
 ## Workspace scripts ($WS, $RPKG, $GATE)
 
-Resolve once per session (they live in this skill's repo; `SKILL_DIR` is the directory containing this file):
+Resolve once per session from the **actual loaded plugin**, not an old installed
+skill link. Set `PLUGIN_DIR` to the absolute directory two levels above this
+loaded file (it contains `.codex-plugin/plugin.json`, `skills/` and `bin/`).
+Inside a hook, `PLUGIN_ROOT` supplies that path. Outside hooks use the observed
+skill source path. A stale `ORCA_DEV_HOME` must never override it:
 
 ```bash
-# ORCA_DEV_HOME (set by install.sh / install.ps1) wins; otherwise resolve the skill symlink.
-if [ -n "${ORCA_DEV_HOME:-}" ]; then BIN="$ORCA_DEV_HOME/bin"
-else SKILL_DIR="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$HOME/.codex/skills/orca-dev")"; BIN="$SKILL_DIR/../../bin"; fi
+# Substitute the actual absolute plugin path observed when loading this file.
+PLUGIN_DIR="<absolute-loaded-plugin-root>"
+BIN="$PLUGIN_DIR/bin"
 WS="$BIN/sdd-workspace"; RPKG="$BIN/review-package"; GATE="$BIN/verify-gate"
 RUN="$BIN/run-check"; STATE="$BIN/protocol-state"
+SESSION="$BIN/coordinator-session"
 echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 ```
 
 On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) use the native PowerShell ports instead — same names with a `.ps1` suffix, same arguments, exit codes and output shape, no bash / python3 / jq involved:
 
 ```powershell
-$BIN = "$env:ORCA_DEV_HOME\bin"   # set by install.ps1; restart Orca once after the first install
+$PluginDir = '<absolute-loaded-plugin-root>'
+$BIN = Join-Path $PluginDir 'bin'
 $WS = "$BIN\sdd-workspace.ps1"; $RPKG = "$BIN\review-package.ps1"; $GATE = "$BIN\verify-gate.ps1"
 $RUN = "$BIN\run-check.ps1"; $STATE = "$BIN\protocol-state.ps1"
+$SESSION = "$BIN\coordinator-session.ps1"
 & $GATE <plan-file> <base-sha>    # e.g. & $GATE docs\plans\x.md a1b2c3d
 ```
 
@@ -165,12 +173,10 @@ $RUN = "$BIN\run-check.ps1"; $STATE = "$BIN\protocol-state.ps1"
 - `"$RPKG" BASE HEAD [OUTFILE]` (committed range) or `"$RPKG" BASE WORKTREE OUTFILE` (working tree vs BASE) writes the review package; only its `wrote <path>: N commit(s), M bytes` line enters your context.
 - `"$GATE" <plan-file> <base-sha> [repo-root]` runs the frontmatter's `verify:` commands and classifies failures against BASE; `--phase ID --checkpoint directed|integration|final` selects the declared scope. You read its line 1–2 and, on `GATE_FAIL`, pass its full output to the implementer.
 
-Keep the checkout and `bin/lib/` together. Before using an inherited `ORCA_DEV_HOME`,
-run this checkout's installer in read-only check mode. On Windows it distinguishes
-the installed skill target, User environment and Process environment. A stale
-Process value needs an Orca restart or an explicitly authorized process-only
-override at worker launch; it does not authorize rewriting user configuration.
-Missing runtime files/dependencies leave setup incomplete. The runner and state
+Keep the plugin and `bin/lib/` together. Plugin-relative paths work after the
+native skills and the old standalone orca-dev link are removed. Do not repair
+global environment or recreate that link. Missing runtime files/dependencies
+leave setup incomplete. The runner and state
 JSON interfaces remain defined only in [runtime-contracts.md](runtime-contracts.md).
 
 
@@ -211,7 +217,7 @@ Fixers receive only open ACCEPTED / PARTIALLY_ACCEPTED items; reviewers receive 
 
 ## Reporting cadence
 
-One line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, model per roles.md)`), one line per loop iteration with the verdict, no polling narration, 1–2 sentences at end of turn. Availability fallbacks and family-rule substitutions are always stated.
+One commentary line entering each step (`Plan ready → plan review r1/4 (plan-reviewer, model per roles.md)`), one per loop iteration with the verdict, no polling narration. Final answers are only for verified completion, an evidenced human hold or an explicitly status-only request, as defined in coordinator-session.md. A routine phase report does not end the turn. Availability fallbacks and family-rule substitutions are always stated.
 
 Wait through recipes §4/C7. An empty CLI window, keepalive or tool-harness yield
 is not a protocol iteration or a reason for `worker-show`/`worker-read`/screen

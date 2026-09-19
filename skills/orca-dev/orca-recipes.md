@@ -1,6 +1,6 @@
 # orca-dev — Orca launch & lifecycle recipes
 
-How a role from `roles.md` becomes a running Orca worker, how the coordinator waits, and how it cleans up. Everything here is verified against version-matched Orca orchestration semantics. Load the reference with `orca skills get orchestration` at session start; if a command below disagrees with that guide, the guide wins.
+How a role from `roles.md` becomes a running Orca worker, how the coordinator waits, and how it cleans up. Read the sibling `../orchestration/SKILL.md` and its relevant bundled references. The supported CLI baseline is recorded in `../orchestration/upstream.md`. Actual command help/receipts govern syntax and lifecycle facts; the shared role contract and orca-dev govern routing, model policy and completion. Do not fetch stock skill instructions through `orca skills get`.
 
 ## 0. Session start (coordinator)
 
@@ -53,6 +53,13 @@ orca orchestration worker-start --task <task_id> --worktree current \
 ### Path B — custom argv + `dispatch --inject` (unsupervised lifecycle)
 
 Required when the agent needs flags Orca cannot pass, or a blocker below is not yet cleared:
+
+For custom Codex workers set `ORCA_STRIGOV_WORKER=1` only in the new
+terminal's launch command: POSIX `env ORCA_STRIGOV_WORKER=1 codex ...`;
+PowerShell `$env:ORCA_STRIGOV_WORKER='1'; codex ...` in that child terminal.
+Never set it in the coordinator or persist it in User/Machine environment.
+It exempts workers from this plugin's coordinator hooks, not from the live
+assignment, worker lifecycle or no-delegation boundary.
 
 ```bash
 H=$(orca terminal create --worktree active --title "<role>-<phase>" --command "<argv>" --json | jq -r .result.terminal.handle)
@@ -205,12 +212,12 @@ Bridge down or doctor not `ready` → fall back to the default `astra` profile.
 
 ## 9. Windows (native, no WSL)
 
-Installed with `install.ps1` (see `docs/install-windows.md`). Differences from macOS that the coordinator must apply:
+Load the complete plugin (see `docs/install-plugin.md` and `docs/install-windows.md`). Differences from macOS that the coordinator must apply:
 
-- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7 — both work). Every workspace script has a native PowerShell port: `& "$env:ORCA_DEV_HOME\bin\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `collect-worker-fleet.ps1`, `run-check.ps1`, `protocol-state.ps1`), same arguments, exit codes and output as the bash originals. Keep their `bin/lib/` dependencies. For Path B, inspect `$LASTEXITCODE` immediately after the readiness helper and inject only on success; nonzero stops the launch sequence for the evidence/recovery checks in §6. Never call `bash` or the extension-less originals on Windows: `bash` there is the WSL launcher in `System32`. `verify-gate.ps1` runs the plan's `verify:` commands in a child PowerShell, so write them as PowerShell / native commands (`pytest -q`, `npm test`), not as bash one-liners. Paths you write into prompts must be absolute Windows paths (`C:\…`) because the workers run native CLIs.
+- Your shell is PowerShell (Windows PowerShell 5.1 or pwsh 7). Every workspace script has a native PowerShell port: `& "$BIN\<script>.ps1" …` (`sdd-workspace.ps1`, `review-package.ps1`, `verify-gate.ps1`, `wait-agent-ready.ps1`, `wait-worker-event.ps1`, `collect-worker-fleet.ps1`, `run-check.ps1`, `protocol-state.ps1`, `coordinator-session.ps1`), with the same contracts as the POSIX originals. Keep `bin/lib/` dependencies. For Path B inspect `$LASTEXITCODE` immediately after readiness and inject only on success; otherwise follow §6. Never call `bash` or the extension-less originals on native Windows: `bash` can be the WSL launcher. `verify-gate.ps1` executes native PowerShell commands. Pass workers absolute Windows paths. Contract parity does not substitute for the platform results in `docs/plugin-validation.md`.
 - `orca orchestration check --types "worker_done,escalation,question"` — quote comma-separated lists in PowerShell. Where a recipe pipes `--json` into `jq -r .result.terminal.handle`, use `(… --json | ConvertFrom-Json).result.terminal.handle` instead.
 - Path A works unchanged for `claude`; Codex still requires Path B for proven native multi-agent disabling, independent of hook trust. Path B argv is the same text; Antigravity (`agy`) on native Windows is unverified — if `agy` is missing, the implementer cascade continues with its fallback per `roles.md` and the gate/synthesizer fallbacks apply; say so once.
-- The skill is linked into `%USERPROFILE%\.codex\skills\orca-dev` (symlink or junction). Locate `bin\` through the verified Process `ORCA_DEV_HOME`. Before launch, this checkout's `install.ps1 -Check <repo>` reports its source/link, User value and Process value separately. When only Process is stale, restart Orca or use the explicitly authorized checkout in a process-only `$env:ORCA_DEV_HOME` assignment; do not rewrite real User settings. Never use Git Bash `readlink -f` to infer a junction target. Installation refuses ordinary directories and writes through foreign links; check mode never repairs them.
+- Resolve `$BIN` from the actual loaded plugin path, not a standalone skill junction or inherited `ORCA_DEV_HOME`. `install.ps1 -Check <repo>` is a read-only prerequisite/conflict check, not plugin registration. The explicit `-LegacySkill` option is for old installations only and must not be used alongside this plugin.
 - The GPT Pro bridge (`codex-chatgpt-web`) has a native Windows build: available when opted into. Preflight per §7.
 - Trust files live in the same places under `%USERPROFILE%` (`.claude.json`, `.gemini\antigravity-cli\settings.json`, `.codex\config.toml`); Claude Code keys `projects[]` with forward slashes (`C:/repo`), Antigravity's `trustedWorkspaces` with backslashes — `install.ps1` handles both. `install.ps1 -Repo <path>` handles the repo and its git worktrees; a parallel track's child worktree still needs `install.ps1 -Repo <track-path>` before the first dispatch (same rule as macOS).
 
@@ -257,10 +264,10 @@ for C5 provenance and plan revisions; model family comes from roles.md, includin
 cross-family CLI launches. Do not invent missing facts or upgrade an old run.
 
 ```sh
-"$ORCA_DEV_HOME/bin/protocol-state" validate "$dir/proposal.json" "$dir/resume.json"
+"$BIN/protocol-state" validate "$dir/proposal.json" "$dir/resume.json"
 ```
 
-Native Windows uses `& "$env:ORCA_DEV_HOME/bin/protocol-state.ps1" validate ...`.
+Native Windows uses `& "$BIN\protocol-state.ps1" validate ...`.
 Check exit 0 **and** the returned decision/barrier before the exact proposed
 effect. Stage only authorized paths before the gate/package freeze, then use
 `prepare-commit` on that accepted snapshot; after Git, `confirm-commit` with the full actual

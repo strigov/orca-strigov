@@ -1,13 +1,17 @@
 ---
 name: orca-dev
-description: "Coordinate implementation in Orca when a coordinator user asks to implement, code or build a feature (реализуй, запили), or invokes $orca-dev. Excludes dispatched workers and standalone reviews; repository maintenance may use direct edits."
+description: "Coordinate software implementation in Orca (реализуй, запили, implement, build), including continuation of an existing development objective. The main session delegates code, research and reviews. Excludes live dispatched workers, standalone reviews and maintenance of this plugin."
 ---
 
 # orca-dev: coordinator router
 
-You are the coordinator only when this session is an Orca coordinator. A worker
+For a main-session implementation request, you ARE the development coordinator.
+No existing Run, repeated skill tag or explicit word "supervise" is required.
+Read the shared [role contract](../orchestration/role-contract.md) first: a worker
 with a live Task/Dispatch follows that assignment instead; never recursively
-activate this skill. Models, efforts and fallback eligibility live exclusively in
+activate this skill. Bind and restore the session through
+[coordinator-session.md](coordinator-session.md), before research or dispatch.
+Models, efforts and fallback eligibility live exclusively in
 [roles.md](roles.md). The current coordinator keeps its actual session model.
 This update does not promote a specialist model into the coordinator role.
 
@@ -42,8 +46,9 @@ BINDING into a new report. A context-retained worker can still write a fresh rep
 
 ## Load only the relevant coordinator material
 
-At startup read roles.md and coordinator-core.md. Obtain the actual executable's
-reference with `orca skills get orchestration`, identify the current OS/shell,
+At startup read roles.md, coordinator-core.md and the sibling
+[orchestration skill](../orchestration/SKILL.md). Resolve the actual executable,
+check its version against the bundled baseline, identify the current OS/shell,
 and use the relevant setup sections of orca-recipes.md. Do not preload all worker
 prompts, historical bridge incidents, or both OS recipes.
 
@@ -76,9 +81,9 @@ do not redispatch implementation merely because a summary is incomplete.
 
 One skill and one semantic protocol support both platforms. POSIX uses the
 existing Bash/Python helpers; native Windows uses their .ps1 counterparts. Resolve
-this checkout's helper paths once. Verify an inherited ORCA_DEV_HOME using the
-installer's read-only check and distinguish installed target, User and Process
-values on Windows. Do not combine native Windows, WSL and POSIX paths in one task.
+the actually loaded plugin's helper paths once, as coordinator-core describes.
+An old standalone skill link or inherited ORCA_DEV_HOME must not select a different
+version of the helpers. Do not combine native Windows, WSL and POSIX paths in one task.
 
 Pass each worker the actual shell, absolute helper/contract paths and existing
 workspace. Historical Windows bridge advice is relevant only to an opted-in bridge
@@ -87,6 +92,11 @@ The assembly utility is a maintenance-time Python tool, not a new runtime depend
 for native Windows workers or coordinators.
 
 ## State and completion
+
+After every accepted result and commit, execute the next authorized transition.
+A progress summary, created branch, empty inbox or settled wave is not a final
+answer. Publish a session checkpoint after C6 validation; the stop guard must
+either verify completion or expose the still-pending action/human blocker.
 
 Use the state line and reporting cadence in coordinator-core.md. Report meaningful
 transitions, availability substitutions and unresolved barriers; do not narrate

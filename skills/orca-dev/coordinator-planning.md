@@ -7,7 +7,7 @@ role/profile selection. No runtime barrier is waived by this split.
 
 ### Step 1 — plan (writer)
 
-0. `install.sh --check <repo>` (from the skill's repo, `$BIN/../install.sh`; on Windows `& "$env:ORCA_DEV_HOME\install.ps1" -Check <repo>`); a WARN about trust or hooks → `install.sh --repo <repo>` (Windows: `install.ps1 -Repo <repo>`) or ask the user — a blocked worker costs a dispatch attempt.
+0. `install.sh --check <repo>` (from the loaded plugin, `$BIN/../install.sh`; on Windows `& "$PluginDir\install.ps1" -Check <repo>`). A WARN about trust/hooks requires the user's authorization or existing explicit approval for that setup change. `--repo` / `-Repo` grants repository trust; it does not install the plugin or approve hooks. A duplicate-skill warning requires resolving discovery, not another legacy installation. Never silently change global setup to clear a worker blocker.
 1. Choose the planning profile per `roles.md` (default: `astra`; `pro` only on explicit user opt-in; `opus` only as explicit user override). State which profile you picked.
 2. `orca orchestration run-create --objective "<slug>" --json`; keep the run id — you write it into the plan frontmatter as `orca_run:` at the plan commit.
 3. Resolve the intended plan path and create its workspace with `sdd-workspace --name <slug>` (native Windows uses `.ps1`). Save the user's actual

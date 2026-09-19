@@ -106,5 +106,23 @@ class InstallTests(unittest.TestCase):
         self.assertIn('git not on PATH' if WINDOWS else 'python3 not on PATH', out)
         self.assertEqual(directory_state(f.home), before)
 
+    def test_plugin_preflight_does_not_recreate_standalone_skill(self):
+        f = self.f
+        before = directory_state(f.home)
+        rc, out, err = f.install(check=True, legacy=False)
+        self.assertIn('complete plugin source', out, (rc, out, err))
+        self.assertFalse(f.target.exists())
+        self.assertEqual(directory_state(f.home), before)
+        setting = f.env_file.read_bytes()
+        f.install(legacy=False)  # Explicit repo trust, but not legacy skill installation.
+        self.assertFalse(f.target.exists())
+        self.assertEqual(f.env_file.read_bytes(), setting)
+        f.link(f.target, f.checkout / 'skills/orca-dev')
+        before = directory_state(f.home)
+        rc, out, err = f.install(check=True, legacy=False)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn('potential duplicate skill', out)
+        self.assertEqual(directory_state(f.home), before)
+
 
 if __name__ == '__main__': unittest.main()

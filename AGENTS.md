@@ -1,7 +1,8 @@
 # orca-strigov: repository maintenance
 
-This repository contains the orca-dev coordinator skill, worker templates,
-POSIX helpers, native PowerShell helpers and their tests.
+This repository is the orca-strigov plugin: three coordinated skills (orca-dev,
+orchestration, orca-cli), worker templates, hooks, POSIX helpers, native
+PowerShell helpers and their tests.
 
 ## Choose the correct context
 
@@ -19,7 +20,9 @@ above permits direct authorized edits here. Never emulate unavailable Orca recei
 Use skills/orca-dev/roles.md for model identities, efforts, families and allowed
 fallbacks; keep those facts out of other runtime instructions. Use
 skills/orca-dev/runtime-contracts.md for machine interfaces and report binding.
-Use the version-matched live Orca orchestration reference for CLI lifecycle.
+Use the bundled orchestration references and their upstream.md version record
+for CLI lifecycle. Verify actual syntax with the selected CLI's --help and
+receipts; do not re-import conflicting stock role/handoff policies at runtime.
 Read platform installation notes when changing installation or launch behavior;
 read the corresponding contract when changing a runtime helper.
 

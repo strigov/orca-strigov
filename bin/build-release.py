@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -10,15 +11,20 @@ import zipfile
 
 
 RELEASE_PATHS = (
+    Path(".codex-plugin/plugin.json"),
+    Path("THIRD_PARTY_NOTICES.md"),
+    Path("hooks"),
     Path("README.md"),
     Path("README.ru.md"),
     Path("assets/readme"),
     Path("install.sh"),
     Path("install.ps1"),
-    Path("skills/orca-dev"),
+    Path("skills"),
     Path("bin/lib"),
     Path("bin/collect-worker-fleet"),
     Path("bin/collect-worker-fleet.ps1"),
+    Path("bin/coordinator-session"),
+    Path("bin/coordinator-session.ps1"),
     Path("bin/protocol-state"),
     Path("bin/protocol-state.ps1"),
     Path("bin/review-package"),
@@ -34,6 +40,8 @@ RELEASE_PATHS = (
     Path("bin/wait-worker-event"),
     Path("bin/wait-worker-event.ps1"),
     Path("docs/install-windows.md"),
+    Path("docs/install-plugin.md"),
+    Path("docs/plugin-validation.md"),
     Path("docs/runtime-platforms.md"),
     Path("docs/controlled-pipeline-validation.md"),
 )
@@ -42,6 +50,7 @@ RELEASE_PATHS = (
 EXECUTABLE_PATHS = frozenset((
     Path("install.sh"),
     Path("bin/collect-worker-fleet"),
+    Path("bin/coordinator-session"),
     Path("bin/protocol-state"),
     Path("bin/review-package"),
     Path("bin/run-check"),
@@ -89,7 +98,8 @@ def build_release(repo, version, output):
         raise ValueError("output ZIP must be outside the source checkout")
 
     files = release_files(repo)
-    prefix = "orca-dev-{}/".format(version)
+    # The outer folder must match plugin.json.name, independently of ZIP version.
+    prefix = "orca-strigov/"
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for relative in files:
@@ -99,7 +109,14 @@ def build_release(repo, version, output):
             info.create_system = 3
             mode = 0o755 if relative in EXECUTABLE_PATHS else 0o644
             info.external_attr = (0o100000 | mode) << 16
-            archive.writestr(info, source.read_bytes())
+            data = source.read_bytes()
+            if relative == Path(".codex-plugin/plugin.json"):
+                manifest = json.loads(data)
+                if manifest.get("name") != "orca-strigov":
+                    raise ValueError("unexpected plugin identity")
+                manifest["version"] = version
+                data = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+            archive.writestr(info, data)
 
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     checksum = output.with_name(output.name + ".sha256")

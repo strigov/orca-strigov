@@ -26,4 +26,15 @@ No plan, no review workers, one worker. 1. Branch check as in Step 2 (never comm
 
 ## Before Step 1 — in-progress plans
 
-Inspect `docs/plans/*.md` (or the repo's plan dir) for top-level `status: in-progress`, including plans whose phases are all committed. A top-level `done` is excluded only when final-review/delivery evidence and the completion commit are confirmed per Durable progress; prepared or unproven markers still count as unfinished. None → Step 1. One → "Found in-progress plan: <slug> (phase <id> — <scope>). Continue or start new?" — wait. Several → list, ask. On continue: `run-use --id <orca_run>` (or `run-create` if missing, then record it), skip Steps 1–2, apply Durable-progress checks, resume at the right step.
+First restore this session's binding and unfinished barrier. If the user already
+asked to continue that objective, or this is the same session after compaction,
+resume it without asking again. Inspect `docs/plans/*.md` (or the repo's plan
+directory) for top-level `status: in-progress`, including plans whose phases are
+all committed. A prepared/unproven `done` still counts as unfinished until final
+review, delivery and completion commit are confirmed. With no bound/requested
+objective: no unfinished plan → Step 1; one unrelated or ambiguously related
+plan → ask whether to continue or start new; several plausible plans → ask which.
+Do not silently adopt somebody else's Run or revive an unrelated plan.
+On authorized continuation, use `run-use --id <orca_run>` (or create and record
+a Run if absent), skip completed planning steps, reconcile C6 and resume its
+actual pending stage. Never re-dispatch an already completed implementation.

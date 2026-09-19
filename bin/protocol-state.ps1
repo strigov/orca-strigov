@@ -431,6 +431,7 @@ function P-Barrier($s,$phases) {
   if ($s.step -ceq 'final-review') { return 'awaiting_final_review' };if ($s.step -ceq 'delivery') { return 'awaiting_delivery' };if ($s.step -ceq 'completion') { return 'awaiting_completion_commit' }
   if ($s.mode -ceq 'quickfix') { if ('quickfix' -cin $roles) { return 'awaiting_commit' };return 'awaiting_implementation' }
   if ($null -eq $s.phase) { if ('plan-reviewer' -cin $roles) { return 'awaiting_commit' };return 'awaiting_plan_review' }
+  if (-not @($roles | Where-Object { $_ -cin @('implementer','frontend-implementer','gate','review-primary','review-control') }).Count) { return 'awaiting_implementation' }
   if ('gate' -cnotin $roles) { return 'awaiting_gate' };if (-not (P-Subset @('review-primary','review-control') $roles)) { return 'awaiting_review' };return 'awaiting_commit'
 }
 function P-Final($s,$phases,$committed) {
@@ -610,6 +611,8 @@ function P-Validate($data) {
   }
   $s['barrier']=P-Barrier $s $phases;return @{state=$s;decision=$decision}
 }
+
+if ($MyInvocation.InvocationName -eq '.') { return }
 
 try {
   P-Require ($args.Count -in @(2,3) -and $args[0] -ceq 'validate') 'usage: protocol-state validate INPUT_JSON [RESUME_OUT]'

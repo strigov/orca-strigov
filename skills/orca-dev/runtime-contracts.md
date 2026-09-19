@@ -5,7 +5,8 @@
 `bin/run-check run SPEC_JSON` blocks until exit/interruption. Native Windows uses
 `bin/run-check.ps1` with the same positional arguments; it needs PowerShell 5.1
 or 7 on Windows 10+, not Python. Bash uses Python 3 stdlib. Resolve these paths
-from the current checkout or a process-only `ORCA_DEV_HOME`.
+from the actual loaded plugin's `bin/`, not a stale standalone skill or global
+`ORCA_DEV_HOME`. See coordinator-core.md for path resolution.
 
 Create the plan workspace with the existing `sdd-workspace` entry point first.
 Write a UTF-8 JSON file (not interpolated shell code) with this shape:
@@ -118,8 +119,8 @@ snapshot/evidence policy; C3-only requests retain their original behavior.
 The owner normally blocks in one shell call. If its harness requires a command
 terminal, use the same runner there and the current, verified Orca
 `terminal wait --terminal <handle> --for exit --timeout-ms ...` interface for
-that terminal. This is not an arbitrary PID API. Read `orca skills get
-orchestration` from the live executable for worker lifecycle; settlement uses
+that terminal. This is not an arbitrary PID API. Read the bundled
+`../orchestration/SKILL.md` and references for worker lifecycle; settlement uses
 `orchestration check --wait`, never a new scheduler, monitoring agent or model
 timer. Keep heartbeat/ask/check/worker_done obligations from the live preamble.
 After a diagnostic event, use one bounded diagnosis and the recorded policy;
@@ -745,3 +746,69 @@ Synthetic shared behavior fixtures: `python3 -B -m unittest discover -s tests
 -p test_worker_wait.py -v`; Windows uses `python` and `ORCA_TEST_SHELL` selecting
 each native PowerShell. The fixtures launch only a finite local fake CLI and
 write in owned temporary directories; they never access real Orca or settings.
+
+## C8 — coordinator session continuity and stop guard
+
+`bin/coordinator-session ACTION REQUEST_JSON`; native Windows uses
+`bin/coordinator-session.ps1` with the same arguments. `hook` instead reads one
+Codex hook payload from stdin. Helpers never call Orca, dispatch, consume the
+inbox, commit, cancel workers or change user configuration. Operational use and
+the role boundary are in [coordinator-session.md](coordinator-session.md).
+
+All action requests contain `worktree` (absolute actual Git root) and
+`session_id` (actual Codex ID; defaults to `CODEX_THREAD_ID`, and must match it
+when present). IDs match `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. Workers with
+process-local `ORCA_STRIGOV_WORKER=1` cannot bind. Path validation rejects
+symlinks/reparse points; only standard POSIX system aliases are normalized.
+
+| Action | Additional input | Result |
+|---|---|---|
+| `bind` | `workspace`: existing directory below `.superpowers/sdd/`, not `.sessions`; `objective`: nonempty authorized scope | Idempotent binding of one session/objective/workspace; a different existing binding is rejected |
+| `checkpoint` | `proposal:{path,sha256}`: immutable original C6 input inside that workspace | Revalidate through C6, bind the same Run, save pending barrier and admitted plan/ledger paths |
+| `hold` | `kind`: `user_pause`, `needs_authority`, `product_decision`, `blocked` or `status_only`; nonempty `reason`; `evidence:{path,sha256}` | Pause as **incomplete**, with exact hashed actual request/blocker evidence |
+| `resume` | None | Clear an explicit hold after the user resolves/resumes it; reset no-progress counter |
+| `status` | None | Read-only current binding |
+
+Action success emits the JSON binding and exit 0. Invalid requests emit
+`{"error":"..."}` and exit 2, without replacing existing binding bytes. State
+is atomically saved in `.superpowers/sdd/.sessions/<session-id>.json` with
+`schema_version:1`, `role:"coordinator"`, identities, objective, `status`
+(`active`/`held`), `orca_run`, `proposal`, meaningful `progress`, `stop_attempts`
+and `hold`. Checkpoints may add validated `bookkeeping` paths. A generated
+continuation's SHA-256 is saved as `continuation_sha256`, so its automatic
+UserPromptSubmit does not reset the no-progress counter.
+
+`hooks/hooks.json` uses the actual plugin root and native `commandWindows`:
+
+- SessionStart (startup/resume/clear/compact) and UserPromptSubmit restore a
+  bound role. Unbound Orca sessions get routing guidance, not a guessed binding.
+- PreToolUse denies direct apply_patch/Edit/Write/NotebookEdit outside the
+  bound workspace and validated plan/ledger. A stale plan's metadata can still
+  be repaired, but cannot satisfy Stop until a new valid checkpoint. Other
+  tools receive guidance: this is **not an arbitrary-shell/MCP sandbox**.
+- Stop revalidates C6 and current Git/artifact facts. Completion requires a
+  quickfix `confirm-commit` or plan `complete` (separate completion commit),
+  barrier `complete`, no pending assignment, no unresolved writes or findings.
+  Saved fleet receipts are checkpoint evidence, not a fresh live Orca query;
+  collect fresh C6 fleet evidence immediately before a completion checkpoint.
+- A historical `active` assignment already in accepted report history is
+  settled; an unaccepted active assignment requires reconciliation/wait, never
+  another launch. Heartbeat, stale and duplicate receipts cannot prove completion.
+- Premature Stop returns `decision:block` and the pending action. After three
+  attempts without meaningful checkpoint progress, the fourth requests an
+  explicit **incomplete** no-progress escalation. It does not loop forever or
+  report success. A new real user prompt resets the counter, not a persistent
+  blocker/pause. `status_only` clears on that next prompt.
+- Interrupt records a user pause. A held Stop checks any supplied evidence hash
+  and permits only an incomplete response. No worker is interrupted by C8.
+
+Worker/native-subagent and unrelated unbound sessions are exempt. Trusted,
+enabled plugin hooks and an actual binding are prerequisites; this does not
+prevent user interruption, process exit, exhausted provider budgets, unbound
+role mistakes or dishonest mutation of coordinator-owned state. Hook validation
+errors block Stop/direct edits; other events surface a diagnostic. No fictitious
+runtime enforcement or security-boundary guarantee is made.
+
+Shared positive/negative fixtures: `python3 -B -m unittest discover -s tests
+-p test_coordinator_session.py -v`. They use real local C6/Git validation and
+synthetic Orca/hook input in owned temporary worktrees, not live model workers.

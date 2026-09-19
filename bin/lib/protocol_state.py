@@ -602,6 +602,11 @@ def barrier(state, phases):
     if state["step"] == "completion": return "awaiting_completion_commit"
     if state["mode"] == "quickfix": return "awaiting_commit" if "quickfix" in roles else "awaiting_implementation"
     if state["phase"] is None: return "awaiting_commit" if "plan-reviewer" in roles else "awaiting_plan_review"
+    # An untouched phase starts with a writer. A resumed phase with downstream
+    # acceptance must not regress to implementation when an older compact
+    # checkpoint retained gate/reviews rather than the original writer report.
+    if not roles.intersection(("implementer", "frontend-implementer", "gate", "review-primary", "review-control")):
+        return "awaiting_implementation"
     if "gate" not in roles: return "awaiting_gate"
     if not {"review-primary", "review-control"} <= roles: return "awaiting_review"
     return "awaiting_commit"
