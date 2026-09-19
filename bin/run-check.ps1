@@ -51,7 +51,6 @@ public sealed class CheckJob : IDisposable {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool MoveFileEx(string from, string to, uint flags);
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ReplaceFile(string to, string from, string backup, uint flags, IntPtr exclude, IntPtr reserved);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern uint GetFinalPathNameByHandle(IntPtr file, StringBuilder path, uint length, uint flags);
   IntPtr job, process;
   public uint Pid { get; private set; }
@@ -65,17 +64,15 @@ public sealed class CheckJob : IDisposable {
     from = LongPath(from); to = LongPath(to);
     var watch = System.Diagnostics.Stopwatch.StartNew();
     while (true) {
-      // ReplaceFile permits existing readers to keep the old complete record.
-      // No IGNORE_ACL/MERGE flags; WRITE_THROUGH is unsupported by this API.
-      if (ReplaceFile(to, from, null, 0, IntPtr.Zero, IntPtr.Zero)) return;
+      // One same-volume rename, like POSIX os.replace: no missing-name window
+      // from ReplaceFile's multiple renames. Compatible readers keep the old
+      // complete incarnation. Temp and destination are in the same owned dir;
+      // COPY_ALLOWED is deliberately absent. REPLACE_EXISTING | WRITE_THROUGH.
+      if (MoveFileEx(from, to, 9)) return;
       int error = Marshal.GetLastWin32Error();
-      if (error == 2) { // First publication only; never overwrite a raced-in file.
-        if (MoveFileEx(from, to, 8)) return;
-        error = Marshal.GetLastWin32Error();
-      }
       long remaining = retryMilliseconds - watch.ElapsedMilliseconds;
       // A short-lived incompatible handle can deny either file. Keep the same
-      // temp bytes; permanent errors and partial ReplaceFile errors fail closed.
+      // temp bytes; permanent errors fail closed without deleting either name.
       if ((error != 5 && error != 32) || remaining <= 0)
         throw new Win32Exception(error, "atomic replacement failed (Win32 " + error + "); temporary path: " + from);
       System.Threading.Thread.Sleep((int)Math.Min(10, remaining));
@@ -171,7 +168,7 @@ function Read-Json([string]$path, [Diagnostics.Stopwatch]$watch = $null, $timeou
       $stream = [IO.File]::Open((Safe-Path $path), 'Open', 'Read', ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
       break
     } catch [IO.IOException] {
-      # ReplaceFile can expose the new name before its exclusive handle closes.
+      # A publisher or incompatible reader may briefly hold an exclusive handle.
       # Retry only sharing violations; ACL, missing-file and parse errors stand.
       $remaining = 250 - $opening.Elapsed.TotalMilliseconds
       if ($watch -and $null -ne $timeout) { $remaining = [Math]::Min($remaining, ($timeout - $watch.Elapsed.TotalSeconds) * 1000) }

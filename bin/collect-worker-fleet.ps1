@@ -53,6 +53,14 @@ exit $LASTEXITCODE
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $inputEncoding = $null
+    if ($null -ne $psi.PSObject.Properties['StandardInputEncoding']) {
+        $psi.StandardInputEncoding = $utf8
+    } else {
+        # .NET Framework uses Console.InputEncoding and flushes its preamble
+        # during Start(), before StandardInput.Close(). Restore the caller below.
+        $inputEncoding = [Console]::InputEncoding
+    }
     # Only this read-only child's identity is absent. Keep parent binding and
     # connection/auth/environment settings; prohibit active-pane guessing.
     $psi.EnvironmentVariables.Remove('ORCA_TERMINAL_HANDLE')
@@ -63,13 +71,20 @@ exit $LASTEXITCODE
     $out = [IO.File]::Open($script:receipt, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
     $err = [IO.File]::Open($stderr, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
     try {
-        Need ($process.Start()) 'Orca CLI did not start'
+        try {
+            if ($null -ne $inputEncoding) { [Console]::InputEncoding = $utf8 }
+            Need ($process.Start()) 'Orca CLI did not start'
+        } finally {
+            if ($null -ne $inputEncoding) { [Console]::InputEncoding = $inputEncoding }
+        }
         $process.StandardInput.Close()
         $outCopy = $process.StandardOutput.BaseStream.CopyToAsync($out)
         $errCopy = $process.StandardError.BaseStream.CopyToAsync($err)
         $process.WaitForExit()
-        $outCopy.GetAwaiter().GetResult()
-        $errCopy.GetAwaiter().GetResult()
+        # PowerShell can expose Task<VoidTaskResult>'s internal result. Only
+        # the parsed receipt below may enter this function's output pipeline.
+        [void]$outCopy.GetAwaiter().GetResult()
+        [void]$errCopy.GetAwaiter().GetResult()
         $code = $process.ExitCode
     } finally { $out.Dispose(); $err.Dispose(); $process.Dispose() }
     Need ($code -eq 0) "Orca CLI exit $code; inspect $stderr"

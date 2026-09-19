@@ -101,6 +101,24 @@ class WorkerFleetTests(unittest.TestCase):
         self.assertEqual(response["page_count"], 1)
         self.assertEqual(len(calls), 1)
 
+    def test_empty_stdin_and_caller_encoding_survive_success_and_cli_error(self):
+        probe = self.root / "input-encoding.json"
+        if os.name == "nt":
+            self.argv = self.argv[:5] + [str(ROOT / "tests/fixtures/orca_helper_encoding.ps1"),
+                                        self.argv[5], str(self.request), str(probe)]
+        for code in (0, 7):
+            with self.subTest(cli_exit=code):
+                self.spec["output_dir"] = str(self.root / ("encoding-%s" % code))
+                self.journal.write_text("", encoding="utf-8")
+                response, calls = self.invoke([dict(page(), exit=code)], 1 if code else 0)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual((self.root / "stdin-000001.bin").read_bytes(), b"")
+                if code:
+                    self.assertIn("Orca CLI exit 7", response["reason"])
+                    self.assertFalse((Path(self.spec["output_dir"]) / "fleet.json").exists())
+                if os.name == "nt":
+                    self.assertEqual(json.loads(probe.read_bytes()), dict(code_page=65001, preamble="EF-BB-BF"))
+
     def test_partial_wrong_scoped_or_corrupt_inventory_never_publishes_manifest(self):
         cases = []
         for scope in [dict(source="bound", run="run-fixture"), dict(source="flag", run="run-fixture"),

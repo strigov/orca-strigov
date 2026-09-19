@@ -22,7 +22,7 @@ def check(messages=(), **fields):
     if messages:
         result["deliveryId"] = "delivery-fixture"
     result.update(fields)
-    return dict(command="check", response=envelope(result))
+    return dict(command="check", stdin_closed=True, response=envelope(result))
 
 
 def worker(dispatch="dispatch-fixture", verdict="live", required=False, kind="none", **extra):
@@ -35,7 +35,7 @@ def fleet(workers=None, **paging):
     rows = [worker()] if workers is None else workers
     page = dict(total=len(rows), hasMore=False, nextCursor=None)
     page.update(paging)
-    return dict(command="worker-list", response=envelope(dict(
+    return dict(command="worker-list", stdin_closed=True, response=envelope(dict(
         scope=dict(source="flag", run="run-fixture"), workers=rows, page=page)))
 
 
@@ -96,6 +96,25 @@ class WorkerWaitTests(unittest.TestCase):
         self.assertIn("worker_done,escalation,question", calls[0])
         self.assertIn("540000", calls[0])
         self.assertIn("terminal-fixture", calls[0])
+
+    def test_empty_stdin_and_caller_encoding_survive_success_and_cli_error(self):
+        probe = self.root / "input-encoding.json"
+        if os.name == "nt":
+            self.argv = self.argv[:5] + [str(ROOT / "tests/fixtures/orca_helper_encoding.ps1"),
+                                        self.argv[5], str(self.request), str(probe)]
+        for code in (0, 7):
+            with self.subTest(cli_exit=code):
+                self.spec["output_dir"] = str(self.root / ("encoding-%s" % code))
+                self.journal.write_text("", encoding="utf-8")
+                step = dict(check([MESSAGE]), exit=code)
+                response, calls = self.invoke([step], 1 if code else 0, "error" if code else "delivery")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual((self.root / "stdin-000001.bin").read_bytes(), b"")
+                self.assertEqual(Path(response["receipt"]).read_bytes(), (self.root / "emitted-000001.bin").read_bytes())
+                if code:
+                    self.assertIn("Orca CLI exit 7", response["reason"])
+                if os.name == "nt":
+                    self.assertEqual(json.loads(probe.read_bytes()), dict(code_page=65001, preamble="EF-BB-BF"))
 
     def test_each_actionable_message_wakes_without_fleet_poll(self):
         # Subcases use separate output dirs; one shared cross-platform CLI fixture.

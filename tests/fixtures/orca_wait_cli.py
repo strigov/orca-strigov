@@ -19,9 +19,12 @@ for name, expected in step.get("environment", {}).items():
     if os.environ.get(name) != expected:
         sys.stderr.write("unexpected child environment: " + name + "\n")
         sys.exit(91)
-if step.get("stdin_closed") and sys.stdin.buffer.read() != b"":
-    sys.stderr.write("unexpected child stdin\n")
-    sys.exit(92)
+if step.get("stdin_closed"):
+    incoming = sys.stdin.buffer.read()
+    (journal.parent / ("stdin-%06d.bin" % (index + 1))).write_bytes(incoming)
+    if incoming:
+        sys.stderr.write("unexpected child stdin: " + incoming.hex() + "\n")
+        sys.exit(92)
 sys.stderr.write('{"_keepalive":true,"_heartbeat":true}\n')
 sys.stderr.flush()
 time.sleep(step.get("delay", 0))

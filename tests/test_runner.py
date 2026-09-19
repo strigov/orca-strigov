@@ -144,6 +144,28 @@ class RunnerBehavior:
         # payload must survive the actual child-shell stream without truncation.
         self.assertIn(b"B" * 180000, (rd / "stderr.log").read_bytes())
 
+    def test_status_name_stays_readable_across_replacements(self):
+        path, spec = self.fx.spec("import time;time.sleep(3)")
+        owner = self.fx.start(path)
+        until(lambda: self.status(spec)["state"] == "running", timeout=10)
+        samples, durations = 0, set()
+        deadline = time.monotonic() + 10
+        while owner.p.poll() is None and time.monotonic() < deadline:
+            # No retry after first publication: every open must see one whole
+            # old/new record, never ReplaceFile's transient missing name.
+            record = self.status(spec)
+            self.assertEqual(record["run_id"], spec["run_id"])
+            self.assertIn(record["state"], ("running", "exited"))
+            durations.add(record["duration_seconds"])
+            samples += 1
+        self.assertGreater(samples, 10)
+        self.assertGreater(len(durations), 1, "must read across real publications")
+        reply = owner.finish()
+        self.assertEqual(reply[0], 0, reply)
+        result = read_json(Path(spec["run_dir"]) / "result.json")
+        self.assertEqual(self.status(spec), result)
+        self.assertTrue(result["cleanup_verified"] and result["logs_complete"])
+
     def test_diagnostic_wait_does_not_kill_or_claim_progress(self):
         path, s = self.fx.spec("import time;print('liveness');time.sleep(2.5);print('done')", no_progress_seconds=0.4)
         p = self.fx.start(path)
