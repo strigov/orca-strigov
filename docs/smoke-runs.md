@@ -35,6 +35,31 @@ All three runs: coordinator = Codex `gpt-5.6-sol` high in an Orca terminal, fixt
 | 6 | 3 | `wait-agent-ready codex` reported ready while Codex was still starting MCP servers; the Enter was swallowed, 50 min idle | codex marker also waits for the `Starting MCP servers` line to leave the screen |
 | 7 | 3 | `worker-start --agent claude` stalled once (4 min) | observation only; the coordinator recovered via Path B |
 
+## 2026-09-26 — Claude fresh-start delivery (Path A vs Path B)
+
+Host: macOS, Orca 1.4.211, Claude Code 2.1.282, trivial read-only task ("send one `worker_done`"),
+worktree `orca-strigov`, Run `run_b5180b721409`. Screens read with `terminal read --screen` 5/15/30 s after launch.
+
+| attempt | path | model/effort | receipt | transcript | screen | outcome |
+|---|---|---|---|---|---|---|
+| trial | A `worker-start` | opus / low | `ready`, `turn_started` | yes | paste chip, then answer | worker asked to confirm the pasted task |
+| 1 | A | opus / xhigh | `outcome_unknown`, `turn_start_unobserved` | none | 5 s: raw preamble text printed before the TUI; 15 s+: TUI, empty composer | prompt lost |
+| 2 | A | opus / xhigh | `ready`, `turn_started` | yes | paste chip | completed |
+| 3 | A | opus / xhigh | `outcome_unknown`, `turn_start_unobserved` | none | 5 s+: TUI, `❯ Try "…"` placeholder | prompt lost |
+| 4 | A | opus / xhigh | `ready`, `turn_started` | yes | paste chip | completed |
+| 5 | A | opus / xhigh | `outcome_unknown`, `turn_start_unobserved` | none | 5 s+: TUI, `❯ Try "…"` placeholder | prompt lost |
+| 6 | A | opus / xhigh | `ready`, `turn_started` | yes | paste chip | worker asked to confirm the pasted task |
+| B1–B3 | B: `terminal create` + `wait-agent-ready claude` (≈5 s, composer drawn) + `dispatch --inject` | opus / xhigh | `injected` | yes | composer ready at inject | 3/3 completed; `protocol-state claude-model-evidence` VALID, `claude-opus-5-5` |
+
+Result: the fresh Path A loss of the Bureau run (`run_f27aa24e8f01`, 2026-09-25) reproduces in 3 of 6
+starts — the startup banner is not required (attempts 3 and 5 had none). Orca writes the prompt before the
+Claude Code TUI accepts input; the TUI then starts with an empty composer. Recipes now launch fresh Claude
+workers on Path B and treat an empty composer as a lost prompt, not a retained draft.
+
+Separate observation: Claude Code 2.1.282 shows injected input as a paste. In 2 of 7 delivered starts the
+worker did not act and asked whether to execute the pasted Orca task. The prompt was delivered; this is not
+fixed here.
+
 ## Not observed yet
 
 Implementer `BLOCKED` → `diagnosis` → reasoning escalation (Luna handed in even the flock phase on the first try). Everything the 2026-09-02 audit changed (see `audit-2026-09-02.md`) is untested in a live run.

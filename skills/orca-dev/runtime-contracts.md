@@ -599,6 +599,45 @@ bound effective model; missing, mismatched or conflicting facts do not establish
 family. Keep this reference on accepted observations and author entries in
 `state.provenance`; C5 write receipts match those entries by path and raw hash.
 Neither original receipt is rewritten or enriched on disk.
+
+Orca reports `provider.model` for Codex but not for Claude, so two further model
+sources exist. Precedence: observed `provider.model`, then the one launch-derived
+fact below; any two facts that are present must agree (`conflicting actual model
+facts`). No source is the coordinator's word, saved argv, a comment or a message.
+
+- **Reuse chain (`origin_start`).** A `worker-start --terminal` reuse has a
+  `start` receipt with an empty `launch.effective`. The reference may then add
+  `origin_start:{path,sha256}`: the `worker-start` receipt that created that
+  terminal. Accepted only when the current `start` matches the Dispatch and has
+  one agent terminal effect `reused`; the origin has `ok:true`, the same `runId`,
+  another Dispatch, one agent terminal effect `created` with the same handle,
+  equal to `dispatch.assigneeHandle` and `worker.agentTerminalHandle`; both
+  receipts carry the same non-empty `prompt.processIncarnation`, which also
+  equals the observed `terminal.incarnationId` and ends `dispatch.processIncarnation`
+  (continuity: the process was not restarted); the origin `launch.effective.model`
+  is non-empty and its `agent` equals `provider.id`. The model is the origin one.
+- **Claude transcript (`model_evidence`).** Only for `provider.id:"claude"` with a
+  null `provider.model` and no `start`. The reference adds
+  `model_evidence:{kind:"claude-transcript",path,sha256}` pointing to an
+  immutable copy of the Claude Code session JSONL made by
+  `protocol-state claude-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [TRANSCRIPT]`
+  (the live file keeps growing, so C6 never hashes it). The builder searches
+  `$CLAUDE_CONFIG_DIR` or `~/.claude`, `projects/<worktree path with every
+  non-alphanumeric character as ->/*.jsonl` changed since `dispatch.createdAt`
+  minus five minutes; none or several matching sessions are UNVERIFIABLE.
+  C6 binds the copy: one non-sidechain user record contains the Orca preamble
+  whose `Your task ID is:` line equals `taskId`, whose every `--dispatch-id`
+  equals the Dispatch and every `--from` equals `assigneeHandle`. From there
+  until the next Orca preamble of another Dispatch, every record keeps that
+  `sessionId`, every present `cwd` lies inside `terminal.worktreePath` (whose
+  `terminal.worktreeId` equals the observed workspace), and assistant records
+  carry exactly one `message.model` (Claude Code's local `<synthetic>` stubs
+  are not model output). Several models are conflicting; none is UNVERIFIABLE.
+  Build it after the first assistant response; after settlement the copy also
+  proves no later model switch.
+
+`bind-dispatch` compares the actual model with the proposal exactly, except that
+a Claude alias from roles.md `MODEL_ALIASES` matches a full id with its prefix.
 Actual model-to-family mapping lives only in roles.md. C5 write provenance points
 to these hashed observations; unknown/mixed authors need explicit independent
 coverage, including cross-family agent/model launches.

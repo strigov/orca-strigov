@@ -1,10 +1,13 @@
 """C6 bounded deterministic protocol inputs and real owned Git commit barriers."""
 import copy
+import hashlib
 import json
+import os
 from pathlib import Path
+import re
 import unittest
 
-from support import ProtocolFixture, read_json, write_json
+from support import ProtocolFixture, command, read_json, write_json
 
 
 class ProtocolTests(unittest.TestCase):
@@ -253,6 +256,87 @@ class ProtocolTests(unittest.TestCase):
         results=f.validate_many(cases,previous=True)
         self.assertTrue(all(r[0]==0 for r in results),results)
         self.assertEqual(results[1][2]['state']['barrier'],'complete')
+
+    def pending_claude(self):
+        f = self.f; proposed = f.assignment(family='Anthropic'); proposed['dispatch_id'] = None
+        self.batch([(self.case(action='dispatch',proposed=proposed,artifact=f.snapshot_ref(),fleet=f.fleet()),0,'')])
+        return proposed, copy.deepcopy(f.state)
+
+    def test_reused_claude_terminal_inherits_origin_launch_model(self):
+        f = self.f; proposed, pending = self.pending_claude(); task = proposed['task_id']; d = 'ctx_reuse'
+        origin = f.launch_receipt('origin-task', 'ctx_origin', 'created', model=proposed['model'])
+        start = f.launch_receipt(task, d, 'reused'); observed = f.claude_observation(d, task)
+        def bind(obs=observed, first=origin, current=start):
+            return dict(schema_version=1, action='bind-dispatch', state=pending, observation=dict(obs, start=current, origin_start=first))
+        results = self.batch([
+            (bind(first=f.launch_receipt('origin-task', 'ctx_origin', 'created', model=proposed['model'], handle='term_other')), 1, 'origin terminal handle mismatch'),
+            (bind(obs=f.claude_observation(d, task, incarnation='restarted-incarnation')), 1, 'terminal incarnation changed'),
+            (bind(first=f.launch_receipt('origin-task', 'ctx_origin', 'created', model=proposed['model'], run_id='other-run')), 1, 'origin worker-start run mismatch'),
+            (bind(first=f.launch_receipt('origin-task', 'ctx_origin', 'created')), 2, 'missing origin launch model'),
+            (bind(obs=f.claude_observation(d, task, model=f.model('OpenAI'))), 1, 'conflicting actual model facts'),
+            (bind(), 0, '')])
+        self.assertEqual(results[-1]['state']['active']['dispatch_id'], d)
+        self.batch([
+            (bind(current=f.launch_receipt(task, d, 'reused', model=proposed['model'])), 1, 'origin chain needs a --terminal reuse'),
+            (dict(bind(), observation=dict(observed, origin_start=origin)), 1, 'origin worker-start without current worker-start'),
+            (bind(current=f.launch_receipt(task, d, 'created')), 2, 'terminal launch chain mismatch')])
+
+    def test_claude_transcript_evidence_binds_path_b_dispatch_model(self):
+        f = self.f; proposed, pending = self.pending_claude(); task = proposed['task_id']; d = 'ctx_pathb'
+        observed = f.claude_observation(d, task)
+        def evidence(dispatch=d, **kw):
+            f.serial += 1
+            return dict(f.reference(f.claude_transcript(f.workspace / ('transcript-' + str(f.serial) + '.jsonl'), task, dispatch, **kw)), kind='claude-transcript')
+        def bind(proof, obs=observed):
+            return dict(schema_version=1, action='bind-dispatch', state=pending, observation=dict(obs, model_evidence=proof))
+        good = evidence()
+        results = self.batch([
+            (bind(dict(good, sha256='0' * 64)), 1, 'hash mismatch'),
+            (bind(evidence(dispatch='ctx_other')), 2, 'no Orca preamble for this Dispatch'),
+            (bind(evidence(models=('claude-opus-5-5', 'claude-sonnet-5'))), 1, 'conflicting actual model facts'),
+            (bind(evidence(cwd=str(f.git.root.parent / 'elsewhere'))), 1, 'cwd outside Dispatch worktree'),
+            (bind(evidence(models=('claude-sonnet-5',))), 1, 'actual launch differs from proposal'),
+            (bind(good), 0, '')])
+        self.assertEqual(results[-1]['state']['active']['dispatch_id'], d)
+        later = [json.loads(line) for line in Path(evidence(dispatch='ctx_next', models=('claude-sonnet-5',))['path']).read_text().splitlines()]
+        self.batch([
+            (bind(evidence(models=('claude-opus-5-5', '<synthetic>', 'claude-opus-5-5'), after=later)), 0, ''),
+            (bind(good, obs=f.claude_observation(d, task, model='claude-opus-5-5')), 1, 'model evidence only for unreported Claude model'),
+            (dict(bind(good), observation=dict(observed, model_evidence=good, start=f.launch_receipt(task, d, 'created', model='opus'))), 1, 'model evidence with a launch receipt'),
+            (bind(evidence(models=())), 2, 'no model response after Orca preamble')])
+
+    def test_claude_model_evidence_builder_freezes_one_transcript(self):
+        f = self.f; task = 'fixture-task-builder'; d = 'ctx_builder'
+        home = f.workspace / 'claude-config'; folder = home / 'projects' / re.sub(r'[^a-zA-Z0-9]', '-', str(f.git.root))
+        folder.mkdir(parents=True)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(home)); observed = f.claude_observation(d, task)
+        def build(out):
+            rc, out_text, err = command(f.argv('protocol-state', 'claude-model-evidence', observed['path'], out), f.git.root, env=env)
+            rows = out_text.splitlines(); self.assertEqual(len(rows), 2, (rc, out_text, err))
+            return rc, rows[0], json.loads(rows[1])
+        self.assertEqual(build(f.workspace / 'none.jsonl')[:2], (2, 'UNVERIFIABLE'))
+        f.claude_transcript(folder / 'other.jsonl', task, 'ctx_unrelated')
+        source = f.claude_transcript(folder / 'session.jsonl', task, d)
+        rc, token, result = build(f.workspace / 'frozen.jsonl')
+        self.assertEqual((rc, token, result['model']), (0, 'VALID', 'claude-opus-5-5'), result)
+        frozen = Path(result['model_evidence']['path'])
+        self.assertEqual(frozen.read_bytes(), source.read_bytes())
+        self.assertEqual(result['model_evidence']['sha256'], hashlib.sha256(source.read_bytes()).hexdigest())
+        rc, token, result = build(frozen)
+        self.assertEqual((rc, result['reason']), (2, 'snapshot output must be a new absolute file'))
+        f.claude_transcript(folder / 'duplicate.jsonl', task, d)
+        rc, token, result = build(f.workspace / 'twice.jsonl')
+        self.assertEqual(rc, 2); self.assertIn('several Claude transcripts claim this Dispatch', result['reason'])
+        self.assertFalse((f.workspace / 'twice.jsonl').exists())
+
+    def test_full_claude_model_ids_resolve_by_provider_prefix(self):
+        f = self.f; artifact = f.snapshot_ref()
+        data = f.report_input(artifact=artifact); data['observation'] = f.observation(f.state['active'], model='claude-opus-5-5')
+        unknown = copy.deepcopy(data); unknown['observation'] = f.observation(f.state['active'], model='gpt-9-unlisted')
+        loose = copy.deepcopy(data); loose['observation'] = f.observation(f.state['active'], model='claude-')
+        results = self.batch([(self.case(unknown), 2, 'unknown actual model family'),
+                              (self.case(loose), 2, 'unknown actual model family'), (self.case(data), 0, '')])
+        self.assertEqual(results[-1]['state']['accepted'][-1]['family'], 'Anthropic')
 
 
 if __name__ == '__main__': unittest.main()

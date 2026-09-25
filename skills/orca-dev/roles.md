@@ -20,6 +20,15 @@ agent CLI can launch a model from another family.
 
 FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","claude-opus-4-6-thinking":"Anthropic","claude-sonnet-4-6":"Anthropic","gemini-3.8-flash-high":"Google","gemini-3.7-flash-high":"Google"}
 
+A model id absent above gets a family only from one exact provider prefix
+(a full Claude id such as `claude-opus-5-5` read from a verified transcript);
+any other unknown id stays unverifiable. A Claude CLI alias in an assignment
+matches an actual full id that starts with its listed prefix.
+
+FAMILY_PREFIXES: {"claude-":"Anthropic"}
+
+MODEL_ALIASES: {"opus":"claude-opus-","sonnet":"claude-sonnet-","fable":"claude-fable-","haiku":"claude-haiku-"}
+
 | family | agent CLI | Orca agent id | models used here |
 |---|---|---|---|
 | OpenAI | `codex` | `codex` | `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-astra`, `chatgpt-web/pro` (GPT Pro via the codex-chatgpt-web bridge — opt-in planning alternative only) |

@@ -1,5 +1,6 @@
 """Bounded real-process fixtures; installers use only an isolated test home."""
 import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -498,6 +499,40 @@ class ProtocolFixture(VerificationFixture):
     def start_receipt(self, assignment):
         return self.save(dict(ok=True, result=dict(runId=assignment['run_id'], taskId=assignment['task_id'],
             dispatchId=assignment['dispatch_id'], launch=dict(effective=dict(model=assignment['model'])))))
+
+    CLAUDE_HANDLE = 'term_fixture-agent'
+    CLAUDE_INCARNATION = 'fixture-incarnation'
+
+    def claude_observation(self, dispatch_id, task_id, status='running', model=None, incarnation=CLAUDE_INCARNATION):
+        """Orca worker-show shape for Claude: provider.model stays null, terminal facts are present."""
+        created = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')
+        return self.save(dict(ok=True, result=dict(
+            dispatch=dict(id=dispatch_id, taskId=task_id, runId='fixture-run', status=status, assigneeHandle=self.CLAUDE_HANDLE,
+                          retryOfDispatchId=None, processIncarnation='fixture-pty:' + incarnation, createdAt=created),
+            worker=dict(agentTerminalHandle=self.CLAUDE_HANDLE),
+            terminal=dict(handle=self.CLAUDE_HANDLE, incarnationId=incarnation, worktreeId='fixture-worktree', worktreePath=str(self.git.root)),
+            projection=dict(provider=dict(id='claude', model=model), workspace=dict(id='fixture-worktree'),
+                            evidence=dict(durable=True), liveness=dict(verdict='live')))))
+
+    def launch_receipt(self, task_id, dispatch_id, action, model=None, run_id='fixture-run', handle=CLAUDE_HANDLE, incarnation=CLAUDE_INCARNATION):
+        """worker-start: action 'created' launches a model; 'reused' (--terminal) carries none."""
+        agent = 'claude' if model else None
+        return self.save(dict(ok=True, result=dict(runId=run_id, taskId=task_id, dispatchId=dispatch_id,
+            launch=dict(requested=dict(agent=agent, model=model, effort=None), effective=dict(agent=agent, model=model, effort=None)),
+            effects=[dict(kind='terminal', role='agent', action=action, id=handle)], prompt=dict(processIncarnation=incarnation))))
+
+    def claude_transcript(self, path, task_id, dispatch_id, models=('claude-opus-5-5',), cwd=None, after=()):
+        """Claude Code session JSONL: Orca preamble, then assistant records carrying message.model."""
+        preamble = ('You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n'
+                    'Your task ID is: ' + task_id + '\n  orca orchestration send --from ' + self.CLAUDE_HANDLE +
+                    ' --type worker_done --task-id ' + task_id + ' --dispatch-id ' + dispatch_id + ' --outcome succeeded\n')
+        cwd = cwd or str(self.git.root)
+        rows = [dict(type='attachment', sessionId='fixture-session'),
+                dict(type='user', sessionId='fixture-session', cwd=cwd, message=dict(role='user', content=preamble))]
+        rows += [dict(type='assistant', sessionId='fixture-session', cwd=cwd, message=dict(role='assistant', model=m, content=[]))
+                 for m in models]
+        Path(path).write_text(''.join(json.dumps(r) + '\n' for r in list(rows) + list(after)), encoding='utf-8')
+        return Path(path)
 
     def fleet(self, workers=(), **paging):
         result = dict(scope=dict(source='all'), workers=list(workers), page=dict(total=len(workers), hasMore=False, nextCursor=None))

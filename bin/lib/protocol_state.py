@@ -214,27 +214,145 @@ def track_facts(state, phases):
                 require(not (set(p["produces"]) & (set(q["consumes"]) | set(q["produces"]))), "parallel producer/consumer conflict")
 
 
-def actual_model(observed, start=None):
+ORCA_PREAMBLE = "You are working inside Orca, a multi-agent IDE. You are a dispatched worker."
+
+
+def roles_fact(label):
+    return line_json((Path(__file__).parents[2] / "skills/orca-dev/roles.md").read_text(encoding="utf-8-sig"), label)
+
+
+def model_matches(proposed, actual):
+    # A Claude CLI alias names a model tier; the transcript records its full id.
+    prefix = roles_fact("MODEL_ALIASES").get(proposed)
+    return proposed == actual or (prefix is not None and actual.startswith(prefix))
+
+
+def launched_receipt(start, d):
+    raw = record(start); require(raw.get("ok") is True, "unsuccessful worker-start receipt", 2)
+    launched = raw.get("result", {})
+    need(launched, ("runId", "taskId", "dispatchId", "launch"))
+    require((launched["runId"], launched["taskId"], launched["dispatchId"]) ==
+            (d.get("runId"), d.get("taskId"), d.get("id")), "worker-start identity mismatch")
+    return launched
+
+
+def launch_terminal(launched, action):
+    rows = [e for e in launched.get("effects") or [] if e.get("kind") == "terminal" and e.get("role") == "agent"]
+    require(len(rows) == 1 and rows[0].get("action") == action and rows[0].get("id"), "terminal launch chain mismatch", 2)
+    return rows[0]["id"]
+
+
+def reused_model(observed, launched, origin):
+    """B1: a --terminal reuse inherits the model of the start that created that live process."""
+    d = observed.get("dispatch", {}); worker = observed.get("worker") or {}; terminal = observed.get("terminal") or {}
+    handle = launch_terminal(launched, "reused")
+    require(handle == d.get("assigneeHandle") == worker.get("agentTerminalHandle"), "reused terminal handle mismatch")
+    raw = record(origin); require(raw.get("ok") is True, "unsuccessful origin worker-start receipt", 2)
+    first = raw.get("result", {}); need(first, ("runId", "dispatchId", "launch"))
+    require(first["runId"] == d.get("runId") and first["dispatchId"] != d.get("id"), "origin worker-start run mismatch")
+    require(launch_terminal(first, "created") == handle, "origin terminal handle mismatch")
+    incarnation = (first.get("prompt") or {}).get("processIncarnation")
+    require(isinstance(incarnation, str) and incarnation, "missing terminal incarnation", 2)
+    require((launched.get("prompt") or {}).get("processIncarnation") == incarnation and
+            terminal.get("handle", handle) == handle and terminal.get("incarnationId", incarnation) == incarnation and
+            str(d.get("processIncarnation", ":" + incarnation)).endswith(":" + incarnation), "terminal incarnation changed")
+    effective = first["launch"].get("effective") or {}
+    require(isinstance(effective.get("model"), str) and effective["model"], "missing origin launch model", 2)
+    provider = (observed.get("projection", {}).get("provider") or {}).get("id")
+    require(effective.get("agent") == provider, "origin launch agent mismatch")
+    return effective["model"]
+
+
+def preamble_text(row):
+    if row.get("type") != "user" or row.get("isSidechain"): return None
+    content = (row.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = "\n".join(x.get("text", "") for x in content if isinstance(x, dict) and x.get("type") == "text")
+    return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
+
+
+def preamble_binds(text, d):
+    tasks = re.findall(r"^Your task ID is: (\S+)$", text, re.M)
+    dispatches = re.findall(r"--dispatch-id (ctx_[A-Za-z0-9_-]+)", text)
+    senders = re.findall(r"--from (term_[A-Za-z0-9_-]+)", text)
+    return (tasks == [d.get("taskId")] and dispatches and set(dispatches) == {d.get("id")} and
+            senders and set(senders) == {d.get("assigneeHandle")})
+
+
+def transcript_rows(text):
+    rows = []
+    for line in text.split("\n"):
+        if line.strip():
+            row = json.loads(line); require(isinstance(row, dict), "invalid Claude transcript record", 2); rows.append(row)
+    return rows
+
+
+def within(child, root):
+    child, root = os.path.normcase(os.path.abspath(child)), os.path.normcase(os.path.abspath(root))
+    return child == root or child.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def transcript_model(observed, rows):
+    """B2: the only model that answered after this Dispatch's Orca preamble in one Claude session."""
+    d = observed.get("dispatch", {}); terminal = observed.get("terminal") or {}
+    root = terminal.get("worktreePath")
+    require(isinstance(root, str) and os.path.isabs(root) and
+            terminal.get("worktreeId") == observed.get("projection", {}).get("workspace", {}).get("id"), "missing Dispatch worktree path", 2)
+    starts = [i for i, row in enumerate(rows) if preamble_text(row) is not None and preamble_binds(preamble_text(row), d)]
+    require(starts, "no Orca preamble for this Dispatch in Claude transcript", 2)
+    session = rows[starts[0]].get("sessionId"); models = set()
+    for row in rows[starts[0]:]:
+        text = preamble_text(row)
+        if text is not None and not preamble_binds(text, d): break  # the next Dispatch owns the rest
+        require(row.get("sessionId", session) == session, "Claude transcript session changed")
+        if row.get("cwd") is not None: require(within(row["cwd"], root), "Claude transcript cwd outside Dispatch worktree")
+        if row.get("type") == "assistant":
+            model = (row.get("message") or {}).get("model")
+            if model != "<synthetic>": models.add(model)  # local error/interrupt stubs have no author
+    require(len(models) <= 1, "conflicting actual model facts")
+    model = next(iter(models), None)
+    require(isinstance(model, str) and model, "no model response after Orca preamble", 2)
+    return model
+
+
+def evidence_model(observed, proof):
+    provider = observed.get("projection", {}).get("provider") or {}
+    require(provider.get("id") == "claude" and provider.get("model") is None, "model evidence only for unreported Claude model")
+    require(proof.get("kind") == "claude-transcript", "unknown model evidence kind", 2)
+    return transcript_model(observed, transcript_rows(ref(proof)))
+
+
+def actual_model(observed, source=None):
+    source = source or {}
     model = (observed.get("projection", {}).get("provider") or {}).get("model")
+    start = source.get("start"); origin = source.get("origin_start"); proof = source.get("model_evidence")
+    require(origin is None or start is not None, "origin worker-start without current worker-start")
+    require(proof is None or (start is None and origin is None), "model evidence with a launch receipt")
+    effective = None
     if start is not None:
-        raw = record(start); require(raw.get("ok") is True, "unsuccessful worker-start receipt", 2)
-        launched = raw.get("result", {}); d = observed.get("dispatch", {})
-        need(launched, ("runId", "taskId", "dispatchId", "launch"))
-        require((launched["runId"], launched["taskId"], launched["dispatchId"]) ==
-                (d.get("runId"), d.get("taskId"), d.get("id")), "worker-start identity mismatch")
+        launched = launched_receipt(start, observed.get("dispatch", {}))
         effective = (launched["launch"].get("effective") or {}).get("model")
+        if origin is not None:
+            require(not any((launched["launch"].get("effective") or {}).values()), "origin chain needs a --terminal reuse")
+            effective = reused_model(observed, launched, origin)
         require(isinstance(effective, str) and effective, "missing effective launch model", 2)
+    elif proof is not None:
+        effective = evidence_model(observed, proof)
+    if effective is not None:
         require(model is None or model == effective, "conflicting actual model facts")
         if model is None: model = effective
     require(model is not None, "unknown actual model family", 2)
     return model
 
 
-def family(observation, start=None):
-    model = actual_model(observation, start)
-    roles = (Path(__file__).parents[2] / "skills/orca-dev/roles.md").read_text(encoding="utf-8-sig")
-    mapping = line_json(roles, "FAMILY_MODELS")
-    require(model in mapping, "unknown actual model family", 2)
+def family(observation, source=None):
+    model = actual_model(observation, source)
+    mapping = roles_fact("FAMILY_MODELS")
+    if model not in mapping:
+        # Full provider ids from verified transcripts; aliases stay explicit above.
+        prefix = [f for p, f in roles_fact("FAMILY_PREFIXES").items() if re.fullmatch(re.escape(p) + r"[a-z0-9][a-z0-9.-]*", model)]
+        require(len(prefix) == 1, "unknown actual model family: " + model, 2)
+        return prefix[0]
     return mapping[model]
 
 
@@ -246,7 +364,7 @@ def observation(refspec, active):
     require(d["taskId"] == active["task_id"] and d["runId"] == active["run_id"], "Task/Run observation mismatch")
     require(d["id"] == active["dispatch_id"], "Dispatch observation mismatch")
     require(result["projection"].get("workspace", {}).get("id") == active["worktree_id"], "observation worktree mismatch", 2)
-    result["projection"]["provider"]["model"] = actual_model(result, refspec.get("start"))
+    result["projection"]["provider"]["model"] = actual_model(result, refspec)
     return result
 
 
@@ -376,8 +494,8 @@ def independent(art, coverage, reviewer_family, provenance=()):
         d = observed.get("dispatch", {})
         require((d.get("id"), d.get("taskId"), d.get("runId")) ==
                 (write["dispatch_id"], write["task_id"], write["run_id"]), "unknown write provenance", 2)
-        start = next((r.get("start") for r in provenance if r["path"] == write["receipt_path"] and r["sha256"] == write["receipt_sha256"]), None)
-        actual = family(observed, start)
+        source = next((r for r in provenance if r["path"] == write["receipt_path"] and r["sha256"] == write["receipt_sha256"]), None)
+        actual = family(observed, source)
         require(actual == write["family"], "claimed author family differs from launch")
         for path in write["files"]: writers.setdefault(path, set()).add(actual)
     files = {f["path"] for f in m["files"]}
@@ -456,7 +574,7 @@ def covered(state, art, roles):
             require(evidence(ref(r["report"]), saved_art) == r["evidence"], "accepted evidence mismatch")
         if r["role"] == "plan-reviewer":
             require(state["provenance"], "unknown plan authors", 2)
-            for author in state["provenance"]: require(family(record(author)["result"], author.get("start")) != r["family"], "same-family plan review")
+            for author in state["provenance"]: require(family(record(author)["result"], author) != r["family"], "same-family plan review")
         if r["role"] in REVIEW and r["role"] != "plan-reviewer": independent(saved_art, coverage, r["family"], state["provenance"])
         require(not [f for f in r["findings"] if f["id"] not in state.get("closed_ledger_ids", [])] and r["token"] in ("REVIEW_OK", "GATE_OK", "APPROVED", "DONE", "DONE_WITH_CONCERNS"), "unresolved findings or verification")
     if reviews := [r for r in reports if r["role"] in REVIEW and r["role"] != "plan-reviewer"]:
@@ -512,7 +630,7 @@ def review_closure(state, proof, finding, origin):
         require(written["id"] == reviewed["id"], "closure fix/review snapshot mismatch")
         require(state["provenance"], "unknown plan authors", 2)
         for author in state["provenance"]:
-            require(family(record(author)["result"], author.get("start")) != review["family"], "same-family plan review")
+            require(family(record(author)["result"], author) != review["family"], "same-family plan review")
         source = Path(proof["artifact"].get("source_path", proof["artifact"]["path"]))
         name = "repo:" + source.relative_to(state["worktree"]).as_posix()
         historical = any(commit_fact(c, state)["files"].get(name, {}).get("sha256") == reviewed["id"] for c in state["phase_commits"])
@@ -717,7 +835,7 @@ def validate(data):
         if active["role"] == "plan-reviewer":
             require(state["provenance"], "unknown plan authors", 2)
             for author in state["provenance"]:
-                require(family(record(author)["result"], author.get("start")) != actual_family, "same-family plan review")
+                require(family(record(author)["result"], author) != actual_family, "same-family plan review")
         if active["role"] in WRITE:
             state["provenance"].append(data["observation"])
         if "report_history" not in state: state["report_history"] = copy.deepcopy(state["accepted"])
@@ -739,7 +857,7 @@ def validate(data):
         raw = record(data.get("observation")); require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
         result = raw["result"]; d = result["dispatch"]
         require(d.get("taskId") == active["task_id"] and d.get("runId") == state["orca_run"] and d.get("retryOfDispatchId") is None, "dispatch does not bind pending fresh Task")
-        require(d.get("id") and actual_model(result, data["observation"].get("start")) == active["model"], "actual launch differs from proposal")
+        require(d.get("id") and model_matches(active["model"], actual_model(result, data["observation"])), "actual launch differs from proposal")
         active["dispatch_id"] = d["id"]
         observation(data["observation"], active)
         if active.get("format_corrected"): state["format_corrections"][d["id"]] = 1
@@ -836,9 +954,54 @@ def validate(data):
     return state, decision
 
 
+def utc_seconds(value):
+    require(isinstance(value, str) and value, "missing Dispatch creation time", 2)
+    text = value.replace(" ", "T").replace("Z", "+00:00")
+    if not re.search(r"[+-]\d\d:\d\d$", text): text += "+00:00"  # Orca SQL timestamps are UTC
+    from datetime import datetime
+    return datetime.fromisoformat(text).timestamp()
+
+
+def claude_model_evidence(args):
+    """Freeze the one Claude session transcript that proves this Dispatch's model."""
+    require(len(args) in (3, 4), "usage: protocol-state claude-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [TRANSCRIPT]")
+    raw = v.load(args[1]); require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
+    observed = raw.get("result", {}); need(observed, ("dispatch", "projection"))
+    provider = observed["projection"].get("provider") or {}
+    require(provider.get("id") == "claude" and provider.get("model") is None, "model evidence only for unreported Claude model")
+    out = artifact_path(args[2])
+    require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists(), "snapshot output must be a new absolute file", 2)
+    require(not any(x.is_symlink() for x in (out, *out.parents)), "linked snapshot output", 2)
+    if len(args) == 4:
+        files = [artifact_path(args[3])]
+    else:
+        root = (observed.get("terminal") or {}).get("worktreePath")
+        require(isinstance(root, str) and os.path.isabs(root), "missing Dispatch worktree path", 2)
+        base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+        folder = base / re.sub(r"[^a-zA-Z0-9]", "-", root)
+        since = utc_seconds(observed["dispatch"].get("createdAt")) - 300
+        files = sorted(p for p in folder.glob("*.jsonl") if p.is_file() and p.stat().st_mtime >= since)
+    found = []
+    for path in files:
+        data = path.read_bytes()
+        rows = transcript_rows(data.decode("utf-8-sig").replace("\r\n", "\n"))
+        if any(preamble_text(r) is not None and preamble_binds(preamble_text(r), observed["dispatch"]) for r in rows):
+            found.append((path, data, rows))
+    require(found, "no Claude transcript with this Dispatch preamble", 2)
+    require(len(found) == 1, "several Claude transcripts claim this Dispatch: " + ", ".join(str(x[0]) for x in found), 2)
+    path, data, rows = found[0]
+    model = transcript_model(observed, rows)
+    with out.open("xb") as f:
+        f.write(data); f.flush(); os.fsync(f.fileno())
+    proof = dict(kind="claude-transcript", path=str(out), sha256=v.digest(data))
+    print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(path)), ensure_ascii=True))
+    return 0
+
+
 def main(args):
     state = None
     try:
+        if args and args[0] == "claude-model-evidence": return claude_model_evidence(args)
         require(len(args) in (2, 3) and args[0] == "validate", "usage: protocol-state validate INPUT_JSON [RESUME_OUT]")
         data = v.load(args[1]); state, decision = validate(data)
         if len(args) == 3:
