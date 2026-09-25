@@ -73,7 +73,9 @@ $env:PYTHONUTF8='1'; $env:ORCA_TEST_TIME_SCALE='3'
 python -B -m unittest discover -s tests -v
 ```
 
-A runtime change is pushed only with its macOS and both Windows results.
+A runtime change reaches `main` only with its macOS and both Windows results:
+push it to a branch (pushes outside `main` start no CI), `git fetch` and
+check out that branch on the Windows PC, run both shells, then merge.
 Directed tests precede one integrated run per available platform; unchanged full
 suites are repeated only for a concrete failure, source change or required replay.
 
