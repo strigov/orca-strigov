@@ -34,6 +34,7 @@ param(
 )
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 
 if ($Help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit 0 }
 
