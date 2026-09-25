@@ -2,7 +2,7 @@
 
 The single source of truth for **who does what, on which model, at which effort**. `SKILL.md` and every prompt template refer to roles by name; nothing else hardcodes a model. Launch mechanics (how a role becomes an Orca worker) live in `orca-recipes.md`.
 
-Model ids are provider-opaque strings passed through Orca (`--model` / `--effort`) or through custom argv. Effort values are provider-specific: Codex `low|medium|high|xhigh|max` (never `ultra` unless the user says the word); Claude `low|medium|high|xhigh|max` — **Fable is used at `high` across all pipeline roles (plan review, code risk/r4 review, diagnosis). Opus judgment roles use `xhigh`. `max` is billed at ×1.5 since the September 2026 pricing change — never use it unless the user asks for it by name**; Antigravity `low|medium|high`.
+Model ids are provider-opaque strings passed through Orca (`--model` / `--effort`) or through custom argv. Effort values are provider-specific: Codex `low|medium|high|xhigh|max` (never `ultra` unless the user says the word); Claude `low|medium|high|xhigh|max` — **Fable is currently not assigned to any pipeline role; its former roles run on Opus (complex plan review and 4.1 risk/last-round review at `xhigh`, diagnosis at `high`). Opus code review (4.1 ordinary rounds, 4.2 substitution/fallback, 5 final) and diagnosis use `high`; plan review, the 4.1 risk/last-round escalation, the explicit `opus` planning profile and frontend implementation use `xhigh`. Codex Astra runs at `xhigh` in every role. `max` is billed at ×1.5 since the September 2026 pricing change — never use it unless the user asks for it by name**; Antigravity `low|medium|high`.
 
 ## Families
 
@@ -18,13 +18,13 @@ receipts. Unknown model identities remain unverifiable; this record grants no
 new role assignment or fallback. Compare the actual model, including when an
 agent CLI can launch a model from another family.
 
-FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","claude-opus-4-6-thinking":"Anthropic","claude-sonnet-4-6":"Anthropic","gemini-3.7-flash-high":"Google"}
+FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","claude-opus-4-6-thinking":"Anthropic","claude-sonnet-4-6":"Anthropic","gemini-3.8-flash-high":"Google","gemini-3.7-flash-high":"Google"}
 
 | family | agent CLI | Orca agent id | models used here |
 |---|---|---|---|
 | OpenAI | `codex` | `codex` | `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-astra`, `chatgpt-web/pro` (GPT Pro via the codex-chatgpt-web bridge — opt-in planning alternative only) |
-| Anthropic | `claude` | `claude` | `opus`, `fable`, `sonnet` |
-| Google | `agy` (Antigravity CLI) | `antigravity` | `gemini-3.7-flash-high` |
+| Anthropic | `claude` | `claude` | `opus`, `sonnet` |
+| Google | `agy` (Antigravity CLI) | `antigravity` | `gemini-3.8-flash-high` |
 
 `agy` can also run Anthropic models (`claude-opus-4-6-thinking`, `claude-sonnet-4-6`); for the family rule the **model's** actual family counts, not the CLI's.
 
@@ -37,19 +37,19 @@ FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"Op
 | role | step | primary | fallback / escalation | write? | freshness |
 |---|---|---|---|---|---|
 | `coordinator` | all | The main Codex or Claude Code terminal running this skill; it keeps its actual existing session/model. For a new Codex coordinator, native Sol medium (`gpt-5.6-sol` `medium`) is recommended with explicit `-m` (never `chatgpt-web/pro`: the bridge is never for the coordinator). Claude Code support does not change worker roles or select a new coordinator model | — | bookkeeping only (Rule 1) | one session |
-| `plan-writer` | 1 (all complexities) | **codex `gpt-6-astra` `max`** | opt-in alternative: codex `chatgpt-web/pro` (explicit `--planner pro`); Astra availability failure: one retry in a fresh terminal, then stop and ask the user — no automatic downgrade; `--planner opus` is an explicit user override only | plan file only | fresh |
-| `plan-reviser` | 2 | **codex `gpt-6-astra` `max`** (reuse the native author; after a `pro` initial plan the FIRST revision uses a fresh native terminal with announced full handoff, then reuses it) | native author context lost: codex `gpt-6-astra` `max` fresh with announced full handoff, no downgrade; explicit `opus` profile: retain claude `opus` `xhigh`, or replace with that same profile and announced full handoff if lost | plan file only | retained reviser; first Pro revision or actual context loss → fresh full handoff |
-| `plan-reviewer` | 2 | ordinary plan: claude `opus` `xhigh`; complex plan (cross-component contracts, risk, uncertainty): claude `fable` `high` | writer on the explicit `opus` profile → codex `gpt-5.6-sol` `max`, only if independent of all authors of the reviewed unit; otherwise another already allowed independent route or incomplete acceptance | no | fresh every substantive round (cap 4) |
-| `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.7-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-5.6-sol` `max` in a FRESH terminal; justified hard implementation route: codex `gpt-6-astra` `max` (explicit choice, announced) | yes | same terminal across fix rounds; a model change is always a new terminal |
+| `plan-writer` | 1 (all complexities) | **codex `gpt-6-astra` `xhigh`** | opt-in alternative: codex `chatgpt-web/pro` (explicit `--planner pro`); Astra availability failure: one retry in a fresh terminal, then stop and ask the user — no automatic downgrade; `--planner opus` is an explicit user override only | plan file only | fresh |
+| `plan-reviser` | 2 | **codex `gpt-6-astra` `xhigh`** (reuse the native author; after a `pro` initial plan the FIRST revision uses a fresh native terminal with announced full handoff, then reuses it) | native author context lost: codex `gpt-6-astra` `xhigh` fresh with announced full handoff, no downgrade; explicit `opus` profile: retain claude `opus` `xhigh`, or replace with that same profile and announced full handoff if lost | plan file only | retained reviser; first Pro revision or actual context loss → fresh full handoff |
+| `plan-reviewer` | 2 | claude `opus` `xhigh` (ordinary and complex plans) | writer on the explicit `opus` profile → codex `gpt-5.6-sol` `max`, only if independent of all authors of the reviewed unit; otherwise another already allowed independent route or incomplete acceptance | no | fresh every substantive round (cap 4) |
+| `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.8-flash-high` effort `high`** | availability fallback → codex `gpt-5.6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-5.6-sol` `max` in a FRESH terminal; justified hard implementation route: codex `gpt-6-astra` `xhigh` (explicit choice, announced) | yes | same terminal across fix rounds; a model change is always a new terminal |
 | `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `xhigh` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → codex `gpt-5.6-luna` `max` — announced | yes | same terminal across fix rounds |
-| `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.7-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
-| `review-primary` | 4.1 | claude `opus` `xhigh` | claude `fable` `high` on `risk: SECURITY / DATA_LOSS` phases or in fused-loop round 4 (the last round before the cap; rounds > 4 do not exist); Fable unavailable → Opus only if independent of all authors; Opus unavailable → codex `gpt-5.6-sol` `xhigh` only if independent of all authors — announced, otherwise an already allowed independent route or incomplete acceptance. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
-| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Sol/Astra) → claude `opus` `xhigh` (Sol/Astra never reviews OpenAI-written code; 4.1 and 4.2 are then both Opus in fresh terminals; Fable `high` is used for diagnosis, complex plan review, and 4.1 risk / last-round rule); Sol unavailable → claude `opus` `xhigh` only if independent of all authors of the reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance. Experimental control review for units with no OpenAI authors: codex `gpt-6-astra` `xhigh` (explicit experiment, announced; never an automatic fallback) | no | fresh every round |
-| `synthesizer` | 4.5 | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
-| `review-final` | 5 | claude `opus` `xhigh` | every phase written only by Claude (frontend-only plan) → codex `gpt-5.6-sol` `xhigh`; Opus unavailable → codex `gpt-5.6-sol` `xhigh` only if independent of all authors of each reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance. Mixed-author branch: independent assignments covering every unit | no | fresh every round (cap 2) |
-| `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `fable` `high` | claude `opus` `xhigh` — announced; justified hard diagnosis route: codex `gpt-6-astra` `max` (explicit choice, announced) | no | fresh |
-| `quickfix` | trivial path | antigravity `gemini-3.7-flash-high` `high` | codex `gpt-5.6-luna` `max` | yes | fresh |
-| `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.7-flash-high` `high` | — | no | fresh |
+| `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.8-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
+| `review-primary` | 4.1 | claude `opus` `high` | claude `opus` `xhigh` on `risk: SECURITY / DATA_LOSS` phases or in fused-loop round 4 (the last round before the cap; rounds > 4 do not exist); Opus unavailable → codex `gpt-5.6-sol` `xhigh` only if independent of all authors — announced, otherwise an already allowed independent route or incomplete acceptance. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
+| `review-control` | 4.2 | codex `gpt-5.6-sol` `xhigh` | implementer was a Codex model (Luna/Sol/Astra) → claude `opus` `high` (Sol/Astra never reviews OpenAI-written code; 4.1 and 4.2 are then both Opus in fresh terminals); Sol unavailable → claude `opus` `high` only if independent of all authors of the reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance. Experimental control review for units with no OpenAI authors: codex `gpt-6-astra` `xhigh` (explicit experiment, announced; never an automatic fallback) | no | fresh every round |
+| `synthesizer` | 4.5 | antigravity `gemini-3.8-flash-high` `high` | codex `gpt-5.6-luna` `medium` | `docs/reviews/*` only | fresh |
+| `review-final` | 5 | claude `opus` `high` | every phase written only by Claude (frontend-only plan) → codex `gpt-5.6-sol` `xhigh`; Opus unavailable → codex `gpt-5.6-sol` `xhigh` only if independent of all authors of each reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance. Mixed-author branch: independent assignments covering every unit | no | fresh every round (cap 2) |
+| `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `opus` `high` | justified hard diagnosis route: codex `gpt-6-astra` `xhigh` (explicit choice, announced) | no | fresh |
+| `quickfix` | trivial path | antigravity `gemini-3.8-flash-high` `high` | codex `gpt-5.6-luna` `max` | yes | fresh |
+| `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.8-flash-high` `high` | — | no | fresh |
 
 Claude is used in judgment roles (plan review, reviews, diagnosis) and for frontend implementation. Mechanical work (gate, synthesis, quickfix) stays on Google/OpenAI so the Anthropic quota is spent on judgment.
 
@@ -59,14 +59,14 @@ The defaults above assume the code was written by Gemini. When the cascade or th
 
 | code written by | 4.1 primary | 4.2 control | Step 5 final |
 |---|---|---|---|
-| Gemini (Flash) — default | claude `opus` `xhigh` (Fable `high` per the 4.1 risk / last-round rule) | codex `gpt-5.6-sol` `xhigh` (or experimental Astra `xhigh`) | claude `opus` `xhigh` |
-| Codex (Luna / Sol / Astra, after fallback or escalation) | claude `opus` `xhigh` (Fable `high` per the 4.1 risk / last-round rule) | claude `opus` `xhigh` | claude `opus` `xhigh` |
+| Gemini (Flash) — default | claude `opus` `high` (`xhigh` per the 4.1 risk / last-round rule) | codex `gpt-5.6-sol` `xhigh` (or experimental Astra `xhigh`) | claude `opus` `high` |
+| Codex (Luna / Sol / Astra, after fallback or escalation) | claude `opus` `high` (`xhigh` per the 4.1 risk / last-round rule) | claude `opus` `high` | claude `opus` `high` |
 | Claude (frontend phases) | codex `gpt-5.6-sol` `xhigh` | codex `gpt-5.6-sol` `xhigh` | codex `gpt-5.6-sol` `xhigh` for these units; split mixed-branch assignments under the Family rule (never Opus on a Claude-authored unit) |
 
 ## Planning profiles
 
-- **`astra` (default for all task complexities):** Initial plan and every revision = Codex `gpt-6-astra` `max`. Revisions reuse the author terminal/context; actual context loss uses the same profile with announced full handoff. Plan review: ordinary = Claude `opus` `xhigh`; complex = Claude `fable` `high` (chosen for cross-component contracts, risk, or high uncertainty).
-- **`pro` (explicit opt-in alternative only):** Selected only when user explicitly specifies `--planner pro` or "план на Pro". Round 1 = Pro (`chatgpt-web/pro`) writes → Claude `fable` `high` (or `opus` `xhigh`) reviews. Rounds 2+ = Codex `gpt-6-astra` `max` revises (fresh terminal with announced full handoff, because Pro does not revise) → Claude `opus` `xhigh` (or `fable` `high`) reviews; subsequent revisions reuse that retained Astra terminal. Pro is used for the initial plan only — never for revisions. Regular startup/planning does not depend on bridge health.
+- **`astra` (default for all task complexities):** Initial plan and every revision = Codex `gpt-6-astra` `xhigh`. Revisions reuse the author terminal/context; actual context loss uses the same profile with announced full handoff. Plan review = Claude `opus` `xhigh` for ordinary and complex plans.
+- **`pro` (explicit opt-in alternative only):** Selected only when user explicitly specifies `--planner pro` or "план на Pro". Round 1 = Pro (`chatgpt-web/pro`) writes → Claude `opus` `xhigh` reviews. Rounds 2+ = Codex `gpt-6-astra` `xhigh` revises (fresh terminal with announced full handoff, because Pro does not revise) → Claude `opus` `xhigh` reviews; subsequent revisions reuse that retained Astra terminal. Pro is used for the initial plan only — never for revisions. Regular startup/planning does not depend on bridge health.
 - **`opus` (legacy explicit user override):** Selected only if the user explicitly specifies `--planner opus`. Claude `opus` `xhigh` writes/revises → Codex `gpt-5.6-sol` `max` reviews, all rounds. This is an explicit override only, never an automatic availability fallback.
 
 Selecting: default is `astra`. The user may explicitly specify `--planner pro|opus` or "план на Pro" / "обычный план". State the profile in the Step 1 status line.
@@ -74,7 +74,7 @@ Selecting: default is `astra`. The user may explicitly specify `--planner pro|op
 ## Implementer cascade — transition rules
 
 ```
-antigravity gemini-3.7-flash-high (high)
+antigravity gemini-3.8-flash-high (high)
   │  availability failure: positive current execution-host launch/exit/failure evidence,
   │  or an accepted, durably settled worker_done --outcome failed identifying quota / rate
   │  limit / auth / launch error. Follow the recovery receipt and nextAction per recipes §6.
@@ -92,7 +92,7 @@ codex gpt-5.6-sol (max)           ← always a FRESH terminal (the model is fixe
 
 A retained terminal whose Task is durably settled is not an active writer; preserve it for legitimate context reuse. A failed Task status or an attempted stop alone is not proof that an unresolved execution host stopped. Read current host/worker/terminal evidence and `nextAction` before recovery.
 
-Hard implementation route: an explicit justified choice of `codex gpt-6-astra max` is permitted for complex tasks without requiring an extra mandatory cascade step, announced with rationale.
+Hard implementation route: an explicit justified choice of `codex gpt-6-astra xhigh` is permitted for complex tasks without requiring an extra mandatory cascade step, announced with rationale.
 
 What does **not** trigger a model change: `BLOCKED` with any other diagnosis, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `NEEDS_AUTHORIZATION`, a `GATE_FAIL`, or a `REVIEW_BLOCKING`. Those are handled by the protocol at the same model.
 
@@ -116,11 +116,10 @@ Fix rounds after a fallback: the ledger plus the report file carry the context; 
 
 | role | flag |
 |---|---|
-| Claude Opus judgment role | `--effort xhigh` |
-| Claude Fable judgment role (plan review, 4.1 risk/r4 review, diagnosis) | `--effort high` |
+| Claude Opus code review (4.1 ordinary rounds, 4.2, 5 final) and diagnosis | `--effort high` |
+| Claude Opus plan review, 4.1 risk/last-round escalation, `opus` planning profile, frontend implementation | `--effort xhigh` |
 | Claude Sonnet frontend tweak | `--effort medium` |
-| Codex Astra (plan writer/reviser, diagnosis/implementer escalation) | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
-| Codex Astra experimental control review | `--effort xhigh` (`-c model_reasoning_effort=xhigh` in custom argv) |
+| Codex Astra (plan writer/reviser, hard diagnosis/implementation route, experimental control review) | `--effort xhigh` (`-c model_reasoning_effort=xhigh` in custom argv) |
 | Codex Sol (plan fallback review, implementer reasoning escalation) | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
 | Codex Sol (control review, frontend substitution) | `--effort xhigh` (`-c model_reasoning_effort=xhigh` in custom argv) |
 | Codex Sol coordinator recommendation | `--effort medium` |
