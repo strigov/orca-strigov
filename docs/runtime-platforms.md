@@ -59,7 +59,21 @@ verify Git executable modes for Bash entrypoints.
 integration suite. `ORCA_TEST_SHELL` selects the actual shell;
 `ORCA_TEST_ARTIFACTS` retains full owned fixture artifacts. Installer tests use
 ORCA_DEV_TEST_HOME and verify that real user settings are unchanged; they never
-replace HOME, USERPROFILE or CODEX_HOME. CI uploads environment and command logs.
+replace HOME, USERPROFILE or CODEX_HOME. `ORCA_TEST_TIME_SCALE` (default 1)
+multiplies only harness watchdogs and waits, never deadlines under test; use 3
+on a slow host.
+
+GitHub CI runs this suite on Linux only. macOS runs it on the development
+machine (Python 3.13+). Native Windows runs it on a Windows PC once in Windows
+PowerShell 5.1 and once in pwsh 7, from the repository root in that shell:
+
+```powershell
+$env:ORCA_TEST_SHELL=(Get-Process -Id $PID).Path
+$env:PYTHONUTF8='1'; $env:ORCA_TEST_TIME_SCALE='3'
+python -B -m unittest discover -s tests -v
+```
+
+A runtime change is pushed only with its macOS and both Windows results.
 Directed tests precede one integrated run per available platform; unchanged full
 suites are repeated only for a concrete failure, source change or required replay.
 

@@ -17,6 +17,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
+# Scales only harness watchdogs and waits; deadlines under test are never scaled.
+TIME_SCALE = float(os.environ.get("ORCA_TEST_TIME_SCALE") or 1)
 
 
 def write_json(path, value):
@@ -45,7 +47,7 @@ def read_json(path):
 
 
 def until(probe, timeout=5):
-    end = time.monotonic() + timeout
+    end = time.monotonic() + timeout * TIME_SCALE
     while time.monotonic() < end:
         try:
             value = probe()
@@ -77,13 +79,13 @@ class Process:
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   creationflags=0x08000000 if WINDOWS else 0,
                                   start_new_session=not WINDOWS, env=env)
-        self.timer = threading.Timer(seconds, stop_owned, [self.p])
+        self.timer = threading.Timer(seconds * TIME_SCALE, stop_owned, [self.p])
         self.timer.daemon = True
         self.timer.start()
 
     def finish(self, timeout=14):
         try:
-            out, err = self.p.communicate(timeout=timeout)
+            out, err = self.p.communicate(timeout=timeout * TIME_SCALE)
             if self.log_stem:
                 Path(str(self.log_stem) + '.stdout').write_bytes(out)
                 Path(str(self.log_stem) + '.stderr').write_bytes(err)
