@@ -93,8 +93,9 @@ reviewed source and semantic index are the actual commit candidate. Later index
 or source changes invalidate that acceptance and require refreshed evidence.
 Preserve old artifacts by hash and give each correction/fix report a new path.
 Only the common [Report binding](runtime-contracts.md#report-binding) defines the
-machine fields; pass its absolute `[RUNTIME_CONTRACTS_PATH]` and frozen assignment
-to each worker. This mechanical check adds no semantic research to the coordinator.
+machine fields; pass its absolute `[RUNTIME_CONTRACTS_PATH]` and fill `[FROZEN_ASSIGNMENT]`
+in every role template with the C6-frozen `{role, phase, round, artifact_id, snapshot_id}`
+(the assigned artifact for readers; writers bind their completed snapshot instead). A worker never infers its role; a wrong BINDING role cannot be format-corrected. This mechanical check adds no semantic research to the coordinator.
 
 Conversation memory does not survive compaction. Reconcile these durable records; frontmatter records intent and never overrides missing commit or acceptance evidence:
 

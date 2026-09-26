@@ -523,6 +523,28 @@ class ProtocolFixture(VerificationFixture):
             launch=dict(requested=dict(agent=agent, model=model, effort=None), effective=dict(agent=agent, model=model, effort=None)),
             effects=[dict(kind='terminal', role='agent', action=action, id=handle)], prompt=dict(processIncarnation=incarnation))))
 
+    def agy_observation(self, dispatch_id, task_id, model=None):
+        """Orca worker-show for Antigravity Path B: provider.model stays null."""
+        ref = self.claude_observation(dispatch_id, task_id, model=model)
+        data = read_json(ref['path']); data['result']['projection']['provider']['id'] = 'antigravity'
+        return self.save(data)
+
+    def agy_home(self, root, conversation, task_id, dispatch_id, models=('gemini-3.8-flash-high',), created=None):
+        """Antigravity CLI data dir: brain/<conversation>/.../transcript.jsonl plus one process log."""
+        logs = Path(root) / 'brain' / conversation / '.system_generated' / 'logs'; logs.mkdir(parents=True, exist_ok=True)
+        preamble = ('<USER_REQUEST>\nYou are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n'
+                    'Your task ID is: ' + task_id + '\n  orca orchestration send --from ' + self.CLAUDE_HANDLE +
+                    ' --type worker_done --task-id ' + task_id + ' --dispatch-id ' + dispatch_id + '\n</USER_REQUEST>')
+        rows = [dict(step_index=0, source='USER_EXPLICIT', type='USER_INPUT', status='DONE', content=preamble),
+                dict(step_index=1, source='MODEL', type='PLANNER_RESPONSE', status='DONE', content='ok')]
+        (logs / 'transcript.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows), encoding='utf-8')
+        (Path(root) / 'log').mkdir(exist_ok=True)
+        lines = ['I0927 02:04:47.302640       1 model_resolver.go:93] Resolving model ' + m for m in models]
+        lines += ['I0927 02:05:17.786272     649 server.go:1239] Created conversation ' + (created or conversation)]
+        log = Path(root) / 'log' / ('cli-' + conversation[:8] + '.log')
+        log.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        return logs / 'transcript.jsonl', log
+
     def claude_transcript(self, path, task_id, dispatch_id, models=('claude-opus-5-5',), cwd=None, after=()):
         """Claude Code session JSONL: Orca preamble, then assistant records carrying message.model."""
         preamble = ('You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n'

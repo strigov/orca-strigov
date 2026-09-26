@@ -638,6 +638,20 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   are not model output). Several models are conflicting; none is UNVERIFIABLE.
   Build it after the first assistant response; after settlement the copy also
   proves no later model switch.
+- **Antigravity log (`model_evidence` kind `antigravity-log`).** Only for
+  `provider.id:"antigravity"` with a null `provider.model` and no `start`. Orca
+  does not report the agy model and agy's conversation store is SQLite, which the
+  native Windows validator cannot read; two text files are frozen instead by
+  `protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT`:
+  `SNAPSHOT_OUT` copies `brain/<conversation>/.system_generated/logs/transcript.jsonl`
+  and `SNAPSHOT_OUT.cli.log` copies the one `log/*.log` CLI process log that
+  created that conversation (under `$ORCA_AGY_HOME` or `~/.gemini/antigravity-cli`).
+  The reference is `{kind,path,sha256,conversation_id,log:{path,sha256}}`. C6
+  requires a `USER_INPUT` transcript row with this Dispatch's Orca preamble (same
+  task/dispatch/`--from` rule), a log line `Created conversation <conversation_id>`
+  and exactly one distinct `Resolving model <id>` in that process log. The
+  conversation-to-transcript link is the directory name recorded by the builder,
+  weaker than Claude's single transcript; a per-process model switch is conflicting.
 
 `bind-dispatch` compares the actual model with the proposal exactly, except that
 a Claude alias from roles.md `MODEL_ALIASES` matches a full id with its prefix.

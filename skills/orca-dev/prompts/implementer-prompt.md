@@ -79,7 +79,7 @@ STOP and escalate (`BLOCKED`) when:
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Frozen assignment: `[FROZEN_ASSIGNMENT]` — copy its role, phase and round into BINDING exactly (never infer a role from the task); take run_id, task_id and dispatch_id from the live preamble; readers bind its artifact_id/snapshot_id, writers bind their completed snapshot. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 
@@ -153,7 +153,7 @@ If a blocker requires broader scope than the ledger lists, stop: line 1 of the r
 
 ## Reporting (Orca worker_done — REQUIRED, exactly once)
 
-Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
+Read the coordinator-supplied absolute [RUNTIME_CONTRACTS_PATH]#report-binding on demand and follow that single report contract, using the current live Task/Dispatch and frozen assignment. Frozen assignment: `[FROZEN_ASSIGNMENT]` — copy its role, phase and round into BINDING exactly (never infer a role from the task); take run_id, task_id and dispatch_id from the live preamble; readers bind its artifact_id/snapshot_id, writers bind their completed snapshot. Preserve the existing verdict/summary prefix; add its required machine fields afterward. A format-only correction uses a new report path and one new Dispatch, with the same artifact and round; never rewrite accepted report bytes or send a second completion for an old Dispatch.
 
 Bind the completed source snapshot and actual verification results. Fix rounds include canonical FIX_EVIDENCE with covering tests, exact commands and outputs.
 

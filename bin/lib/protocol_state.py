@@ -283,7 +283,7 @@ def transcript_rows(text):
     rows = []
     for line in text.split("\n"):
         if line.strip():
-            row = json.loads(line); require(isinstance(row, dict), "invalid Claude transcript record", 2); rows.append(row)
+            row = json.loads(line); require(isinstance(row, dict), "invalid session transcript record", 2); rows.append(row)
     return rows
 
 
@@ -315,11 +315,35 @@ def transcript_model(observed, rows):
     return model
 
 
+def agy_preamble_text(row):
+    content = row.get("content") if row.get("type") == "USER_INPUT" else None
+    return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
+
+
+def agy_log_model(text, conversation):
+    """One Antigravity CLI process log: it created this conversation and resolved exactly one model."""
+    require(conversation in re.findall(r"\] Created conversation ([0-9a-f-]+)[ \t]*$", text, re.M),
+            "Antigravity log does not own this conversation", 2)
+    models = set(re.findall(r"\] Resolving model (\S+)[ \t]*$", text, re.M))
+    require(len(models) <= 1, "conflicting actual model facts")
+    require(models, "no resolved model in Antigravity log", 2)
+    return next(iter(models))
+
+
 def evidence_model(observed, proof):
     provider = observed.get("projection", {}).get("provider") or {}
-    require(provider.get("id") == "claude" and provider.get("model") is None, "model evidence only for unreported Claude model")
-    require(proof.get("kind") == "claude-transcript", "unknown model evidence kind", 2)
-    return transcript_model(observed, transcript_rows(ref(proof)))
+    require(provider.get("model") is None, "model evidence only for an unreported model")
+    kind = proof.get("kind")
+    if kind == "claude-transcript":
+        require(provider.get("id") == "claude", "model evidence kind does not match provider")
+        return transcript_model(observed, transcript_rows(ref(proof)))
+    require(kind == "antigravity-log", "unknown model evidence kind", 2)
+    require(provider.get("id") == "antigravity", "model evidence kind does not match provider")
+    need(proof, ("log", "conversation_id"))
+    rows = transcript_rows(ref(proof))
+    require(any(agy_preamble_text(r) is not None and preamble_binds(agy_preamble_text(r), observed.get("dispatch", {})) for r in rows),
+            "no Orca preamble for this Dispatch in Antigravity transcript", 2)
+    return agy_log_model(ref(proof["log"]).replace("\r", ""), proof["conversation_id"])
 
 
 def actual_model(observed, source=None):
@@ -1041,10 +1065,49 @@ def claude_model_evidence(args):
     return 0
 
 
+def frozen(path, data):
+    with path.open("xb") as f:
+        f.write(data); f.flush(); os.fsync(f.fileno())
+    return dict(path=str(path), sha256=v.digest(data))
+
+
+def antigravity_model_evidence(args):
+    """Freeze the Antigravity conversation transcript bound to this Dispatch and its CLI process log."""
+    require(len(args) == 3, "usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT")
+    raw = v.load(args[1]); require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
+    observed = raw.get("result", {}); need(observed, ("dispatch", "projection"))
+    provider = observed["projection"].get("provider") or {}
+    require(provider.get("id") == "antigravity" and provider.get("model") is None, "model evidence only for an unreported model")
+    out = artifact_path(args[2]); log_out = Path(str(out) + ".cli.log")
+    require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists() and not log_out.exists(),
+            "snapshot output must be a new absolute file", 2)
+    require(not any(x.is_symlink() for x in (out, *out.parents)), "linked snapshot output", 2)
+    home = Path(os.environ.get("ORCA_AGY_HOME") or Path.home() / ".gemini" / "antigravity-cli")
+    since = utc_seconds(observed["dispatch"].get("createdAt")) - 300
+    found = []
+    for path in sorted((home / "brain").glob("*/.system_generated/logs/transcript.jsonl")):
+        if path.stat().st_mtime < since: continue
+        data = path.read_bytes(); rows = transcript_rows(data.decode("utf-8-sig").replace("\r\n", "\n"))
+        if any(agy_preamble_text(r) is not None and preamble_binds(agy_preamble_text(r), observed["dispatch"]) for r in rows):
+            found.append((path.parents[2].name, data))
+    require(found, "no Antigravity transcript with this Dispatch preamble", 2)
+    require(len(found) == 1, "several Antigravity conversations claim this Dispatch: " + ", ".join(x[0] for x in found), 2)
+    conversation, transcript = found[0]
+    logs = [(p, p.read_bytes()) for p in sorted((home / "log").glob("*.log")) if not p.is_symlink() and p.stat().st_mtime >= since]
+    logs = [(p, b) for p, b in logs if ("] Created conversation " + conversation).encode() in b]
+    require(len(logs) == 1, "expected exactly one Antigravity process log for conversation " + conversation, 2)
+    model = agy_log_model(logs[0][1].decode("utf-8", "replace").replace("\r", ""), conversation)
+    proof = dict(kind="antigravity-log", conversation_id=conversation, **frozen(out, transcript))
+    proof["log"] = frozen(log_out, logs[0][1])
+    print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(logs[0][0])), ensure_ascii=True))
+    return 0
+
+
 def main(args):
     state = None
     try:
         if args and args[0] == "claude-model-evidence": return claude_model_evidence(args)
+        if args and args[0] == "antigravity-model-evidence": return antigravity_model_evidence(args)
         require(len(args) in (2, 3) and args[0] == "validate", "usage: protocol-state validate INPUT_JSON [RESUME_OUT]")
         data = v.load(args[1]); state, decision = validate(data)
         if len(args) == 3:

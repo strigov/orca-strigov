@@ -205,7 +205,7 @@ function P-PreambleBinds([string]$text,$d) {
 function P-TranscriptRows([string]$text) {
   $rows=New-Object Collections.ArrayList
   foreach ($line in $text.Split("`n")) {
-    if ($line.Trim()) { $row=P-JsonLine $line;P-Require ($row -is [Collections.IDictionary]) 'invalid Claude transcript record' 2;[void]$rows.Add($row) }
+    if ($line.Trim()) { $row=P-JsonLine $line;P-Require ($row -is [Collections.IDictionary]) 'invalid session transcript record' 2;[void]$rows.Add($row) }
   };return ,$rows
 }
 function P-Within([string]$child,[string]$root) {
@@ -234,11 +234,35 @@ function P-TranscriptModel($o,$rows) {
   P-Require ($models.Count -le 1) 'conflicting actual model facts'
   $model=@($models)[0];P-Require ($model -is [string] -and $model) 'no model response after Orca preamble' 2;return $model
 }
+function P-AgyPreambleText($row) {
+  $content=if ((P-Field $row 'type') -ceq 'USER_INPUT') { P-Field $row 'content' } else { $null }
+  if ($content -is [string] -and $content.Contains($POrcaPreamble)) { return $content };return $null
+}
+function P-AgyLogModel([string]$text,[string]$conversation) {
+  # One Antigravity CLI process log: it created this conversation and resolved exactly one model.
+  $created=@([regex]::Matches($text,'(?m)\] Created conversation ([0-9a-f-]+)[ \t]*$') | ForEach-Object { $_.Groups[1].Value })
+  P-Require ($conversation -cin $created) 'Antigravity log does not own this conversation' 2
+  $models=New-Object 'Collections.Generic.HashSet[string]'
+  foreach ($m in [regex]::Matches($text,'(?m)\] Resolving model (\S+)[ \t]*$')) { [void]$models.Add($m.Groups[1].Value) }
+  P-Require ($models.Count -le 1) 'conflicting actual model facts'
+  P-Require ($models.Count -eq 1) 'no resolved model in Antigravity log' 2;return @($models)[0]
+}
+function P-AgyBinds($o,$rows) {
+  foreach ($row in $rows) { $text=P-AgyPreambleText $row;if ($null -ne $text -and (P-PreambleBinds $text $o.dispatch)) { return $true } };return $false
+}
 function P-EvidenceModel($o,$proof) {
   $provider=V-Get $o.projection 'provider' @{}
-  P-Require ((V-Get $provider 'id') -ceq 'claude' -and $null -eq (V-Get $provider 'model')) 'model evidence only for unreported Claude model'
-  P-Require ((V-Get $proof 'kind') -ceq 'claude-transcript') 'unknown model evidence kind' 2
-  return P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof))
+  P-Require ($null -eq (V-Get $provider 'model')) 'model evidence only for an unreported model'
+  $kind=V-Get $proof 'kind'
+  if ($kind -ceq 'claude-transcript') {
+    P-Require ((V-Get $provider 'id') -ceq 'claude') 'model evidence kind does not match provider'
+    return P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof))
+  }
+  P-Require ($kind -ceq 'antigravity-log') 'unknown model evidence kind' 2
+  P-Require ((V-Get $provider 'id') -ceq 'antigravity') 'model evidence kind does not match provider'
+  P-Need $proof @('log','conversation_id')
+  P-Require (P-AgyBinds $o (P-TranscriptRows (P-Ref $proof))) 'no Orca preamble for this Dispatch in Antigravity transcript' 2
+  return P-AgyLogModel ((P-Ref $proof.log).Replace("`r",'')) $proof.conversation_id
 }
 function P-Model($o,$source=$null) {
   $model=V-Get (V-Get $o.projection 'provider' @{}) 'model'
@@ -805,8 +829,52 @@ function P-ClaudeEvidence($cli) {
   [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$found[0].path}));exit 0
 }
 
+function P-Frozen([string]$path,[byte[]]$bytes) {
+  $stream=[IO.File]::Open($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
+  try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) } finally { $stream.Dispose() }
+  return [ordered]@{path=$path;sha256=(V-Hash $bytes)}
+}
+function P-AgyEvidence($cli) {
+  # Freeze the Antigravity conversation transcript bound to this Dispatch and its CLI process log.
+  P-Require ($cli.Count -eq 3) 'usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT'
+  $raw=P-Decode ([IO.File]::ReadAllText($cli[1],$VUtf8).TrimStart([char]0xfeff));P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2
+  $o=$raw.result;P-Need $o @('dispatch','projection');$provider=V-Get $o.projection 'provider' @{}
+  P-Require ((V-Get $provider 'id') -ceq 'antigravity' -and $null -eq (V-Get $provider 'model')) 'model evidence only for an unreported model'
+  $out=$cli[2];$logOut=$out+'.cli.log'
+  P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out) -and -not [IO.File]::Exists($logOut)) 'snapshot output must be a new absolute file' 2
+  V-Safe $out
+  $home2=if ($env:ORCA_AGY_HOME) { $env:ORCA_AGY_HOME } else { Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.gemini') 'antigravity-cli' }
+  $since=(P-UtcSeconds (V-Get $o.dispatch 'createdAt'))-300
+  $recent={ param($path) ([DateTimeOffset]([IO.File]::GetLastWriteTimeUtc($path))).ToUnixTimeMilliseconds()/1000.0 -ge $since }
+  $found=@();$brain=Join-Path $home2 'brain'
+  if ([IO.Directory]::Exists($brain)) {
+    foreach ($dir in @([IO.Directory]::GetDirectories($brain) | Sort-Object)) {
+      $path=[IO.Path]::Combine($dir,'.system_generated','logs','transcript.jsonl')
+      if (-not [IO.File]::Exists($path) -or -not (& $recent $path)) { continue }
+      $bytes=[IO.File]::ReadAllBytes($path);$rows=P-TranscriptRows ($VUtf8.GetString($bytes).TrimStart([char]0xfeff).Replace("`r`n","`n"))
+      if (P-AgyBinds $o $rows) { $found+=,@{conversation=[IO.Path]::GetFileName($dir);bytes=$bytes} }
+    }
+  }
+  P-Require ($found.Count) 'no Antigravity transcript with this Dispatch preamble' 2
+  P-Require ($found.Count -eq 1) ('several Antigravity conversations claim this Dispatch: '+(@($found | ForEach-Object { $_.conversation }) -join ', ')) 2
+  $conversation=$found[0].conversation;$logs=@();$logDir=Join-Path $home2 'log'
+  if ([IO.Directory]::Exists($logDir)) {
+    foreach ($path in @([IO.Directory]::GetFiles($logDir,'*.log') | Sort-Object)) {
+      if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -or -not (& $recent $path)) { continue }
+      $bytes=[IO.File]::ReadAllBytes($path)
+      if ([Text.Encoding]::UTF8.GetString($bytes).Contains('] Created conversation '+$conversation)) { $logs+=,@{path=$path;bytes=$bytes} }
+    }
+  }
+  P-Require ($logs.Count -eq 1) ('expected exactly one Antigravity process log for conversation '+$conversation) 2
+  $model=P-AgyLogModel ([Text.Encoding]::UTF8.GetString($logs[0].bytes).Replace("`r",'')) $conversation
+  $proof=[ordered]@{kind='antigravity-log';conversation_id=$conversation}
+  $t=P-Frozen $out $found[0].bytes;$proof['path']=$t.path;$proof['sha256']=$t.sha256;$proof['log']=P-Frozen $logOut $logs[0].bytes
+  [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$logs[0].path}));exit 0
+}
+
 try {
   if ($args.Count -and $args[0] -ceq 'claude-model-evidence') { P-ClaudeEvidence $args }
+  if ($args.Count -and $args[0] -ceq 'antigravity-model-evidence') { P-AgyEvidence $args }
   P-Require ($args.Count -in @(2,3) -and $args[0] -ceq 'validate') 'usage: protocol-state validate INPUT_JSON [RESUME_OUT]'
   $data=P-Decode ([IO.File]::ReadAllText($args[1],$VUtf8).TrimStart([char]0xfeff));$result=P-Validate $data
   if ($args.Count -eq 3) {

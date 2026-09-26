@@ -57,7 +57,9 @@ the budget or manufacture a clean verdict.
 ## Reporting and settlement
 
 Read the Report binding section of the absolute runtime contract and use the live
-Task/Dispatch identities and the actual resulting/assigned artifact. Preserve the
+Task/Dispatch identities and the actual resulting/assigned artifact. Frozen
+assignment: `[FROZEN_ASSIGNMENT]` — copy its role, phase and round into BINDING
+exactly; never infer a role from the task. Readers bind its artifact_id/snapshot_id. Preserve the
 role's exact verdict/summary prefix and all required BINDING, FINDINGS, COVERAGE,
 EVIDENCE or FIX_EVIDENCE fields. Use only fields applicable to the assigned role.
 Write a fresh report, with exactly one current BINDING. Read a previous report for

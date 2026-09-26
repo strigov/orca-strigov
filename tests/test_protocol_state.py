@@ -339,7 +339,7 @@ class ProtocolTests(unittest.TestCase):
         later = [json.loads(line) for line in Path(evidence(dispatch='ctx_next', models=('claude-sonnet-5',))['path']).read_text().splitlines()]
         self.batch([
             (bind(evidence(models=('claude-opus-5-5', '<synthetic>', 'claude-opus-5-5'), after=later)), 0, ''),
-            (bind(good, obs=f.claude_observation(d, task, model='claude-opus-5-5')), 1, 'model evidence only for unreported Claude model'),
+            (bind(good, obs=f.claude_observation(d, task, model='claude-opus-5-5')), 1, 'model evidence only for an unreported model'),
             (dict(bind(good), observation=dict(observed, model_evidence=good, start=f.launch_receipt(task, d, 'created', model='opus'))), 1, 'model evidence with a launch receipt'),
             (bind(evidence(models=())), 2, 'no model response after Orca preamble')])
 
@@ -366,6 +366,47 @@ class ProtocolTests(unittest.TestCase):
         rc, token, result = build(f.workspace / 'twice.jsonl')
         self.assertEqual(rc, 2); self.assertIn('several Claude transcripts claim this Dispatch', result['reason'])
         self.assertFalse((f.workspace / 'twice.jsonl').exists())
+
+    def pending_agy(self):
+        f = self.f; proposed = f.assignment(family='Google'); proposed['dispatch_id'] = None
+        self.batch([(self.case(action='dispatch',proposed=proposed,artifact=f.snapshot_ref(),fleet=f.fleet()),0,'')])
+        return proposed, copy.deepcopy(f.state)
+
+    def test_antigravity_log_evidence_binds_path_b_dispatch_model(self):
+        f = self.f; proposed, pending = self.pending_agy(); task = proposed['task_id']; d = 'ctx_agy'
+        observed = f.agy_observation(d, task)
+        def evidence(conversation='c0ffee00-1111-2222-3333-444455556666', dispatch=d, **kw):
+            f.serial += 1
+            t, l = f.agy_home(f.workspace / ('agy-' + str(f.serial)), conversation, task, dispatch, **kw)
+            return dict(f.reference(t), kind='antigravity-log', conversation_id=conversation, log=f.reference(l))
+        def bind(proof):
+            return dict(schema_version=1, action='bind-dispatch', state=pending, observation=dict(observed, model_evidence=proof))
+        good = evidence()
+        results = self.batch([
+            (bind(evidence(dispatch='ctx_other')), 2, 'no Orca preamble for this Dispatch in Antigravity transcript'),
+            (bind(evidence(models=('gemini-3.8-flash-high', 'gemini-3.7-flash-high'))), 1, 'conflicting actual model facts'),
+            (bind(evidence(created='deadbeef-0000-0000-0000-000000000000')), 2, 'Antigravity log does not own this conversation'),
+            (bind(dict(good, kind='claude-transcript')), 1, 'model evidence kind does not match provider'),
+            (bind(evidence(models=('gemini-3.7-flash-high',))), 1, 'actual launch differs from proposal'),
+            (bind(good), 0, '')])
+        self.assertEqual(results[-1]['state']['active']['dispatch_id'], d)
+
+    def test_antigravity_model_evidence_builder_freezes_transcript_and_log(self):
+        f = self.f; task = 'fixture-task-agy'; d = 'ctx_agybuild'; home = f.workspace / 'agy-home'
+        env = dict(os.environ, ORCA_AGY_HOME=str(home)); observed = f.agy_observation(d, task)
+        def build(out):
+            rc, text, err = command(f.argv('protocol-state', 'antigravity-model-evidence', observed['path'], out), f.git.root, env=env)
+            rows = text.splitlines(); self.assertEqual(len(rows), 2, (rc, text, err))
+            return rc, rows[0], json.loads(rows[1])
+        self.assertEqual(build(f.workspace / 'none.jsonl')[:2], (2, 'UNVERIFIABLE'))
+        f.agy_home(home, 'aaaa0000-0000-0000-0000-000000000001', task, 'ctx_unrelated')
+        transcript, log = f.agy_home(home, 'bbbb0000-0000-0000-0000-000000000002', task, d)
+        rc, token, result = build(f.workspace / 'agy.jsonl')
+        self.assertEqual((rc, token, result['model']), (0, 'VALID', 'gemini-3.8-flash-high'), result)
+        proof = result['model_evidence']
+        self.assertEqual(proof['conversation_id'], 'bbbb0000-0000-0000-0000-000000000002')
+        self.assertEqual(Path(proof['path']).read_bytes(), transcript.read_bytes())
+        self.assertEqual(Path(proof['log']['path']).read_bytes(), log.read_bytes())
 
     def test_full_claude_model_ids_resolve_by_provider_prefix(self):
         f = self.f; artifact = f.snapshot_ref()

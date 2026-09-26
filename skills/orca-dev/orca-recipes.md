@@ -87,10 +87,12 @@ Argv per agent:
 
 | agent | argv |
 |---|---|
-| Antigravity (**always Path B** — `worker-start --model` is rejected for `antigravity`) | `agy --model <model> --effort <level> --dangerously-skip-permissions` (per `roles.md`) |
+| Antigravity (**always Path B** — `worker-start --model` is rejected for `antigravity`) | `agy --model <model> --dangerously-skip-permissions` (no `--effort`: the level is part of the `gemini-*-flash-<level>` id and agy rejects the flag; per `roles.md`) |
 | Codex, every native worker role (including trusted hooks) | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<level> -c features.multi_agent=false` |
 | Codex Pro (opt-in) | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <pro-model per roles.md> -c features.multi_agent=false` |
 | Claude | `claude --dangerously-skip-permissions --model <model> --effort <level>` (per `roles.md`) |
+
+**Antigravity on Path B** likewise has no reported model: after settlement run `"$BIN/protocol-state" antigravity-model-evidence "$dir/worker-show-<ATTEMPT>.json" "$dir/agy-transcript-<ATTEMPT>.jsonl"` and copy its `model_evidence` into that observation reference.
 
 **Claude on Path B has no launch receipt with a model** (`terminal create` carries none and Orca leaves `provider.model` null for Claude). After the worker's first assistant response — preferably after settlement — freeze its Claude Code session as C6 evidence:
 
@@ -217,7 +219,7 @@ Bridge down or doctor not `ready` → fall back to the default `astra` profile.
 | plan-writer (Pro — opt-in) | B | `codex ... -m <pro-model per roles.md> -c features.multi_agent=false` |
 | plan-reviewer / review-primary / review-final / diagnosis / frontend-implementer | B for Claude (fresh launch; model proof via `claude-model-evidence`) and for permitted Codex routes; A only to reuse an existing Claude terminal (`origin_start`) | role agent/model/effort per `roles.md`; every Codex argv carries explicit model/effort and `-c features.multi_agent=false` per §2 |
 | review-control | B for Codex and for an independent Claude substitution | model/effort per `roles.md`; Codex argv includes `-m <model> -c model_reasoning_effort=<effort> -c features.multi_agent=false` |
-| implementer / gate / synthesizer / quickfix | B | `agy --model <model> --effort <effort> --dangerously-skip-permissions` |
+| implementer / gate / synthesizer / quickfix | B | `agy --model <model> --dangerously-skip-permissions` (model id carries the level) |
 | implementer fallback / escalation | B for Codex | `codex ... -m <model> -c model_reasoning_effort=<effort> -c features.multi_agent=false` (per `roles.md`) |
 
 ## 9. Windows (native, no WSL)
