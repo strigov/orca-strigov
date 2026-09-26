@@ -46,6 +46,24 @@ if ($Args.Count -eq 2) {
     [Console]::Error.WriteLine("cannot derive a workspace name from: $plan"); exit 2
   }
   $dir = Join-Path $base $slug
+  # The plan's ledger is transient coordinator state (never committed). Ignore it
+  # locally so C4 snapshots and C5 packages never capture it as candidate source.
+  $planDir = (Get-Item -LiteralPath $plan).Directory.FullName.TrimEnd('\')
+  if ($planDir -eq $root -or $planDir.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    $relative = $planDir.Substring($root.Length).Replace('\', '/')
+    $pattern = [regex]::Replace($relative + '/' + $slug + '.ledger.json', '[\[\]*?\\!#]', '\$0')
+    $exclude = (& git rev-parse --git-path info/exclude)
+    if ($LASTEXITCODE -ne 0 -or -not $exclude) { [Console]::Error.WriteLine('sdd-workspace: cannot resolve info/exclude'); exit 2 }
+    if (-not [IO.Path]::IsPathRooted($exclude)) { $exclude = Join-Path (Get-Location).Path $exclude }
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($exclude)) | Out-Null
+    $text = if ([IO.File]::Exists($exclude)) { [IO.File]::ReadAllText($exclude) } else { '' }
+    if (@($text -split "`r?`n") -cnotcontains $pattern) {
+      $prefix = if ($text.Length -and -not $text.EndsWith("`n")) { "`n" } else { '' }
+      [IO.File]::AppendAllText($exclude, $prefix + $pattern + "`n", (New-Object Text.UTF8Encoding($false)))
+    }
+  } else {
+    [Console]::Error.WriteLine("sdd-workspace: plan outside the repository; its ledger is not ignored: $plan")
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null

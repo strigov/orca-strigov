@@ -44,6 +44,21 @@ elif [ $# -eq 1 ]; then
   [ -n "$slug" ] && [ "$slug" != "." ] && [ "$slug" != ".." ] \
     || { echo "cannot derive a workspace name from: $plan" >&2; exit 2; }
   dir="$base/$slug"
+  # The plan's ledger is transient coordinator state (never committed). Ignore it
+  # locally so C4 snapshots and C5 packages never capture it as candidate source.
+  root_phys=$(cd "$root" && pwd -P)
+  plan_dir=$(cd "$(dirname "$plan")" && pwd -P)
+  case "$plan_dir/" in
+    "$root_phys"/*)
+      pattern=$(printf '%s/%s.ledger.json' "${plan_dir#"$root_phys"}" "$slug" | sed 's/[][*?\\!#]/\\&/g')
+      exclude=$(git rev-parse --git-path info/exclude)
+      mkdir -p "$(dirname "$exclude")"
+      if ! { [ -f "$exclude" ] && grep -qxF -- "$pattern" "$exclude"; }; then
+        if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude")" ]; then printf '\n' >> "$exclude"; fi
+        printf '%s\n' "$pattern" >> "$exclude"
+      fi ;;
+    *) echo "sdd-workspace: plan outside the repository; its ledger is not ignored: $plan" >&2 ;;
+  esac
 fi
 
 mkdir -p "$dir"

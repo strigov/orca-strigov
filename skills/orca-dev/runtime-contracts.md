@@ -192,6 +192,8 @@ The runner captures stable before/after snapshots, actual tracked working bytes,
 index entries and index digest, file types/modes, deletions and all nonignored
 untracked paths, using NUL-safe Git enumeration. Snapshot manifests explicitly
 list the known plan workspace exclusion; tracked source is included even there.
+The transient plan ledger is ignored through the local `.git/info/exclude` entry
+written by `sdd-workspace <plan>`; C6 still reads it by path and hash.
 Declared inputs are never excluded. Unresolved links/submodules, unreadable files,
 unmerged or unsupported case-colliding paths and Git errors remain unknown.
 Content and file-set hashes are accompanied by change metadata and incarnation

@@ -201,7 +201,7 @@ JSON interfaces remain defined only in [runtime-contracts.md](runtime-contracts.
 
 ## Authorized Change Ledger
 
-`docs/plans/<slug>.ledger.json` — one flat JSON array, transient (never committed), deleted at archival. Written only by the coordinator. Item:
+`docs/plans/<slug>.ledger.json` — one flat JSON array, transient (never committed), deleted at archival. Written only by the coordinator. `sdd-workspace <plan>` adds its path to the repository's local `.git/info/exclude`, so C4 snapshots and C5 packages never capture it; run it before creating the ledger. Item:
 
 ```json
 { "id": "P<r>-B<n> | PF-B<n> | F<r>-B<n> | G<r>-B<n> | FR<r>-B<n>",
