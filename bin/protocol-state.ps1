@@ -390,8 +390,9 @@ function P-Independent($art,$coverage,$family,$provenance=@()) {
     foreach ($side in 'producer','consumer') { P-Require (P-Subset $c[$side] $matches[0][$side]) 'unknown contract side';P-Require (P-Subset $c[$side] $coverage.files) 'contract side lacks file review' }
   }
 }
-function P-Evidence($text,$art) {
-  $records=P-Line $text 'EVIDENCE';P-Require ($records -is [Array] -and $records.Count) 'missing executable evidence' 2;$passed=0
+function P-Evidence($text,$art) { return ,(P-EvidenceRecords (P-Line $text 'EVIDENCE') $art) }
+function P-EvidenceRecords($records,$art) {
+  P-Require ($records -is [Array] -and $records.Count) 'missing executable evidence' 2;$passed=0
   foreach ($entry in $records) {
     $st=P-Record $entry;P-Require (V-EvidenceValid $st) 'stale or invalid runner evidence';$e=$st.evidence
     P-Require ((P-Eq $e.source_after.manifest.files $art.files) -and $e.source_after.manifest.head -ceq $art.head) 'evidence snapshot mismatch'
@@ -399,6 +400,14 @@ function P-Evidence($text,$art) {
     if ($st.exit_code -eq 0) { $passed++ } else { $base=P-Record $entry.baseline;P-Require ((V-EvidenceValid $base) -and $base.evidence.key.provenance.kind -ceq 'BASE' -and $base.exit_code -ne 0 -and $base.evidence.failure_signature -ceq $e.failure_signature) 'unproven inherited failure' }
   }
   P-Require ($passed -gt 0) 'zero passing checks';return ,$records
+}
+function P-ScriptGate($s,$art) {
+  # A green verify-gate recorded by record-gate proves the same source as a gate worker's EVIDENCE.
+  foreach ($g in @($s['script_gates'])) {
+    if ($null -eq $g -or $g.step -cne $s.step) { continue }
+    $gated=P-Artifact $g.artifact $s $false
+    if ((P-Eq $gated.files $art.files) -and $gated.head -ceq $art.head) { [void](P-EvidenceRecords $g.evidence $gated);return $true }
+  };return $false
 }
 function P-Commit($fact,$s) {
   P-Need $fact @('sha','base','artifact');foreach ($key in 'sha','base') { P-Require ($fact[$key] -is [string] -and $fact[$key] -cmatch '^[a-f0-9]{40}$') 'missing full commit identity' 2 }
@@ -417,7 +426,8 @@ function P-Commit($fact,$s) {
 }
 function P-Covered($s,$art,$roles) {
   $reports=@($s.accepted | Where-Object { $_.role -cin $roles -and $_.step -ceq $s.step -and ((P-Eq (P-Artifact $_.artifact $s $false).files $art.files) -or ($null -eq $s.phase -and $s.plan -and $_.artifact_id -ceq $s.plan.sha256)) })
-  P-Require (P-Subset $roles @($reports | ForEach-Object { $_.role })) 'required report is missing' 2
+  $present=@($reports | ForEach-Object { $_.role });if ('gate' -cin $roles -and (P-ScriptGate $s $art)) { $present+='gate' }
+  P-Require (P-Subset $roles $present) 'required report is missing' 2
   foreach ($r in $reports) {
     $a=P-Artifact $r.artifact $s $false;$fields=P-Report (P-Ref $r.report) $r.binding $a $r.outcome $r.modified
     P-Require ($fields.token -ceq $r.token -and (P-Eq $fields.findings $r.findings) -and (P-Eq $fields.coverage $r.coverage)) 'accepted report state mismatch'
@@ -545,6 +555,7 @@ function P-Barrier($s,$phases) {
     $last=if ($phases.Count) { $phases[-1].id } else { $null };if ($s.phase -cne $last) { return 'ready_next_phase' };return 'awaiting_final_review'
   }
   $roles=@($s.accepted | Where-Object { $_.step -ceq $s.step } | ForEach-Object { $_.role })
+  if (@(@($s['script_gates']) | Where-Object { $null -ne $_ -and $_.step -ceq $s.step }).Count) { $roles+='gate' }
   if ($s.step -ceq 'final-review') { return 'awaiting_final_review' };if ($s.step -ceq 'delivery') { return 'awaiting_delivery' };if ($s.step -ceq 'completion') { return 'awaiting_completion_commit' }
   if ($s.mode -ceq 'quickfix') { if ('quickfix' -cin $roles) { return 'awaiting_commit' };return 'awaiting_implementation' }
   if ($null -eq $s.phase) { if ('plan-reviewer' -cin $roles) { return 'awaiting_commit' };return 'awaiting_plan_review' }
@@ -702,7 +713,7 @@ function P-Validate($data) {
       $roles=if ($s.mode -ceq 'quickfix') { @('quickfix') } elseif ($null -eq $s.phase) { @('plan-reviewer') } else { @('gate','review-primary','review-control') }
       if ($s.step -cin @('final-review','delivery','completion')) { $roles=if ($s.step -ceq 'final-review') { @('review-final') } else { @('gate') } }
       P-Covered $s $art $roles
-      foreach ($accepted in $s.accepted) { foreach ($proof in $accepted.evidence) { P-Require (V-EvidenceValid (P-Record $proof)) 'accepted evidence no longer valid' } }
+      foreach ($accepted in @(@($s.accepted)+@($s['script_gates']) | Where-Object { $null -ne $_ })) { foreach ($proof in $accepted.evidence) { P-Require (V-EvidenceValid (P-Record $proof)) 'accepted evidence no longer valid' } }
       if ($action -ceq 'prepare-commit') { $s.commit_barrier=@{expected_snapshot=$art.snapshot_id;expected_sha=$null;confirmed_sha=$null} }
       else {
         $fact=$data.commit;$committed=P-Commit $fact $s;P-Require ($committed.snapshot_id -ceq $art.snapshot_id) 'commit artifact differs from accepted candidate'
@@ -714,7 +725,7 @@ function P-Validate($data) {
         if ($action -ceq 'advance') {
           $ids=@($phases | ForEach-Object { $_.id });$index=[Array]::IndexOf($ids,$s.phase)
           if ($index+1 -lt $ids.Count) { $s.phase=$ids[$index+1];$s.step='phase';$s.base=$fact.sha } else { $s.step='final-review' }
-          $s.accepted=@();$s.commit_barrier=@{};$s.active=$null
+          $s.accepted=@();$s['script_gates']=@();$s.commit_barrier=@{};$s.active=$null
           $s.rounds.fused_review=0;$s.rounds.gate_fix=0
         }
         if ($action -ceq 'complete') {
@@ -722,6 +733,13 @@ function P-Validate($data) {
           P-Final $s $phases $committed;$s.final['completion']=$fact
         }
       }
+    }
+    'record-gate' {
+      # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
+      P-Require ($s.step -ceq 'phase' -and -not $s.write_ownership.Count) 'script gate outside an unowned phase candidate'
+      $art=P-Artifact $data.artifact $s;$proofs=P-EvidenceRecords $data.evidence $art
+      $kept=@(@($s['script_gates']) | Where-Object { $null -ne $_ -and $_.step -cne $s.step })
+      $s['script_gates']=@($kept+,@{step=$s.step;artifact=$data.artifact;evidence=$proofs})
     }
     'resume' { if (-not $s.commit_barrier.confirmed_sha) { foreach ($accepted in $s.accepted) { if ($accepted.step -ceq $s.step) { [void](P-Artifact $accepted.artifact $s) } } } }
     default { P-Require $false 'unknown action' }

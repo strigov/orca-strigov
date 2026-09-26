@@ -515,7 +515,10 @@ def independent(art, coverage, reviewer_family, provenance=()):
 
 
 def evidence(text, art):
-    records = line_json(text, "EVIDENCE")
+    return evidence_records(line_json(text, "EVIDENCE"), art)
+
+
+def evidence_records(records, art):
     require(isinstance(records, list) and records, "missing executable evidence", 2)
     passed = 0
     for entry in records:
@@ -532,6 +535,17 @@ def evidence(text, art):
                     base["exit_code"] != 0 and base["evidence"]["failure_signature"] == e["failure_signature"], "unproven inherited failure")
     require(passed > 0, "zero passing checks")
     return records
+
+
+def script_gate(state, art):
+    """A green verify-gate recorded by record-gate proves the same source as a gate worker's EVIDENCE."""
+    for g in state.get("script_gates", []):
+        if g["step"] == state["step"]:
+            gated = artifact(g["artifact"], state, current=False)
+            if gated["files"] == art["files"] and gated.get("head") == art.get("head"):
+                evidence_records(g["evidence"], gated)
+                return True
+    return False
 
 
 def commit_fact(fact, state):
@@ -563,7 +577,8 @@ def covered(state, art, roles):
     reports = [x for x in state["accepted"] if x["role"] in roles and x["step"] == state["step"] and
                (artifact(x["artifact"], state, current=False)["files"] == art["files"] or
                 (state["phase"] is None and state["plan"] and x["artifact_id"] == state["plan"]["sha256"]))]
-    require(set(roles) <= {r["role"] for r in reports}, "required report is missing", 2)
+    present = {r["role"] for r in reports} | ({"gate"} if "gate" in roles and script_gate(state, art) else set())
+    require(set(roles) <= present, "required report is missing", 2)
     for r in reports:
         text = ref(r["report"])
         saved_art = artifact(r["artifact"], state, current=False)
@@ -719,6 +734,7 @@ def barrier(state, phases):
         if state["step"] == "completion": return "complete"
         return "ready_next_phase" if state["phase"] != (phases[-1]["id"] if phases else None) else "awaiting_final_review"
     roles = {x["role"] for x in state["accepted"] if x["step"] == state["step"]}
+    if any(g["step"] == state["step"] for g in state.get("script_gates", [])): roles.add("gate")
     if state["step"] == "final-review": return "awaiting_final_review"
     if state["step"] == "delivery": return "awaiting_delivery"
     if state["step"] == "completion": return "awaiting_completion_commit"
@@ -925,7 +941,7 @@ def validate(data):
         if state["step"] in ("final-review", "delivery", "completion"):
             roles = ["review-final"] if state["step"] == "final-review" else ["gate"]
         covered(state, art, roles)
-        for accepted in state["accepted"]:
+        for accepted in state["accepted"] + state.get("script_gates", []):
             for proof in accepted.get("evidence", []):
                 require(v.evidence_valid(record(proof)), "accepted evidence no longer valid")
         if action == "prepare-commit":
@@ -943,12 +959,19 @@ def validate(data):
                 state["phase"] = ids[index+1] if index+1 < len(ids) else state["phase"]
                 if index+1 < len(ids): state["base"] = fact["sha"]
                 state["step"] = "phase" if index+1 < len(ids) else "final-review"
-                state["accepted"] = []; state["commit_barrier"] = {}; state["active"] = None
+                state["accepted"] = []; state["script_gates"] = []; state["commit_barrier"] = {}; state["active"] = None
                 state["rounds"]["fused_review"] = 0; state["rounds"]["gate_fix"] = 0
             if action == "complete":
                 require(fact["sha"] not in {f["sha"] for f in state["phase_commits"]}, "completion requires a separate commit")
                 final_facts(state, phases, committed)
                 state["final"]["completion"] = fact
+    elif action == "record-gate":
+        # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
+        require(state["step"] == "phase" and not state["write_ownership"], "script gate outside an unowned phase candidate")
+        art = artifact(data.get("artifact"), state)
+        proofs = evidence_records(data.get("evidence"), art)
+        state["script_gates"] = [g for g in state.get("script_gates", []) if g["step"] != state["step"]] + [
+            dict(step=state["step"], artifact=data["artifact"], evidence=proofs)]
     elif action == "resume":
         if not state["commit_barrier"].get("confirmed_sha"):
             for accepted in state["accepted"]:

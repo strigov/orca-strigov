@@ -257,6 +257,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(all(r[0]==0 for r in results),results)
         self.assertEqual(results[1][2]['state']['barrier'],'complete')
 
+    def test_green_script_gate_is_recorded_without_a_gate_worker(self):
+        f = self.f; art, coverage = f.package_ref()
+        self.valid(f.report_input('implementer', artifact=art))
+        rc, result = f.verified_run(code="print('gate')"); self.assertEqual(rc, 0, result)
+        proof = f.reference(Path(result['run_dir']) / 'result.json')
+        self.valid(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.valid(f.report_input('review-control', 'Google', artifact=art, coverage=coverage))
+        self.assertEqual(f.state['barrier'], 'awaiting_gate')
+        self.batch([(self.case(action='prepare-commit', artifact=art, fleet=f.fleet()), 2, 'required report is missing'),
+                    (self.case(action='record-gate', artifact=art, evidence=[]), 2, 'missing executable evidence')])
+        results = self.batch([(self.case(action='record-gate', artifact=art, evidence=[proof]), 0, ''),
+                              (self.case(action='prepare-commit', artifact=art, fleet=f.fleet()), 0, '')], previous=True)
+        self.assertEqual(results[0]['state']['barrier'], 'awaiting_commit')
+        self.assertEqual(f.state['commit_barrier']['expected_snapshot'], read_json(art['path'])['snapshot_after']['snapshot_id'])
+
     def test_explicitly_empty_cannot_verify_is_not_unstructured(self):
         f = self.f; art, coverage = f.package_ref(); state = copy.deepcopy(f.state); cases = []
         for extra, code, why in [('CANNOT_VERIFY: []', 0, ''), ('CANNOT_VERIFY:', 0, ''),
