@@ -257,6 +257,14 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(all(r[0]==0 for r in results),results)
         self.assertEqual(results[1][2]['state']['barrier'],'complete')
 
+    def test_explicitly_empty_cannot_verify_is_not_unstructured(self):
+        f = self.f; art, coverage = f.package_ref(); state = copy.deepcopy(f.state); cases = []
+        for extra, code, why in [('CANNOT_VERIFY: []', 0, ''), ('CANNOT_VERIFY:', 0, ''),
+                                 ('CANNOT_VERIFY: requirement without a check', 1, 'unstructured CANNOT_VERIFY')]:
+            f.state = copy.deepcopy(state)
+            cases.append((self.case(f.report_input('review-control', 'Anthropic', artifact=art, coverage=coverage, extra=extra)), code, why))
+        self.batch(cases)
+
     def pending_claude(self):
         f = self.f; proposed = f.assignment(family='Anthropic'); proposed['dispatch_id'] = None
         self.batch([(self.case(action='dispatch',proposed=proposed,artifact=f.snapshot_ref(),fleet=f.fleet()),0,'')])

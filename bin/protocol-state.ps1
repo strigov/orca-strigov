@@ -358,7 +358,9 @@ function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
     }
     $blocking=@($findings | Where-Object { $_.kind -ceq 'blocking' }).Count -gt 0
     P-Require (($token -cin @('REVIEW_BLOCKING','CHANGES_REQUESTED')) -eq $blocking) 'format: findings/verdict conflict'
-    P-Require (-not $text.Contains('CANNOT_VERIFY') -or @($findings | Where-Object { $_.kind -ceq 'cannot_verify' }).Count) 'format: unstructured CANNOT_VERIFY'
+    # An explicitly empty section ("CANNOT_VERIFY: []" or a bare header) states none.
+    $stated=[regex]::Replace($text,'(?m)^CANNOT_VERIFY:[ \t]*(\[\])?[ \t]*$','')
+    P-Require (-not $stated.Contains('CANNOT_VERIFY') -or @($findings | Where-Object { $_.kind -ceq 'cannot_verify' }).Count) 'format: unstructured CANNOT_VERIFY'
   }
   if ($role -cin @('implementer','frontend-implementer','quickfix') -and ($a.round -gt 1 -or $a.fix)) { $fix=P-Line $text 'FIX_EVIDENCE';P-Require ($fix.tests -and $fix.commands -and $fix.outputs) 'format: fix evidence' }
   if ($role -ceq 'quickfix') { P-Require (@($modified).Count -eq 1) 'quickfix must modify exactly one file' }

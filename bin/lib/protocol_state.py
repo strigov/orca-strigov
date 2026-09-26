@@ -470,7 +470,9 @@ def report_fields(text, active, art, outcome, modified):
                 if f.get("simplicity"): require(all(f.get(k) for k in ("unnecessary_cost_or_risk", "simpler_alternative", "preserved_properties")), "format: simplicity finding")
         blocking = any(f["kind"] == "blocking" for f in findings)
         require((token in ("REVIEW_BLOCKING", "CHANGES_REQUESTED")) == blocking, "format: findings/verdict conflict")
-        require("CANNOT_VERIFY" not in text or any(f["kind"] == "cannot_verify" for f in findings), "format: unstructured CANNOT_VERIFY")
+        # An explicitly empty section ("CANNOT_VERIFY: []" or a bare header) states none.
+        stated = re.sub(r"^CANNOT_VERIFY:[ \t]*(\[\])?[ \t]*$", "", text, flags=re.M)
+        require("CANNOT_VERIFY" not in stated or any(f["kind"] == "cannot_verify" for f in findings), "format: unstructured CANNOT_VERIFY")
     if role in ("implementer", "frontend-implementer", "quickfix") and (active["round"] > 1 or active.get("fix")):
         fix = line_json(text, "FIX_EVIDENCE")
         require(all(fix.get(k) for k in ("tests", "commands", "outputs")), "format: fix evidence")
