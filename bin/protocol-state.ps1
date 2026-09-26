@@ -478,7 +478,8 @@ function P-ReviewClosure($s,$proof,$finding,$origin) {
     foreach ($fact in $s.phase_commits) { if ((P-Commit $fact $s).files[$name].sha256 -ceq $reviewed.id) { $historical=$true } }
     P-Require ((V-Hash ([IO.File]::ReadAllBytes($source))) -ceq $reviewed.id -or $historical) 'stale closure source'
   } else {
-    P-Require ($written.snapshot_id -ceq $reviewed.snapshot_id -and (P-Eq $written.files $reviewed.files) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
+    # A C4 snapshot and a C5 package list different capture exclusions; compare reviewed bytes, index and HEAD.
+    P-Require ((P-Eq $written.files $reviewed.files) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
     P-Independent $reviewed $review.coverage $review.family $s.provenance
     P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }

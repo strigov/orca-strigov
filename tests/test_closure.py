@@ -7,7 +7,7 @@ import copy
 import json
 import unittest
 
-from support import ProtocolFixture
+from support import ProtocolFixture, read_json
 from pathlib import Path
 
 
@@ -100,6 +100,15 @@ class ClosureTests(unittest.TestCase):
         reviewed,coverage=self.repaired('unrelated later tree\n')
         review=self.review(reviewed,coverage)
         self.close(origin,fix,review,reviewed,1,'closure fix/review snapshot mismatch')
+
+    def test_fix_on_snapshot_and_review_on_package_of_same_source_close(self):
+        f=self.f;_,origin,_,_=self.origin();art,coverage=self.repaired()
+        # The fix report binds a C4 snapshot; C5 lists extra capture exclusions for the same bytes.
+        snapshot=f.snapshot_ref()
+        self.assertNotEqual(read_json(snapshot['path'])['snapshot_id'],read_json(art['path'])['snapshot_after']['snapshot_id'])
+        fix=self.fix(origin,snapshot)
+        review=self.review(art,coverage)
+        self.close(origin,fix,review,art)
 
     def test_actual_same_round_fix_response_and_later_review_close(self):
         f=self.f;initial,origin,_,_=self.origin();art,coverage=self.repaired()
