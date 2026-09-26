@@ -390,12 +390,26 @@ function P-Independent($art,$coverage,$family,$provenance=@()) {
     foreach ($side in 'producer','consumer') { P-Require (P-Subset $c[$side] $matches[0][$side]) 'unknown contract side';P-Require (P-Subset $c[$side] $coverage.files) 'contract side lacks file review' }
   }
 }
+function P-SourceFiles($files) {
+  # A candidate's identity is its repository entries; declared inputs are checked separately.
+  $out=[ordered]@{};foreach ($k in @($files.Keys)) { if ($k.StartsWith('repo:',[StringComparison]::Ordinal)) { $out[$k]=$files[$k] } };return $out
+}
+function P-InputFiles($files) {
+  $out=[ordered]@{};foreach ($k in @($files.Keys)) { if (-not $k.StartsWith('repo:',[StringComparison]::Ordinal)) { $out[$k]=$files[$k] } };return $out
+}
 function P-Evidence($text,$art) { return ,(P-EvidenceRecords (P-Line $text 'EVIDENCE') $art) }
 function P-EvidenceRecords($records,$art) {
   P-Require ($records -is [Array] -and $records.Count) 'missing executable evidence' 2;$passed=0
   foreach ($entry in $records) {
     $st=P-Record $entry;P-Require (V-EvidenceValid $st) 'stale or invalid runner evidence';$e=$st.evidence
-    P-Require ((P-Eq $e.source_after.manifest.files $art.files) -and $e.source_after.manifest.head -ceq $art.head) 'evidence snapshot mismatch'
+    $m=$e.source_after.manifest
+    P-Require ((P-Eq (P-SourceFiles $m.files) (P-SourceFiles $art.files)) -and $m.head -ceq $art.head) 'evidence snapshot mismatch'
+    if (-not (P-Eq (P-InputFiles $m.files) (P-InputFiles $art.files))) {
+      # A C5 package carries no declared inputs: they must still be what the check ran on.
+      $declared=if ($e.key.check.Contains('inputs') -and $null -ne $e.key.check.inputs) { @($e.key.check.inputs) } else { @() }
+      $now=V-Snapshot $m.root $declared $m.exclusions
+      P-Require ($now.valid -and (P-Eq (P-InputFiles $now.manifest.files) (P-InputFiles $m.files))) 'stale check inputs'
+    }
     if ($e.key.check.independent_replay) { P-Require (-not $e.origin_run_id) 'required replay reused implementer evidence' }
     if ($st.exit_code -eq 0) { $passed++ } else { $base=P-Record $entry.baseline;P-Require ((V-EvidenceValid $base) -and $base.evidence.key.provenance.kind -ceq 'BASE' -and $base.exit_code -ne 0 -and $base.evidence.failure_signature -ceq $e.failure_signature) 'unproven inherited failure' }
   }
@@ -406,7 +420,7 @@ function P-ScriptGate($s,$art) {
   foreach ($g in @($s['script_gates'])) {
     if ($null -eq $g -or $g.step -cne $s.step) { continue }
     $gated=P-Artifact $g.artifact $s $false
-    if ((P-Eq $gated.files $art.files) -and $gated.head -ceq $art.head) { [void](P-EvidenceRecords $g.evidence $gated);return $true }
+    if ((P-Eq (P-SourceFiles $gated.files) (P-SourceFiles $art.files)) -and $gated.head -ceq $art.head) { [void](P-EvidenceRecords $g.evidence $gated);return $true }
   };return $false
 }
 function P-Commit($fact,$s) {
@@ -489,7 +503,7 @@ function P-ReviewClosure($s,$proof,$finding,$origin) {
     P-Require ((V-Hash ([IO.File]::ReadAllBytes($source))) -ceq $reviewed.id -or $historical) 'stale closure source'
   } else {
     # A C4 snapshot and a C5 package list different capture exclusions; compare reviewed bytes, index and HEAD.
-    P-Require ((P-Eq $written.files $reviewed.files) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
+    P-Require ((P-Eq (P-SourceFiles $written.files) (P-SourceFiles $reviewed.files)) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
     P-Independent $reviewed $review.coverage $review.family $s.provenance
     P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }

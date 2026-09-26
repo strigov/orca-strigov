@@ -514,6 +514,15 @@ def independent(art, coverage, reviewer_family, provenance=()):
             require(set(c.get(side, [])) <= set(coverage.get("files", [])), "contract side lacks file review")
 
 
+def source_files(files):
+    """A candidate's identity is its repository entries; declared inputs are checked separately."""
+    return {k: x for k, x in files.items() if k.startswith("repo:")}
+
+
+def input_files(files):
+    return {k: x for k, x in files.items() if not k.startswith("repo:")}
+
+
 def evidence(text, art):
     return evidence_records(line_json(text, "EVIDENCE"), art)
 
@@ -525,7 +534,12 @@ def evidence_records(records, art):
         st = record(entry)
         require(v.evidence_valid(st), "stale or invalid runner evidence")
         e = st["evidence"]
-        require(e["source_after"]["manifest"]["files"] == art["files"] and e["source_after"]["manifest"]["head"] == art["head"], "evidence snapshot mismatch")
+        m = e["source_after"]["manifest"]
+        require(source_files(m["files"]) == source_files(art["files"]) and m["head"] == art["head"], "evidence snapshot mismatch")
+        if input_files(m["files"]) != input_files(art["files"]):
+            # A C5 package carries no declared inputs: they must still be what the check ran on.
+            now = v.snapshot(m["root"], e["key"]["check"].get("inputs", []), m["exclusions"])
+            require(now["valid"] and input_files(now["manifest"]["files"]) == input_files(m["files"]), "stale check inputs")
         if e["key"]["check"]["independent_replay"]:
             require(not e.get("origin_run_id"), "required replay reused implementer evidence")
         if st["exit_code"] == 0: passed += 1
@@ -542,7 +556,7 @@ def script_gate(state, art):
     for g in state.get("script_gates", []):
         if g["step"] == state["step"]:
             gated = artifact(g["artifact"], state, current=False)
-            if gated["files"] == art["files"] and gated.get("head") == art.get("head"):
+            if source_files(gated["files"]) == source_files(art["files"]) and gated.get("head") == art.get("head"):
                 evidence_records(g["evidence"], gated)
                 return True
     return False
@@ -655,7 +669,7 @@ def review_closure(state, proof, finding, origin):
     else:
         # A C4 snapshot and a C5 package list different capture exclusions, so their ids
         # differ for identical source; the reviewed bytes, index and HEAD must match.
-        require(written["files"] == reviewed["files"] and
+        require(source_files(written["files"]) == source_files(reviewed["files"]) and
                 written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
         independent(reviewed, review["coverage"], review["family"], state["provenance"])
         require(review["coverage"].get("files") and set(fix["modified"]) <= set(review["coverage"]["files"]),

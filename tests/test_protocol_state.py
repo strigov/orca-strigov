@@ -272,6 +272,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(results[0]['state']['barrier'], 'awaiting_commit')
         self.assertEqual(f.state['commit_barrier']['expected_snapshot'], read_json(art['path'])['snapshot_after']['snapshot_id'])
 
+    def test_script_gate_inputs_match_package_by_source_and_stay_fresh(self):
+        f = self.f; dep = f.git.root / 'vendor-input'; dep.mkdir(); (dep / 'lock.txt').write_text('v1\n')
+        with open(f.git.root / '.git/info/exclude', 'a', encoding='utf-8') as x: x.write('/vendor-input/\n')
+        art, coverage = f.package_ref()
+        self.valid(f.report_input('implementer', artifact=art))
+        rc, result = f.verified_run(code="print('gate')", declaration=dict(inputs=[str(dep)])); self.assertEqual(rc, 0, result)
+        self.assertTrue(any(k.startswith('input:') for k in result['evidence']['source_after']['manifest']['files']))
+        proof = f.reference(Path(result['run_dir']) / 'result.json')
+        self.valid(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.valid(f.report_input('review-control', 'Google', artifact=art, coverage=coverage))
+        gate = self.case(action='record-gate', artifact=art, evidence=[proof])
+        self.batch([(gate, 0, '')])
+        (dep / 'lock.txt').write_text('v2\n')
+        self.batch([(gate, 1, 'stale check inputs')])
+
     def test_explicitly_empty_cannot_verify_is_not_unstructured(self):
         f = self.f; art, coverage = f.package_ref(); state = copy.deepcopy(f.state); cases = []
         for extra, code, why in [('CANNOT_VERIFY: []', 0, ''), ('CANNOT_VERIFY:', 0, ''),
