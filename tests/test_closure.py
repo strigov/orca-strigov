@@ -110,6 +110,21 @@ class ClosureTests(unittest.TestCase):
         review=self.review(art,coverage)
         self.close(origin,fix,review,art)
 
+    def test_confirm_commit_keeps_closures_after_head_moves(self):
+        f=self.f;_,origin,_,_=self.origin();art,coverage=self.repaired()
+        fix=self.fix(origin,art)
+        rc,result=f.verified_run(code="print('ok')");self.assertEqual(rc,0,result)
+        proof=f.reference(Path(result['run_dir'])/'result.json')
+        self.validate(f.report_input('gate',artifact=art,round=2,extra='EVIDENCE: '+json.dumps([proof])))
+        review=self.review(art,coverage);self.review(art,coverage,role='review-control')
+        self.close(origin,fix,review,art,resume=True)
+        self.validate(dict(schema_version=1,action='prepare-commit',state=f.state,artifact=art,fleet=f.fleet()))
+        # The real commit moves HEAD before confirm-commit can record it.
+        fact=f.commit(art)
+        confirmed=self.validate(dict(schema_version=1,action='confirm-commit',state=f.state,artifact=art,commit=fact,fleet=f.fleet()))
+        self.assertEqual(confirmed['state']['closed_ledger_ids'],['B1'])
+        self.assertEqual(confirmed['state']['commit_barrier']['confirmed_sha'],fact['sha'])
+
     def test_actual_same_round_fix_response_and_later_review_close(self):
         f=self.f;initial,origin,_,_=self.origin();art,coverage=self.repaired()
         fix=self.fix(origin,art)

@@ -473,7 +473,7 @@ function P-AcceptedReport($s,$reference) {
   P-Require ($o.dispatch.status -ceq 'completed' -and $o.projection.evidence.durable -eq $true -and (P-Family $o) -ceq $r.family) 'closure report settlement mismatch' 2
   return @{report=$r;artifact=$art}
 }
-function P-ReviewClosure($s,$proof,$finding,$origin) {
+function P-ReviewClosure($s,$proof,$finding,$origin,$pending=$null) {
   P-Need $proof @('fix_report','review_report')
   $origin=(P-AcceptedReport $s $proof.report).report
   $a=P-AcceptedReport $s $proof.fix_report;$b=P-AcceptedReport $s $proof.review_report
@@ -499,7 +499,7 @@ function P-ReviewClosure($s,$proof,$finding,$origin) {
     foreach ($author in $s.provenance) { P-Require ((P-Family (P-Record $author).result $author) -cne $review.family) 'same-family plan review' }
     $source=if ($proof.artifact.Contains('source_path')) { $proof.artifact.source_path } else { $proof.artifact.path }
     $name='repo:'+$source.Substring($s.worktree.TrimEnd('\','/').Length+1).Replace('\','/')
-    foreach ($fact in $s.phase_commits) { if ((P-Commit $fact $s).files[$name].sha256 -ceq $reviewed.id) { $historical=$true } }
+    foreach ($fact in @(@($s.phase_commits)+@($pending) | Where-Object { $null -ne $_ })) { if ((P-Commit $fact $s).files[$name].sha256 -ceq $reviewed.id) { $historical=$true } }
     P-Require ((V-Hash ([IO.File]::ReadAllBytes($source))) -ceq $reviewed.id -or $historical) 'stale closure source'
   } else {
     # A C4 snapshot and a C5 package list different capture exclusions; compare reviewed bytes, index and HEAD.
@@ -509,11 +509,12 @@ function P-ReviewClosure($s,$proof,$finding,$origin) {
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }
     $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
     $current=V-Snapshot $s.worktree $inputs $m.exclusions
-    foreach ($fact in $s.phase_commits) { if (P-Eq (P-Commit $fact $s).files $reviewed.files) { $historical=$true } }
+    foreach ($fact in @(@($s.phase_commits)+@($pending) | Where-Object { $null -ne $_ })) { if (P-Eq (P-SourceFiles (P-Commit $fact $s).files) (P-SourceFiles $reviewed.files)) { $historical=$true } }
     P-Require ($current.valid -and (((P-Eq $current.manifest.files $reviewed.files) -and $current.manifest.head -ceq $reviewed.head) -or $historical)) 'stale closure source'
   }
 }
-function P-Ledger($s) {
+function P-Ledger($s,$pending=$null) {
+  # pending: the commit a confirm/advance/complete is registering; it proves closed source like a recorded one.
   $ledger=if ($null -eq $s.ledger) { ,@() } else { ,(P-Record $s.ledger) }
   P-Require ($ledger -is [Array] -and @($ledger.id | Select-Object -Unique).Count -eq $ledger.Count) 'invalid ledger'
   $closed=@();$opened=@()
@@ -530,7 +531,7 @@ function P-Ledger($s) {
     $originalArt=@{id=$origin.artifact_id;snapshot_id=$origin.snapshot_id}
     $fields=P-Report (P-Ref $origin.report) $origin.binding $originalArt $origin.outcome $origin.modified
     $finding=@($fields.findings | Where-Object { $_.id -ceq $item.id });P-Require ($finding.Count -eq 1) 'closure wrong finding';$finding=$finding[0]
-    if ($finding.kind -ceq 'blocking') { P-ReviewClosure $s $proof $finding $origin;$closed+=,$item.id;continue }
+    if ($finding.kind -ceq 'blocking') { P-ReviewClosure $s $proof $finding $origin $pending;$closed+=,$item.id;continue }
     P-Need $proof @('result','command','expect')
     if ($finding.kind -ceq 'cannot_verify') { P-Require ((P-Eq $proof.artifact $origin.artifact) -and $proof.command -ceq $finding.check -and $proof.expect -ceq $finding.expect) 'closure CHECK binding mismatch' }
     $art=P-Artifact $proof.artifact $s $false;$st=P-Record $proof.result
@@ -542,11 +543,11 @@ function P-Ledger($s) {
       $sourcePath=if ($proof.artifact.Contains('source_path')) { $proof.artifact.source_path } else { $proof.artifact.path }
       $name='repo:'+$sourcePath.Substring($s.worktree.TrimEnd('\','/').Length+1).Replace('\','/')
       P-Require ($m.files[$name].sha256 -ceq $proof.artifact.sha256) 'closure plan snapshot mismatch'
-    } else { P-Require ((P-Eq $m.files $art.files) -and $m.head -ceq $art.head) 'closure snapshot mismatch' }
+    } else { P-Require ((P-Eq (P-SourceFiles $m.files) (P-SourceFiles $art.files)) -and $m.head -ceq $art.head) 'closure snapshot mismatch' }
     $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
     $current=V-Snapshot $s.worktree $inputs $m.exclusions
     $historical=$false
-    foreach ($fact in $s.phase_commits) { if ($fact.base -ceq $m.head -and (P-Eq (P-Commit $fact $s).files $m.files)) { $historical=$true } }
+    foreach ($fact in @(@($s.phase_commits)+@($pending) | Where-Object { $null -ne $_ })) { if ($fact.base -ceq $m.head -and (P-Eq (P-SourceFiles (P-Commit $fact $s).files) (P-SourceFiles $m.files))) { $historical=$true } }
     P-Require ($current.valid -and ((P-Eq $current.manifest.files $m.files) -or $historical)) 'stale closure source'
     P-Require ($current.manifest.head -ceq $m.head -or $historical) 'stale closure HEAD'
     $closed+=,$item.id
@@ -618,7 +619,8 @@ function P-Validate($data) {
   $history=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
   foreach ($previous in $history) { [void](P-Ref $previous.report) }
   foreach ($previous in $s.protected_reports) { [void](P-Ref $previous) }
-  P-Ledger $s
+  $confirming=$data.action -cin @('confirm-commit','advance','complete') -and $data.commit -is [Collections.IDictionary]
+  $pendingCommit=if ($confirming) { $data.commit } else { $null };P-Ledger $s $pendingCommit
   foreach ($fact in $s.phase_commits) { [void](P-Commit $fact $s) }
   if ($s.commit_barrier.confirmed_sha) {
     $facts=@($s.phase_commits);if ($s.final.Contains('completion')) { $facts+=,$s.final.completion }

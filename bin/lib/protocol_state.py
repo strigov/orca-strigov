@@ -634,7 +634,7 @@ def accepted_report(state, reference):
     return r, art
 
 
-def review_closure(state, proof, finding, origin):
+def review_closure(state, proof, finding, origin, pending=()):
     need(proof, ("fix_report", "review_report"))
     origin, _ = accepted_report(state, proof["report"])
     fix, written = accepted_report(state, proof["fix_report"])
@@ -664,7 +664,7 @@ def review_closure(state, proof, finding, origin):
             require(family(record(author)["result"], author) != review["family"], "same-family plan review")
         source = Path(proof["artifact"].get("source_path", proof["artifact"]["path"]))
         name = "repo:" + source.relative_to(state["worktree"]).as_posix()
-        historical = any(commit_fact(c, state)["files"].get(name, {}).get("sha256") == reviewed["id"] for c in state["phase_commits"])
+        historical = any(commit_fact(c, state)["files"].get(name, {}).get("sha256") == reviewed["id"] for c in state["phase_commits"] + list(pending))
         require(v.digest(source.read_bytes()) == reviewed["id"] or historical, "stale closure source")
     else:
         # A C4 snapshot and a C5 package list different capture exclusions, so their ids
@@ -676,11 +676,12 @@ def review_closure(state, proof, finding, origin):
                 "closure fix lacks review coverage", 2)
         raw = record(proof["artifact"]); m = raw["snapshot_after"]["manifest"] if proof["artifact"]["kind"] == "package" else raw["manifest"]
         current = v.snapshot(state["worktree"], proof["artifact"].get("inputs", []), m["exclusions"])
-        historical = any(commit_fact(c, state)["files"] == reviewed["files"] for c in state["phase_commits"])
+        historical = any(source_files(commit_fact(c, state)["files"]) == source_files(reviewed["files"]) for c in state["phase_commits"] + list(pending))
         require(current["valid"] and ((current["manifest"]["files"] == reviewed["files"] and current["manifest"]["head"] == reviewed["head"]) or historical), "stale closure source")
 
 
-def ledger_facts(state):
+def ledger_facts(state, pending=()):
+    # pending: the commit a confirm/advance/complete is registering; it proves closed source like a recorded one.
     ledger = [] if state["ledger"] is None else record(state["ledger"])
     require(isinstance(ledger, list) and len({x["id"] for x in ledger}) == len(ledger), "invalid ledger")
     closed = []; opened = []
@@ -701,7 +702,7 @@ def ledger_facts(state):
         finding = next((f for f in findings if f["id"] == item["id"]), None)
         require(finding is not None, "closure wrong finding")
         if finding["kind"] == "blocking":
-            review_closure(state, proof, finding, origin)
+            review_closure(state, proof, finding, origin, pending)
             closed.append(item["id"])
             continue
         need(proof, ("result", "command", "expect"))
@@ -721,9 +722,9 @@ def ledger_facts(state):
             name = "repo:" + artifact_path(proof["artifact"].get("source_path", proof["artifact"]["path"])).relative_to(artifact_path(state["worktree"])).as_posix()
             require(m["files"].get(name, {}).get("sha256") == proof["artifact"]["sha256"], "closure plan snapshot mismatch")
         else:
-            require(m["files"] == art["files"] and m["head"] == art["head"], "closure snapshot mismatch")
+            require(source_files(m["files"]) == source_files(art["files"]) and m["head"] == art["head"], "closure snapshot mismatch")
         current = v.snapshot(state["worktree"], proof["artifact"].get("inputs", []), m["exclusions"])
-        historical = any(c["base"] == m["head"] and commit_fact(c, state)["files"] == m["files"] for c in state["phase_commits"])
+        historical = any(c["base"] == m["head"] and source_files(commit_fact(c, state)["files"]) == source_files(m["files"]) for c in state["phase_commits"] + list(pending))
         require(current["valid"] and (current["manifest"]["files"] == m["files"] or historical), "stale closure source")
         # A recorded confirmed commit may change HEAD, never source bytes.
         require(current["manifest"]["head"] == m["head"] or historical, "stale closure HEAD")
@@ -812,7 +813,8 @@ def validate(data):
     require(all(type(n) is int and 0 <= n <= 1 for n in state["format_corrections"].values()), "format-correction cap")
     for previous in state.get("report_history", state["accepted"]): ref(previous["report"])
     for previous in state.get("protected_reports", []): ref(previous)
-    ledger_facts(state)
+    confirming = data["action"] in ("confirm-commit", "advance", "complete") and isinstance(data.get("commit"), dict)
+    ledger_facts(state, [data["commit"]] if confirming else [])
     for fact in state["phase_commits"]: commit_fact(fact, state)
     if state["commit_barrier"].get("confirmed_sha"):
         facts = state["phase_commits"] + ([state["final"]["completion"]] if "completion" in state["final"] else [])
