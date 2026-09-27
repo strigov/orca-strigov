@@ -287,6 +287,24 @@ class ProtocolTests(unittest.TestCase):
         (dep / 'lock.txt').write_text('v2\n')
         self.batch([(gate, 1, 'stale check inputs')])
 
+    def test_user_extends_a_reached_review_cap_by_one_round(self):
+        f = self.f; art, coverage = f.package_ref()
+        f.state['rounds']['fused_review'] = 4
+        f.state['ledger'] = f.save([dict(id='F1-R4-B1', status='open', decision='ESCALATED_TO_HUMAN')])
+        proposed = f.assignment('review-primary', 'Anthropic', round=5); proposed['dispatch_id'] = None; proposed['coverage'] = coverage
+        def auth(**change):
+            record = dict(schema_version=1, run_id='fixture-run', phase='F1', group='fused_review', extra_rounds=1,
+                          findings=['F1-R4-B1'], user_decision='5 раунд'); record.update(change)
+            return f.save(record)
+        dispatch = lambda: self.case(action='dispatch', proposed=proposed, artifact=art, fleet=f.fleet())
+        early = copy.deepcopy(f.state); early['rounds']['fused_review'] = 3
+        self.batch([(dispatch(), 1, 'round cap/sequence'),
+                    (self.case(action='extend-cap', authorization=auth(phase='F2')), 1, 'cap extension binding mismatch'),
+                    (self.case(action='extend-cap', authorization=auth(findings=['closed-id'])), 1, 'must name open findings'),
+                    (dict(schema_version=1, action='extend-cap', state=early, authorization=auth()), 1, 'before the cap is reached')])
+        self.batch([(self.case(action='extend-cap', authorization=auth()), 0, ''), (dispatch(), 0, '')], previous=True)
+        self.assertEqual(f.state['rounds']['fused_review'], 5)
+
     def test_explicitly_empty_cannot_verify_is_not_unstructured(self):
         f = self.f; art, coverage = f.package_ref(); state = copy.deepcopy(f.state); cases = []
         for extra, code, why in [('CANNOT_VERIFY: []', 0, ''), ('CANNOT_VERIFY:', 0, ''),

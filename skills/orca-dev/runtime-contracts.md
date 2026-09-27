@@ -578,6 +578,7 @@ Actions and their additional inputs:
 | `bind-dispatch` | Saved `observation` binds the pending fresh Task to the actual Dispatch/model/worktree; retries of an old Dispatch are not a fresh review. |
 | `accept-report` | `event`, exact `message_id`, settled `observation`, `report`, `artifact`. Read subject/outcome/path from the actual message payload. Stale IDs and heartbeats do not complete work; duplicate message IDs are idempotent. An empty timed-out wait is not completion. |
 | `format-correction` | Fresh `fleet`, defective `report`, its settled `observation`, unchanged `artifact`, `outcome`, `files_modified`, and new same-role/round `proposed`. One correction only. |
+| `extend-cap` | `authorization`: an immutable record `{schema_version:1,run_id,phase,group,extra_rounds:1,findings,user_decision}` of the user's explicit decision at a reached cap. `findings` must be open ledger IDs; each record adds one round to that phase's cap. Never written without the user's words. |
 | `record-gate` | Current phase candidate `artifact` and `evidence`: the sealed C4 `result.json` references of a green verify-gate run. Checked like a gate report's `EVIDENCE`; it satisfies the phase's gate role without a gate worker and is cleared by `advance`. Final delivery still needs a gate report. |
 | `prepare-commit` | Fresh `fleet`, accepted `artifact`; verify roles, coverage, executable evidence, unresolved ledger IDs and staged candidate. Record expected snapshot with no invented commit SHA. |
 | `confirm-commit` / `advance` | Fresh `fleet`, accepted `artifact`, `commit:{sha,base,artifact}`. Read actual full Git commit/ancestry/tree, compare accepted index/source and current bytes; hook changes reject. Confirm the existing commit once after a crash; advance only after confirmation. |
@@ -733,7 +734,8 @@ Shared isolated fixtures: `python3 -B -m unittest discover -s tests
 for each PowerShell. The finite fake CLI cannot contact real Orca/settings.
 
 Caps remain plan review 4, fused review 4 per phase, final review 2, consecutive
-gate-fix 2 and one format correction. Complementary independent reports use the
+gate-fix 2 and one format correction. Only the user can lift a reached cap, one
+round at a time, through `extend-cap` with their verbatim decision; C6 rechecks it. Complementary independent reports use the
 same final round; rerunning the same role/family substantively needs a new round.
 Unresolved accepted ledger findings and CANNOT_VERIFY prevent commit. Prepared
 YAML `done`, a skipped/failed commit, budget exhaustion or a success-shaped wrapper

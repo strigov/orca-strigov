@@ -28,6 +28,19 @@ TOKENS = {
 }
 
 
+def cap(state, group):
+    """Protocol cap plus the user's recorded one-round extensions for this phase."""
+    extra = 0
+    for x in state.get("cap_extensions", []):
+        if x["group"] == group and x["phase"] == state["phase"]:
+            auth = record(x["authorization"])
+            require(auth.get("schema_version") == 1 and auth.get("run_id") == state["orca_run"] and auth.get("phase") == x["phase"] and
+                    auth.get("group") == group and auth.get("extra_rounds") == 1 and
+                    isinstance(auth.get("user_decision"), str) and auth["user_decision"].strip(), "invalid cap extension authorization")
+            extra += 1
+    return CAPS[group] + extra
+
+
 class Rejected(Exception):
     def __init__(self, reason, code=1, next_action="resolve-protocol-blocker"):
         self.code, self.next_action = code, next_action
@@ -832,8 +845,8 @@ def validate(data):
     for sha in (state["plan_base"], state["base"]):
         require(isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha), "missing recorded base", 2)
         v.git(state["worktree"], "cat-file", "-e", sha + "^{commit}")
-    for key, cap in CAPS.items():
-        require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap, "round cap: " + key)
+    for key in CAPS:
+        require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap(state, key), "round cap: " + key)
     require(all(type(n) is int and 0 <= n <= 1 for n in state["format_corrections"].values()), "format-correction cap")
     for previous in state.get("report_history", state["accepted"]): ref(previous["report"])
     for previous in state.get("protected_reports", []): ref(previous)
@@ -952,7 +965,7 @@ def validate(data):
             if proposed.get("gate_fix"): group = "gate_fix"
             if group:
                 count = state["rounds"][group]
-                require(proposed["round"] in (count, count + 1) and proposed["round"] <= CAPS[group], "round cap/sequence: " + group)
+                require(proposed["round"] in (count, count + 1) and proposed["round"] <= cap(state, group), "round cap/sequence: " + group)
                 state["rounds"][group] = proposed["round"]
                 prior = [r for r in state["accepted"] if r["role"] == proposed["role"] and r["binding"]["round"] == proposed["round"]]
                 require(not any(r["family"] == family({"projection": {"provider": {"model": proposed["model"]}}}) for r in prior), "substantive review needs a new round")
@@ -1005,6 +1018,17 @@ def validate(data):
                 require(fact["sha"] not in {f["sha"] for f in state["phase_commits"]}, "completion requires a separate commit")
                 final_facts(state, phases, committed)
                 state["final"]["completion"] = fact
+    elif action == "extend-cap":
+        # Only the user lifts a cap; the coordinator records that decision verbatim, one round per record.
+        auth = record(data.get("authorization"))
+        need(auth, ("schema_version", "run_id", "phase", "group", "extra_rounds", "findings", "user_decision"))
+        require(auth["schema_version"] == 1 and auth["group"] in CAPS and auth["run_id"] == state["orca_run"] and
+                auth["phase"] == state["phase"] and auth["extra_rounds"] == 1, "cap extension binding mismatch")
+        require(state["rounds"][auth["group"]] >= cap(state, auth["group"]), "cap extension before the cap is reached")
+        require(isinstance(auth["findings"], list) and auth["findings"] and set(auth["findings"]) <= set(state["open_ledger_ids"]),
+                "cap extension must name open findings")
+        require(isinstance(auth["user_decision"], str) and auth["user_decision"].strip(), "cap extension without the user's decision")
+        state.setdefault("cap_extensions", []).append(dict(group=auth["group"], phase=auth["phase"], authorization=data["authorization"]))
     elif action == "record-gate":
         # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
         require(state["step"] == "phase" and not state["write_ownership"], "script gate outside an unowned phase candidate")

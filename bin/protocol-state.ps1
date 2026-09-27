@@ -13,6 +13,16 @@ $PTokens=@{
   'review-control'=@('REVIEW_OK','REVIEW_BLOCKING','BLOCKED');'review-final'=@('REVIEW_OK','REVIEW_BLOCKING','BLOCKED')
   'synthesizer'=@('SYNTHESIS_DONE','BLOCKED');'diagnosis'=@('NEEDS_MORE_CONTEXT','NEEDS_MORE_REASONING','PHASE_TOO_LARGE','PLAN_WRONG','IMPASSE_SUMMARY','BLOCKED')
 }
+function P-Cap($s,[string]$group) {
+  # Protocol cap plus the user's recorded one-round extensions for this phase.
+  $extra=0
+  foreach ($x in @($s['cap_extensions'])) {
+    if ($null -eq $x -or $x.group -cne $group -or $x.phase -cne $s.phase) { continue }
+    $auth=P-Record $x.authorization
+    P-Require ($auth.schema_version -eq 1 -and $auth.run_id -ceq $s.orca_run -and $auth.phase -ceq $x.phase -and $auth.group -ceq $group -and $auth.extra_rounds -eq 1 -and $auth.user_decision -is [string] -and $auth.user_decision.Trim()) 'invalid cap extension authorization'
+    $extra++
+  };return $PCaps[$group]+$extra
+}
 function P-Require($ok,[string]$why,[int]$code=1) {
   if (-not $ok) { $e=New-Object InvalidOperationException($why);$e.Data['code']=$code;throw $e }
 }
@@ -638,7 +648,7 @@ function P-Validate($data) {
   $phases=P-Plan $s
   P-Tracks $s $phases
   foreach ($sha in $s.plan_base,$s.base) { P-Require ($sha -is [string] -and $sha -cmatch '^[a-f0-9]{40}$') 'missing recorded base' 2;[void](V-Git $s.worktree @('cat-file','-e',($sha+'^{commit}'))) }
-  foreach ($key in $PCaps.Keys) { $n=$s.rounds[$key];P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le $PCaps[$key]) ('round cap: '+$key) }
+  foreach ($key in $PCaps.Keys) { $n=$s.rounds[$key];P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le (P-Cap $s $key)) ('round cap: '+$key) }
   foreach ($n in $s.format_corrections.Values) { P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le 1) 'format-correction cap' }
   $history=if ($s.Contains('report_history')) { $s.report_history } else { $s.accepted }
   foreach ($previous in $history) { [void](P-Ref $previous.report) }
@@ -730,7 +740,7 @@ function P-Validate($data) {
       } else {
         $s.Remove('format_lock')
         $groups=@{'plan-reviewer'='plan_review';'review-primary'='fused_review';'review-control'='fused_review';'review-final'='final_review'};$group=$groups[$p.role];if ($p.gate_fix) { $group='gate_fix' }
-        if ($group) { $count=$s.rounds[$group];P-Require ($p.round -in @($count,($count+1)) -and $p.round -le $PCaps[$group]) ('round cap/sequence: '+$group);$s.rounds[$group]=$p.round }
+        if ($group) { $count=$s.rounds[$group];P-Require ($p.round -in @($count,($count+1)) -and $p.round -le (P-Cap $s $group)) ('round cap/sequence: '+$group);$s.rounds[$group]=$p.round }
         if ($group) { $family=P-Family @{projection=@{provider=@{model=$p.model}}};P-Require (-not @($s.accepted | Where-Object { $_.role -ceq $p.role -and $_.binding.round -eq $p.round -and $_.family -ceq $family }).Count) 'substantive review needs a new round' }
         if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art $p.coverage (P-Family @{projection=@{provider=@{model=$p.model}}}) $s.provenance }
       }
@@ -773,6 +783,15 @@ function P-Validate($data) {
           P-Final $s $phases $committed;$s.final['completion']=$fact
         }
       }
+    }
+    'extend-cap' {
+      # Only the user lifts a cap; the coordinator records that decision verbatim, one round per record.
+      $auth=P-Record $data.authorization;P-Need $auth @('schema_version','run_id','phase','group','extra_rounds','findings','user_decision')
+      P-Require ($auth.schema_version -eq 1 -and $PCaps.ContainsKey([string]$auth.group) -and $auth.run_id -ceq $s.orca_run -and $auth.phase -ceq $s.phase -and $auth.extra_rounds -eq 1) 'cap extension binding mismatch'
+      P-Require ($s.rounds[$auth.group] -ge (P-Cap $s $auth.group)) 'cap extension before the cap is reached'
+      P-Require ($auth.findings -is [Array] -and $auth.findings.Count -and (P-Subset $auth.findings @($s.open_ledger_ids))) 'cap extension must name open findings'
+      P-Require ($auth.user_decision -is [string] -and $auth.user_decision.Trim()) "cap extension without the user's decision"
+      $s['cap_extensions']=@(@(@($s['cap_extensions']) | Where-Object { $null -ne $_ })+,@{group=$auth.group;phase=$auth.phase;authorization=$data.authorization})
     }
     'record-gate' {
       # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
