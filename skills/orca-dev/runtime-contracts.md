@@ -486,9 +486,12 @@ code fixes; a text-only plan revision needs this binding and per-item section
 notes, without a new runtime CHECK. An initial pre-finding implementation report,
 a fix for another finding/report, or a review accepted before the fix cannot
 close the item. The independent re-review must be APPROVED/REVIEW_OK and omit the
-resolved finding. Fix and review cover the same repaired plan hash or
-source/index/HEAD, and review coverage includes the fix's modified files. Recheck
-family independence and current source (or its verified historical commit).
+resolved finding. A plan fix and its review cover the same repaired plan hash. A
+code fix and its review share the phase HEAD; the review may be a later round's
+positive re-review of the cumulative candidate (a multi-round loop never re-reviews
+each intermediate tree), and the closure `artifact` is that reviewed package. Its
+coverage includes the fix's modified files, and its source must still be the current
+candidate or a verified committed one. Recheck family independence.
 No runtime test is added merely for a wording correction. A REVIEW_BLOCKING
 report cannot become REVIEW_OK by changing the ledger. A later clean review
 also cannot silently erase an unresolved finding from earlier accepted history.

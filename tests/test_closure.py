@@ -94,12 +94,27 @@ class ClosureTests(unittest.TestCase):
         fix=self.fix(origin,art)
         self.close(origin,fix,review,art,1,'closure report order')
 
-    def test_fix_on_unrelated_artifact_cannot_close(self):
-        _,origin,_,_=self.origin();written,_=self.repaired('first fix\n')
+    def test_later_positive_review_of_current_source_closes_earlier_fix(self):
+        f=self.f;_,origin,_,_=self.origin();written,_=self.repaired('first fix\n')
         fix=self.fix(origin,written)
-        reviewed,coverage=self.repaired('unrelated later tree\n')
+        reviewed,coverage=self.repaired('later cumulative tree\n')
         review=self.review(reviewed,coverage)
-        self.close(origin,fix,review,reviewed,1,'closure fix/review snapshot mismatch')
+        self.close(origin,fix,review,reviewed)
+        # A positive review closes nothing once its source is no longer current or committed.
+        (f.git.root/'tracked.txt').write_bytes(b'changed after the review\n');f.git.git('add','tracked.txt')
+        self.close(origin,fix,review,reviewed,1,'stale closure source')
+
+    def test_multi_round_chain_closes_first_round_finding_with_final_review(self):
+        f=self.f;_,origin,_,_=self.origin();art1,coverage1=self.repaired('partial fix\n')
+        fix1=self.fix(origin,art1)
+        again=dict(id='B2',kind='blocking',issue='B1 only partly fixed',location='tracked.txt:1',
+                   change='finish it',risk='none',**{'class':'MUST_FIX_NOW'})
+        blocking=f.report_input('review-primary','Anthropic',token='REVIEW_BLOCKING',artifact=art1,coverage=coverage1,findings=[again],round=2)
+        self.validate(blocking)
+        art2,coverage2=self.repaired('complete fix\n')
+        self.fix(blocking['report'],art2,addressed=[dict(id='B2',report=blocking['report'])],round=2)
+        final=self.review(art2,coverage2)
+        self.close(origin,fix1,final,art2)
 
     def test_fix_on_snapshot_and_review_on_package_of_same_source_close(self):
         f=self.f;_,origin,_,_=self.origin();art,coverage=self.repaired()
@@ -107,6 +122,14 @@ class ClosureTests(unittest.TestCase):
         snapshot=f.snapshot_ref()
         self.assertNotEqual(read_json(snapshot['path'])['snapshot_id'],read_json(art['path'])['snapshot_after']['snapshot_id'])
         fix=self.fix(origin,snapshot)
+        review=self.review(art,coverage)
+        self.close(origin,fix,review,art)
+
+    def test_unstaged_fix_snapshot_and_staged_review_package_close(self):
+        f=self.f;_,origin,_,_=self.origin()
+        (f.git.root/'tracked.txt').write_bytes(b'repaired\n')  # the writer leaves its fix unstaged
+        fix=self.fix(origin,f.snapshot_ref())
+        f.git.git('add','tracked.txt');art,coverage=f.package_ref()  # the coordinator stages before the package
         review=self.review(art,coverage)
         self.close(origin,fix,review,art)
 

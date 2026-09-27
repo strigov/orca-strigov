@@ -704,10 +704,10 @@ def review_closure(state, proof, finding, origin, pending=()):
         historical = any(commit_fact(c, state)["files"].get(name, {}).get("sha256") == reviewed["id"] for c in state["phase_commits"] + list(pending))
         require(v.digest(source.read_bytes()) == reviewed["id"] or historical, "stale closure source")
     else:
-        # A C4 snapshot and a C5 package list different capture exclusions, so their ids
-        # differ for identical source; the reviewed bytes, index and HEAD must match.
-        require(source_files(written["files"]) == source_files(reviewed["files"]) and
-                written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
+        # The positive re-review after the fix may cover a later round's cumulative source: a
+        # loop re-reviews the current candidate, not each intermediate tree. It must share the
+        # phase HEAD, cover the fix's files and (below) still be the current or committed source.
+        require(written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
         independent(reviewed, review["coverage"], review["family"], state["provenance"])
         require(review["coverage"].get("files") and set(fix["modified"]) <= set(review["coverage"]["files"]),
                 "closure fix lacks review coverage", 2)

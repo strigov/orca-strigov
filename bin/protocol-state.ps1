@@ -537,7 +537,9 @@ function P-ReviewClosure($s,$proof,$finding,$origin,$pending=$null) {
     P-Require ((V-Hash ([IO.File]::ReadAllBytes($source))) -ceq $reviewed.id -or $historical) 'stale closure source'
   } else {
     # A C4 snapshot and a C5 package list different capture exclusions; compare reviewed bytes, index and HEAD.
-    P-Require ((P-Eq (P-SourceFiles $written.files) (P-SourceFiles $reviewed.files)) -and $written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
+    # The positive re-review after the fix may cover a later round's cumulative source; it must share
+    # the phase HEAD, cover the fix's files and (below) still be the current or committed source.
+    P-Require ($written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
     P-Independent $reviewed $review.coverage $review.family $s.provenance
     P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }
