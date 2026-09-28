@@ -1,12 +1,9 @@
 name: Runtime contracts
-# CI covers Linux only. macOS and native Windows (PowerShell 5.1 and pwsh 7) run
-# the same suite locally before a push: docs/runtime-platforms.md#evidence-levels.
+# Manual only: hosted runners are not paid for on this account. The suite runs
+# locally on macOS and native Windows (PowerShell 5.1 and pwsh 7) before a merge:
+# docs/runtime-platforms.md#evidence-levels. Start a Linux run by hand with
+# `gh workflow run runtime.yml` when the account allows it.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['docs/**', 'README.md', 'README.ru.md']
-  pull_request:
-    paths-ignore: ['docs/**', 'README.md', 'README.ru.md']
   workflow_dispatch:
 concurrency:
   group: runtime-${{ github.ref }}
