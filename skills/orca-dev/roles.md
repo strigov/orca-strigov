@@ -18,7 +18,7 @@ receipts. Unknown model identities remain unverifiable; this record grants no
 new role assignment or fallback. Compare the actual model, including when an
 agent CLI can launch a model from another family.
 
-FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","claude-opus-4-6-thinking":"Anthropic","claude-sonnet-4-6":"Anthropic","gemini-3.8-flash-high":"Google","gemini-3.7-flash-high":"Google"}
+FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","gemini-3.8-flash-high":"Google","gemini-3.7-flash-high":"Google"}
 
 A model id absent above gets a family only from one exact provider prefix
 (a full Claude id such as `claude-opus-5-5` read from a verified transcript);

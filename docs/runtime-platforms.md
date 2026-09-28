@@ -19,6 +19,8 @@ coordinator-core is always loaded: no token savings measurement is claimed.
 C6 requires `git worktree list --porcelain -z` to parse literal worktree records.
 The NUL-delimited mode was added in [Git 2.36 release notes](https://raw.githubusercontent.com/git/git/v2.36.0/Documentation/RelNotes/2.36.0.txt).
 
+The POSIX entry points (`bin/run-check`, `bin/verify-gate`, …) call `python3` from `PATH`. On macOS the Command Line Tools interpreter (3.9) must not shadow the 3.13 install: the suite then fails every runner test with `run-check: darwin requires Python 3.13+` although `python3.13 -m unittest` itself imports fine. Put the 3.13 `bin` first in `PATH` before running the suite.
+
 Python exposes macOS waitid from 3.13. The runner checks capabilities before its
 useful fork and preserves WNOWAIT until its process group is cleared. Darwin
 identity uses libproc's microsecond process start time, kernel boot-session UUID

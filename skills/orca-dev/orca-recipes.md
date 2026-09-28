@@ -75,7 +75,7 @@ else
 fi
 ```
 
-**The preamble carries the worker's identity — `--from <handle>` and `--dispatch-capability dcap_…`.** Orca accepts a `worker_done` only with those two values; a worker that copies the template's `orca orchestration send … worker_done` line without them gets the message rejected while its report file is already written. The prompt templates show both flags as placeholders pointing at the preamble. Coordinator handling of a rejected `worker_done` is in SKILL.md (verdict procedure): read the report, have the worker resend with the preamble's values, then proceed to release.
+**The preamble carries the worker's identity — `--from <handle>` and `--dispatch-capability dcap_…`.** Orca accepts a `worker_done` only with those two values; a worker that copies the template's `orca orchestration send … worker_done` line without them gets the message rejected while its report file is already written. The prompt templates show both flags as placeholders pointing at the preamble. Coordinator handling of a rejected `worker_done` is in coordinator-core.md (Verdicts): read the report, have the worker resend with the preamble's values, then proceed to release.
 
 **Codex needs it too:** Codex draws the "Ask Codex" composer while it is still `Starting MCP servers (n/9)`; text sent in that window lands in the composer but the Enter is swallowed. `wait-agent-ready <h> codex` waits for that line to leave the screen. If screen inspection shows retained draft content, send Enter once.
 
@@ -88,7 +88,7 @@ Argv per agent:
 | agent | argv |
 |---|---|
 | Antigravity (**always Path B** — `worker-start --model` is rejected for `antigravity`) | `agy --model <model> --dangerously-skip-permissions` (no `--effort`: the level is part of the `gemini-*-flash-<level>` id and agy rejects the flag; per `roles.md`) |
-| Codex, every native worker role (including trusted hooks) | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<level> -c features.multi_agent=false` |
+| Codex, every native worker role (including trusted hooks) | `env ORCA_STRIGOV_WORKER=1 codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<level> -c features.multi_agent=false` |
 | Codex Pro (opt-in) | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <pro-model per roles.md> -c features.multi_agent=false` |
 | Claude | `claude --dangerously-skip-permissions --model <model> --effort <level>` (per `roles.md`) |
 
@@ -159,7 +159,7 @@ Readiness checks before injection and receipt checks at real lifecycle barriers
 remain unchanged. A missing/broken helper is a setup issue to report, not a reason
 to reconstruct a model-driven short polling loop.
 
-`worker_done` fields the protocol reads: `subject` (the verdict token), `payload.outcome` (`succeeded|failed`), `payload.reportPath` (the report file — the coordinator reads only what SKILL.md allows), `payload.filesModified`.
+`worker_done` fields the protocol reads: `subject` (the verdict token), `payload.outcome` (`succeeded|failed`), `payload.reportPath` (the report file — the coordinator reads only what coordinator-core.md Rule 2 allows), `payload.filesModified`.
 
 ## 5. After a `worker_done`
 
@@ -194,7 +194,7 @@ Anything uncertain stays open. Never close the coordinator's own terminal, an ac
 - Start with current execution-host, worker and terminal evidence, Task/Dispatch settlement and the reported `nextAction` (`worker-show --dispatch <id> --json`, `worker-read --dispatch <id>` when a Dispatch exists, terminal evidence before one exists). `unverifiable`, readiness timeout, idle, missing heartbeat and failed Task bookkeeping alone do not prove that a process stopped. An alive retained terminal with a durably settled Task is not an active writer and may be reused.
 - Only positive current host exit/failure evidence (for example actual `failed`/`stopped`/`exited` liveness), or a durably settled Task with recovery evidence excluding an unresolved writer, can allow a fresh attempt. Follow only ownership-safe recovery supported by the real receipt/`nextAction`; never retry into a tree with an unresolved live or unverifiable write task. When permitted, use `worker-start --task <task> --retry-of <dispatch_id> ...` with explicit placement for Path A, or a fresh Path B terminal for roles requiring custom settings. Retry does not inherit placement; recheck the spec boundary and launch settings.
 - `outcome_unknown` keeps the write barrier unresolved. Inspect first; `worker-stop --dispatch <id>` is allowed only when current evidence and the recovery receipt support stopping an owned resource. Read the actual stop result before any retry. A stop request or `worker-abandon` is not proof of termination and cannot clear the barrier; never force close an external, retained or uncertain terminal.
-- An accepted, durably settled `worker_done --outcome failed` identifying quota / rate limit / auth / launch problems is an **availability** failure, subject to the evidence/recovery checks above → cascade per `roles.md`. Reviewer fallbacks must remain independent of every actual author family of their reviewed units, or acceptance stays incomplete. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`) → handle per SKILL.md.
+- An accepted, durably settled `worker_done --outcome failed` identifying quota / rate limit / auth / launch problems is an **availability** failure, subject to the evidence/recovery checks above → cascade per `roles.md`. Reviewer fallbacks must remain independent of every actual author family of their reviewed units, or acceptance stays incomplete. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`) → handle per coordinator-core.md Verdicts.
 
 ## 7. Bridge preflight (Pro planner — opt-in only)
 

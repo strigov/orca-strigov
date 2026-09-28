@@ -365,8 +365,9 @@ defects. No verdict is inferred from prose.
 
 Allocate an unused `ATTEMPT` nonce before each Task/Dispatch, including initial,
 fix, context-answer, format-correction, fallback and final-fix routes. Use
-`<workspace>/<role>-<phase>-r<round>-<ATTEMPT>.md`; a round or terminal alone is
-not unique. `PREVIOUS_REPORT_FILE` is read-only. Each report contains one current
+`<workspace>/<role>-<phase>-r<round>-<ATTEMPT>.md` (`final-fix-r<round>-<ATTEMPT>.md` for a
+Step 5 fix, `quickfix-<ATTEMPT>.md` on the plan-less path); a round or terminal alone
+is not unique. `PREVIOUS_REPORT_FILE` is read-only. Each report contains one current
 BINDING and all applicable FIX_EVIDENCE, including a retry inside the same round
 (`proposed.fix:true` for a fix whose round remains 1). C6 retains `report_history`
 even after a later round supersedes an accepted verdict, verifies prior hashes

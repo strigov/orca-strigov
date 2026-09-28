@@ -9,12 +9,12 @@ role/profile selection. No runtime barrier is waived by this split.
 
 Before every implementer dispatch:
 1. At the phase's first start, record BASE: `git rev-parse HEAD` → state line `base=` AND the phase's frontmatter `base:` (frontmatter is yours; this full SHA survives compaction). On resume/fix rounds reuse that recorded BASE; do not overwrite it with current HEAD.
-2. Resolve `[REPORT_FILE]` = `$("$WS" <plan-file>)/phase-<id>-r<round>-<ATTEMPT>.md`.
+2. Resolve `[REPORT_FILE]` = `$("$WS" <plan-file>)/<role>-<phase>-r<round>-<ATTEMPT>.md` (role `implementer` or `frontend-implementer`; the scheme is fixed in runtime-contracts.md, Immutable attempts).
 3. Confirm no unresolved live or unverifiable write task from current Task/Dispatch and execution-host evidence (recipes §6); a settled retained terminal may be reused.
 
-Route by the phase's `Files`: frontend-only → `frontend-implementer`; else → `implementer` cascade (`roles.md`). `impl=` in the state line records which model is live. Fill `prompts/implementer-prompt.md` (first-round), `task-create`, attach (Antigravity = Path B).
+Route by the phase's `Files`: frontend-only → `frontend-implementer`; else → `implementer` cascade (`roles.md`). `impl=` in the state line records which model is live. Fill `prompts/implementer-prompt.md` (first-round), `task-create`, attach per `orca-recipes.md` §2 (every fresh launch is Path B).
 
-**Implementer retention:** The implementer's terminal is retained across fix rounds until the phase is approved and committed; call `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `fix round r<k>`) immediately after accepting the delivery in Path A. Operator-created Path B terminals remain open according to the actual retention/release receipts (recipes §5).
+**Implementer retention:** The implementer's terminal is retained across fix rounds until the phase is approved and committed; fix rounds re-inject into it (`dispatch --inject`). `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `fix round r<k>`) applies only to an Orca-owned terminal, i.e. a Path A reuse; a Path B terminal the coordinator created stays open per recipes §5 until its closing rule applies.
 
 Verdicts:
 - `DONE` → Step 3.5. `DONE_WITH_CONCERNS` → read the concerns in the report; correctness/scope → address before review; observations → note.
