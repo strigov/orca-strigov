@@ -60,7 +60,7 @@ Keep the token-specific Context/Split/Plan defect/Summary section and the exact 
 
 From your own terminal, send exactly one `worker_done` using the task id and dispatch id from the Orca preamble. `orca` is a plain shell command on PATH — run it through your shell tool; there is no `orca` tool in any tool registry.
 
-orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the same token>" --body "<the root-cause sentence + the action you recommend>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome succeeded --report-path "[REPORT_FILE]" --json
+orca orchestration send --from <copy the --from value from the Orca preamble> --dispatch-capability <copy the dcap_… value from the Orca preamble> --type worker_done --subject "<the bare token, nothing else>" --body "<the root-cause sentence + the action you recommend>" --task-id <task_id> --dispatch-id <dispatch_id> --outcome succeeded --report-path "[REPORT_FILE]" --json
 
 `--outcome succeeded` for every valid token; `--outcome failed` with subject `BLOCKED` only if you could not diagnose at all (say why in the report). Then end your turn and idle.
 ```

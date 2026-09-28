@@ -687,7 +687,8 @@ function P-Validate($data) {
       P-Require ($o.dispatch.status -ceq 'completed' -and $o.projection.evidence.durable -eq $true) 'missing durable settlement' 2
       P-Require ($msg.from_handle -ceq $o.dispatch.assigneeHandle) 'wrong report sender'
       P-Require (-not @($history | Where-Object { $_.report.path -ceq $data.report.path }).Count -and -not @($s.protected_reports | Where-Object { $_.path -ceq $data.report.path }).Count) 'report path already bound to a prior attempt'
-      $text=P-Ref $data.report;P-Require ($payload.reportPath -ceq $data.report.path -and $msg.subject -ceq ($text -split '\r?\n')[0]) 'report path/subject mismatch'
+      $text=P-Ref $data.report;$subjectToken=([string]$msg.subject -split '[\s:]',2)[0]
+      P-Require ($payload.reportPath -ceq $data.report.path -and $subjectToken -ne '' -and $subjectToken -ceq ($text -split '\r?\n')[0]) 'report path/subject mismatch'
       $art=P-Artifact $data.artifact $s
       if ($a.role -cnotin $PWrite) { P-Require ($a.artifact_id -ceq $art.id -and (P-Eq $a.snapshot_id $art.snapshot_id)) 'assigned artifact changed' }
       $fields=P-Report $text $a $art $payload.outcome @($payload.filesModified)

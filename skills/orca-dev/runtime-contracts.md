@@ -313,8 +313,9 @@ BINDING: {"schema_version":1,"run_id":"<Orca Run>","task_id":"<Task>","dispatch_
 
 Use the live preamble's actual identities and the coordinator's frozen assignment,
 never a previous Dispatch. Writers bind their completed artifact; readers bind
-the assigned artifact. Hash the actual report bytes after writing. `subject`
-exactly equals line 1 and `outcome` must match the role verdict: `BLOCKED` and
+the assigned artifact. Hash the actual report bytes after writing. The `subject`
+leads with line 1's exact token (anything after `:` or a space is ignored) and
+`outcome` must match the role verdict: `BLOCKED` and
 writer `NEEDS_CONTEXT`/`NEEDS_AUTHORIZATION` fail; a produced review/gate/diagnosis
 artifact succeeds even when its substantive verdict requires more work.
 `BLOCKED` needs `## Reason`. Existing human-readable details remain in the report.

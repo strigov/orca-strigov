@@ -129,7 +129,7 @@ Every worker ends with exactly one `worker_done`. You read three things from it:
 
 Any review, gate or synthesis worker that could not produce its artifact at all returns the bare token `BLOCKED` with `--outcome failed` (its report's `## Reason` says why): one fresh re-dispatch of the same role, then escalate to the user.
 
-Procedure: exact-match `subject`, outcome and report line 1 through C6. Missing
+Procedure: C6 exact-matches the `subject`'s leading token (text after `:` or a space is ignored), outcome and report line 1. Missing
 mandatory binding/role fields → one format-correction Task/Dispatch, normally in
 the retained terminal, with the same role/artifact/snapshot/round. Write a new
 report and send one worker_done for that new Dispatch; never resend completion

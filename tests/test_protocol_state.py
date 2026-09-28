@@ -59,6 +59,18 @@ class ProtocolTests(unittest.TestCase):
         (f.git.root / 'tracked.txt').write_text('late hook mutation')
         self.reject(bad, contains='stale snapshot')
 
+    def test_subject_leads_with_the_report_token_and_may_explain_after_it(self):
+        # Bureau F4 r5 (2026-09-28): the worker sent "DONE_WITH_CONCERNS: R4-B2 fixed, ..." while report line 1
+        # was the bare token; exact equality rejected it and format-correction found no report defect.
+        f = self.f; data = f.report_input(); good = read_json(data['event']['path'])['result']['message']
+        def with_subject(subject):
+            msg = copy.deepcopy(good); msg['subject'] = subject
+            case = copy.deepcopy(data); case['event'] = f.save(dict(ok=True, result=dict(message=msg))); return case
+        self.batch([(with_subject(s), 1, 'report path/subject mismatch') for s in
+                    ('DONE_WITH_CONCERNS', 'DONEX', 'DONE_WITH_CONCERNS: DONE', '', ': DONE', ' DONE')])
+        self.valid(with_subject('DONE: R4-B2 fixed, R4-B1 prepared without launch'))
+        self.assertEqual(len(f.state['accepted']), 1)
+
     def test_duplicate_stale_heartbeat_empty_wait_and_whole_delivery(self):
         f = self.f; data = f.report_input(); good = read_json(data['event']['path'])['result']['message']
         old = copy.deepcopy(good); old['id'] = 'old'; old['payload'] = json.dumps(dict(taskId='old', dispatchId='old'))
