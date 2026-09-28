@@ -65,7 +65,7 @@ replace HOME, USERPROFILE or CODEX_HOME. `ORCA_TEST_TIME_SCALE` (default 1)
 multiplies only harness watchdogs and waits, never deadlines under test; use 3
 on a slow host.
 
-GitHub CI runs this suite on Linux only. macOS runs it on the development
+GitHub CI runs this suite on Linux only, and only on manual dispatch (`gh workflow run runtime.yml`); hosted runners are not paid for, so no push starts it. macOS runs it on the development
 machine (Python 3.13+). Native Windows runs it on a Windows PC once in Windows
 PowerShell 5.1 and once in pwsh 7, from the repository root in that shell:
 
