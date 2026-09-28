@@ -890,7 +890,7 @@ def validate(data):
         require(not any(r["report"]["path"] == report["path"] for r in state.get("report_history", state["accepted"])) and
                 not any(r["path"] == report["path"] for r in state.get("protected_reports", [])), "report path already bound to a prior attempt")
         # The verdict is report line 1; the subject must lead with that exact token (a worker may append ": <why>").
-        token = re.split(r"[\s:]", str(msg.get("subject") or ""), 1)[0]
+        token = re.split(r"[\s:]", str(msg.get("subject") or ""), maxsplit=1)[0]
         require(payload.get("reportPath") == report["path"] and token != "" and token == text.splitlines()[0], "report path/subject mismatch")
         art = artifact(data.get("artifact"), state)
         if active["role"] not in WRITE:
