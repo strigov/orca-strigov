@@ -151,6 +151,39 @@ class MaintenanceTests(unittest.TestCase):
         (f.git.root/'tracked.txt').write_bytes(b'stale candidate')
         self.native(self.case(), 1, 'stale closure source')
 
+    def test_check_closure_transfers_to_later_positive_review_candidate(self):
+        f = self.f; dep = f.git.root / 'vendor-input'; dep.mkdir(); (dep / 'lock.txt').write_text('v1\n')
+        with open(f.git.root / '.git/info/exclude', 'a', encoding='utf-8') as x: x.write('/vendor-input/\n')
+        check = lambda: f.verified_run(code="print('assertion holds')", declaration=dict(inputs=[str(dep)]))
+        first, coverage = f.package_ref()
+        rc, old = check(); self.assertEqual(rc, 0, old)
+        finding = dict(id='CV1', kind='cannot_verify', issue='assertion not run', location='tracked.txt:1',
+                       check=old['command'], expect='exit 0')
+        self.native(f.report_input('review-primary', 'Anthropic', artifact=first, coverage=coverage, findings=[finding]))
+        origin = f.state['accepted'][-1]['report']
+        # Other findings of the round are fixed, so the candidate leaves the bytes the finding was raised on.
+        (f.git.root / 'tracked.txt').write_bytes(b'repaired\n'); f.git.git('add', 'tracked.txt')
+        repaired, coverage = f.package_ref()
+        self.native(f.report_input('review-primary', 'Anthropic', artifact=repaired, coverage=coverage, round=2))
+        review = f.state['accepted'][-1]['report']
+        rc, new = check(); self.assertEqual((rc, new['command']), (0, old['command']), new)
+        result = lambda run: f.reference(Path(run['run_dir']) / 'result.json')
+        proof = dict(schema_version=1, finding_id='CV1', report=origin, artifact=repaired, result=result(new),
+                     command=finding['check'], expect=finding['expect'], review_report=review)
+        original = copy.deepcopy(f.state)
+        def close(code=0, reason='', **changed):
+            f.state = copy.deepcopy(original); receipt = {k: x for k, x in dict(proof, **changed).items() if x is not None}
+            f.state['ledger'] = f.save([dict(id='CV1', status='verified-by-controller', decision='ACCEPTED', closure=f.save(receipt))])
+            return self.native(self.case(), code, reason)
+        self.assertEqual(close()['state']['closed_ledger_ids'], ['CV1'])
+        close(1, 'CHECK binding', review_report=None)               # a later candidate needs its re-review
+        close(1, 'CHECK binding', command='different command')
+        close(1, 'closure phase/round mismatch', review_report=origin)  # the finding's own report is not a re-review
+        close(1, 'closure review artifact mismatch', artifact=first)
+        close(1, 'closure snapshot mismatch', result=result(old))     # the CHECK ran on the replaced bytes
+        (dep / 'lock.txt').write_text('v2\n')
+        close(1, 'stale closure source')
+
     def test_negative_check_and_review_ok_cannot_verify_barrier(self):
         f = self.f; art, coverage = f.package_ref()
         rc, result = f.verified_run(code="raise SystemExit(7)")

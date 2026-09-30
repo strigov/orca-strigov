@@ -744,8 +744,19 @@ def ledger_facts(state, pending=()):
             continue
         need(proof, ("result", "command", "expect"))
         if finding["kind"] == "cannot_verify":
-            require(proof["artifact"] == origin["artifact"] and proof["command"] == finding["check"] and
-                    proof["expect"] == finding["expect"], "closure CHECK binding mismatch")
+            require(proof["command"] == finding["check"] and proof["expect"] == finding["expect"], "closure CHECK binding mismatch")
+            if proof.get("review_report") is not None:
+                # Fixes of the same round move the candidate off the finding's bytes. The unchanged
+                # CHECK may then prove the candidate of a later positive re-review without the finding.
+                review, _ = accepted_report(state, proof["review_report"])
+                require(review["binding"]["phase"] == origin["binding"]["phase"] and review["binding"]["run_id"] == state["orca_run"] and
+                        review["step"] == origin["step"] and review["binding"]["round"] > origin["binding"]["round"],
+                        "closure phase/round mismatch")
+                require(reports.index(review) > reports.index(origin), "closure report order must be finding, re-review")
+                require(review["role"] in REVIEW and review["token"] in ("APPROVED", "REVIEW_OK") and
+                        not any(f["id"] == finding["id"] for f in review["findings"]), "closure missing positive re-review")
+                require(proof["artifact"] == review["artifact"], "closure review artifact mismatch")
+            else: require(proof["artifact"] == origin["artifact"], "closure CHECK binding mismatch")
         # Every closing status for cannot_verify needs the exact executable CHECK.
         art = artifact(proof["artifact"], state, current=False)
         st = record(proof["result"])
@@ -760,7 +771,8 @@ def ledger_facts(state, pending=()):
             require(m["files"].get(name, {}).get("sha256") == proof["artifact"]["sha256"], "closure plan snapshot mismatch")
         else:
             require(source_files(m["files"]) == source_files(art["files"]) and m["head"] == art["head"], "closure snapshot mismatch")
-        current = v.snapshot(state["worktree"], proof["artifact"].get("inputs", []), m["exclusions"])
+        # The CHECK's own declared inputs must still be what it ran on; a C5 package carries none.
+        current = v.snapshot(state["worktree"], proof["artifact"].get("inputs") or e["key"]["check"].get("inputs", []), m["exclusions"])
         historical = any(c["base"] == m["head"] and source_files(commit_fact(c, state)["files"]) == source_files(m["files"]) for c in state["phase_commits"] + list(pending))
         require(current["valid"] and (current["manifest"]["files"] == m["files"] or historical), "stale closure source")
         # A recorded confirmed commit may change HEAD, never source bytes.

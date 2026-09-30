@@ -463,8 +463,15 @@ The report must be in accepted history and contain that finding. For
 report's assigned artifact and finding. CHECK commands must assert the literal
 expectation and return zero only when it holds; a print-only diagnostic cannot
 prove an arbitrary expectation. If the expectation needs human judgment, keep
-the finding open. For an ordinary repaired blocking finding, use this receipt
-instead of introducing another mandatory runtime CHECK:
+the finding open. When fixes of the same round have replaced the finding's
+candidate, run the unchanged CHECK on the repaired candidate and add
+`"review_report":{"path":"<accepted independent re-review>","sha256":"<hash>"}`:
+`artifact` must then equal the artifact of that accepted positive review of the
+same Run, phase and step, from a later round and later in `report_history`,
+which no longer raises the finding. Command and expect stay the finding's
+literal values. Either way the CHECK's source and its declared inputs must
+still be the current or committed candidate. For an ordinary repaired blocking
+finding, use this receipt instead of introducing another mandatory runtime CHECK:
 
 ```json
 {"schema_version":1,"finding_id":"<exact id>","report":{"path":"<original accepted report>","sha256":"<hash>"},"artifact":{"kind":"plan|package","path":"<reviewed repaired artifact>","sha256":"<hash>"},"fix_report":{"path":"<accepted fix report>","sha256":"<hash>"},"review_report":{"path":"<accepted independent re-review>","sha256":"<hash>"}}

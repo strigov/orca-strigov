@@ -569,7 +569,22 @@ function P-Ledger($s,$pending=$null) {
     $finding=@($fields.findings | Where-Object { $_.id -ceq $item.id });P-Require ($finding.Count -eq 1) 'closure wrong finding';$finding=$finding[0]
     if ($finding.kind -ceq 'blocking') { P-ReviewClosure $s $proof $finding $origin $pending;$closed+=,$item.id;continue }
     P-Need $proof @('result','command','expect')
-    if ($finding.kind -ceq 'cannot_verify') { P-Require ((P-Eq $proof.artifact $origin.artifact) -and $proof.command -ceq $finding.check -and $proof.expect -ceq $finding.expect) 'closure CHECK binding mismatch' }
+    if ($finding.kind -ceq 'cannot_verify') {
+      P-Require ($proof.command -ceq $finding.check -and $proof.expect -ceq $finding.expect) 'closure CHECK binding mismatch'
+      if ($proof.Contains('review_report') -and $null -ne $proof.review_report) {
+        # Fixes of the same round move the candidate off the finding's bytes. The unchanged
+        # CHECK may then prove the candidate of a later positive re-review without the finding.
+        $review=(P-AcceptedReport $s $proof.review_report).report
+        P-Require ((P-Eq $review.binding.phase $origin.binding.phase) -and $review.binding.run_id -ceq $s.orca_run -and $review.step -ceq $origin.step -and $review.binding.round -gt $origin.binding.round) 'closure phase/round mismatch'
+        $positions=@()
+        foreach ($item in $origin,$review) {
+          for ($i=0;$i -lt $reports.Count;$i++) { if (P-Eq $reports[$i].report $item.report) { $positions+=,$i;break } }
+        }
+        P-Require ($positions.Count -eq 2 -and $positions[0] -lt $positions[1]) 'closure report order must be finding, re-review'
+        P-Require ($review.role -cin $PReview -and $review.token -cin @('APPROVED','REVIEW_OK') -and -not @($review.findings | Where-Object { $_.id -ceq $finding.id }).Count) 'closure missing positive re-review'
+        P-Require (P-Eq $proof.artifact $review.artifact) 'closure review artifact mismatch'
+      } else { P-Require (P-Eq $proof.artifact $origin.artifact) 'closure CHECK binding mismatch' }
+    }
     $art=P-Artifact $proof.artifact $s $false;$st=P-Record $proof.result
     P-Require (V-EvidenceValid $st) 'stale or invalid closure CHECK evidence'
     P-Require ($st.exit_code -eq 0) 'negative closure CHECK; finding remains blocking'
@@ -580,7 +595,8 @@ function P-Ledger($s,$pending=$null) {
       $name='repo:'+$sourcePath.Substring($s.worktree.TrimEnd('\','/').Length+1).Replace('\','/')
       P-Require ($m.files[$name].sha256 -ceq $proof.artifact.sha256) 'closure plan snapshot mismatch'
     } else { P-Require ((P-Eq (P-SourceFiles $m.files) (P-SourceFiles $art.files)) -and $m.head -ceq $art.head) 'closure snapshot mismatch' }
-    $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
+    # The CHECK's own declared inputs must still be what it ran on; a C5 package carries none.
+    $inputs=if ($proof.artifact.Contains('inputs') -and @($proof.artifact.inputs).Count) { $proof.artifact.inputs } elseif ($e.key.check.Contains('inputs') -and $null -ne $e.key.check.inputs) { @($e.key.check.inputs) } else { @() }
     $current=V-Snapshot $s.worktree $inputs $m.exclusions
     $historical=$false
     foreach ($fact in @(@($s.phase_commits)+@($pending) | Where-Object { $null -ne $_ })) { if ($fact.base -ceq $m.head -and (P-Eq (P-SourceFiles (P-Commit $fact $s).files) (P-SourceFiles $m.files))) { $historical=$true } }
