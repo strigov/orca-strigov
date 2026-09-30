@@ -165,6 +165,17 @@ class ClosureTests(unittest.TestCase):
         f.state['ledger']=None
         self.validate(code=1,reason='stale or incomplete package')
 
+    def test_resume_between_fix_and_rereview_keeps_rejected_verdicts_as_history(self):
+        f=self.f;_,origin,rejected,_=self.origin()
+        # A diagnosis of the rejected candidate binds the same package and never approves it.
+        self.validate(f.report_input('diagnosis',token='IMPASSE_SUMMARY',artifact=rejected,extra='## Summary\n## Evidence'))
+        art,_=self.repaired();self.fix(origin,art)
+        # The fix moved the tree away from the package the blocking review and the diagnosis cover.
+        self.assertEqual(self.validate()['state']['barrier'],'awaiting_resolution')
+        # The accepted fix is the current candidate: it must still match the working tree.
+        (f.git.root/'tracked.txt').write_bytes(b'unreviewed later edit\n')
+        self.validate(code=1,reason='stale or incomplete package')
+
     def test_legacy_ordered_accepted_and_missing_or_reordered_history(self):
         _,origin,_,_=self.origin();art,coverage=self.repaired()
         fix=self.fix(origin,art,round=2)

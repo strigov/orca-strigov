@@ -538,6 +538,10 @@ previous same-round entry in current `accepted`, while `report_history` retains
 every immutable attempt. Existing earlier-round replacement is unchanged. This
 lets a repaired candidate resume after its fresh gate and reviews; current
 accepted artifacts still must be current, and stale current approvals reject.
+On `resume`, a diagnosis or a verdict with unclosed findings is history, not an
+approval: its saved artifact is verified but need not match the working tree,
+because a fix is expected to replace that candidate. A verdict whose findings
+are all closed is checked against the tree like any approval.
 Bootstrap failures are retained, not superseded by this fix rule.
 
 Required compact `state` fields:

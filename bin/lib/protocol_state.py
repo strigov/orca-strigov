@@ -1040,8 +1040,13 @@ def validate(data):
             dict(step=state["step"], artifact=data["artifact"], evidence=proofs)]
     elif action == "resume":
         if not state["commit_barrier"].get("confirmed_sha"):
+            closed = state.get("closed_ledger_ids", [])
             for accepted in state["accepted"]:
-                if accepted["step"] == state["step"]: artifact(accepted["artifact"], state)
+                if accepted["step"] != state["step"]: continue
+                # A diagnosis or a verdict with unclosed findings approves nothing: its candidate is
+                # expected to be repaired, so it is history. Approvals must still match the tree.
+                history = accepted["role"] == "diagnosis" or any(f["id"] not in closed for f in accepted["findings"])
+                artifact(accepted["artifact"], state, current=not history)
     else: raise Rejected("unknown action")
     state["barrier"] = barrier(state, phases)
     return state, decision

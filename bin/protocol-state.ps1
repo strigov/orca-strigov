@@ -803,7 +803,18 @@ function P-Validate($data) {
       $kept=@(@($s['script_gates']) | Where-Object { $null -ne $_ -and $_.step -cne $s.step })
       $s['script_gates']=@($kept+,@{step=$s.step;artifact=$data.artifact;evidence=$proofs})
     }
-    'resume' { if (-not $s.commit_barrier.confirmed_sha) { foreach ($accepted in $s.accepted) { if ($accepted.step -ceq $s.step) { [void](P-Artifact $accepted.artifact $s) } } } }
+    'resume' {
+      if (-not $s.commit_barrier.confirmed_sha) {
+        foreach ($accepted in $s.accepted) {
+          if ($accepted.step -ceq $s.step) {
+            # A diagnosis or a verdict with unclosed findings approves nothing: its candidate is
+            # expected to be repaired, so it is history. Approvals must still match the tree.
+            $history=($accepted.role -ceq 'diagnosis') -or [bool]@($accepted.findings | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count
+            [void](P-Artifact $accepted.artifact $s (-not $history))
+          }
+        }
+      }
+    }
     default { P-Require $false 'unknown action' }
   }
   $s['barrier']=P-Barrier $s $phases;return @{state=$s;decision=$decision}
