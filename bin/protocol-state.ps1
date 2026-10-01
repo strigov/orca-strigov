@@ -407,11 +407,13 @@ function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
   return @{token=$token;findings=$findings;coverage=(P-Line $text 'COVERAGE' @{})}
 }
 function P-KnownFamilies() { return @(@(V-Values (P-RolesFact 'FAMILY_MODELS'))+@(V-Values (P-RolesFact 'FAMILY_PREFIXES')) | Select-Object -Unique) }
-function P-Waived($s) {
-  # Units the user released from the family rule for this step: "path|reviewer family" entries.
+function P-Waived($s,$step=$null,$phase=$null) {
+  # Units the user released from the family rule for one step: "path|reviewer family" entries.
+  # A review keeps the waiver of the step it was accepted in when later steps re-verify it.
+  if ($null -eq $step) { $step=$s.step;$phase=$s.phase }
   $out=@()
   foreach ($w in @($s['independence_waivers'])) {
-    if ($null -eq $w -or $w.step -cne $s.step -or -not (P-Eq $w.phase $s.phase)) { continue }
+    if ($null -eq $w -or $w.step -cne $step -or -not (P-Eq $w.phase $phase)) { continue }
     $auth=P-Record $w.authorization
     P-Require ($auth.schema_version -eq 1 -and $auth.run_id -ceq $s.orca_run -and $auth.step -ceq $w.step -and (P-Eq $auth.phase $w.phase) -and (P-Eq $auth.files $w.files) -and $auth.reviewer_family -ceq $w.reviewer_family -and $auth.user_decision -is [string] -and $auth.user_decision.Trim()) 'invalid independence waiver authorization'
     foreach ($path in $w.files) { $out+=,($path+'|'+$w.reviewer_family) }
@@ -498,7 +500,7 @@ function P-Covered($s,$art,$roles) {
     P-Require ($obs.dispatch.status -ceq 'completed' -and $obs.projection.evidence.durable -eq $true) 'accepted settlement missing' 2
     if ($r.role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { P-Require (P-Eq (P-Evidence (P-Ref $r.report) $a) $r.evidence) 'accepted evidence mismatch' }
     if ($r.role -ceq 'plan-reviewer') { P-Require ($s.provenance.Count) 'unknown plan authors' 2;foreach ($author in $s.provenance) { P-Require ((P-Family (P-Record $author).result $author) -cne $r.family) 'same-family plan review' } }
-    if ($r.role -cin $PReview -and $r.role -cne 'plan-reviewer') { P-Independent $a $r.coverage $r.family $s.provenance (P-Waived $s) }
+    if ($r.role -cin $PReview -and $r.role -cne 'plan-reviewer') { P-Independent $a $r.coverage $r.family $s.provenance (P-Waived $s $r.step $r.binding.phase) }
     P-Require (-not @($r.findings | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count -and $r.token -cin @('REVIEW_OK','GATE_OK','APPROVED','DONE','DONE_WITH_CONCERNS')) 'unresolved findings or verification'
   }
   $reviews=@($reports | Where-Object { $_.role -cin $PReview -and $_.role -cne 'plan-reviewer' })
@@ -555,7 +557,7 @@ function P-ReviewClosure($s,$proof,$finding,$origin,$pending=$null) {
     # The positive re-review after the fix may cover a later round's cumulative source; it must share
     # the phase HEAD, cover the fix's files and (below) still be the current or committed source.
     P-Require ($written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
-    P-Independent $reviewed $review.coverage $review.family $s.provenance (P-Waived $s)
+    P-Independent $reviewed $review.coverage $review.family $s.provenance (P-Waived $s $review.step $review.binding.phase)
     P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }
     $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }

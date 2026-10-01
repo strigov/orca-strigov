@@ -527,11 +527,14 @@ def known_families():
     return set(roles_fact("FAMILY_MODELS").values()) | set(roles_fact("FAMILY_PREFIXES").values())
 
 
-def waived(state):
-    """Units the user released from the family rule for this step: (path, reviewer family) pairs."""
+def waived(state, step=None, phase=None):
+    """Units the user released from the family rule for one step: (path, reviewer family) pairs.
+
+    A review keeps the waiver of the step it was accepted in when later steps re-verify it."""
+    if step is None: step, phase = state["step"], state["phase"]
     out = set()
     for w in state.get("independence_waivers", []):
-        if w["step"] != state["step"] or w.get("phase") != state["phase"]: continue
+        if w["step"] != step or w.get("phase") != phase: continue
         auth = record(w["authorization"])
         require(auth.get("schema_version") == 1 and auth.get("run_id") == state["orca_run"] and auth.get("step") == w["step"] and
                 auth.get("phase") == w.get("phase") and auth.get("files") == w["files"] and auth.get("reviewer_family") == w["reviewer_family"] and
@@ -666,7 +669,7 @@ def covered(state, art, roles):
         if r["role"] == "plan-reviewer":
             require(state["provenance"], "unknown plan authors", 2)
             for author in state["provenance"]: require(family(record(author)["result"], author) != r["family"], "same-family plan review")
-        if r["role"] in REVIEW and r["role"] != "plan-reviewer": independent(saved_art, coverage, r["family"], state["provenance"], waived(state))
+        if r["role"] in REVIEW and r["role"] != "plan-reviewer": independent(saved_art, coverage, r["family"], state["provenance"], waived(state, r["step"], r["binding"]["phase"]))
         require(not [f for f in r["findings"] if f["id"] not in state.get("closed_ledger_ids", [])] and r["token"] in ("REVIEW_OK", "GATE_OK", "APPROVED", "DONE", "DONE_WITH_CONCERNS"), "unresolved findings or verification")
     if reviews := [r for r in reports if r["role"] in REVIEW and r["role"] != "plan-reviewer"]:
         if art["manifest"] is None:
@@ -731,7 +734,7 @@ def review_closure(state, proof, finding, origin, pending=()):
         # loop re-reviews the current candidate, not each intermediate tree. It must share the
         # phase HEAD, cover the fix's files and (below) still be the current or committed source.
         require(written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
-        independent(reviewed, review["coverage"], review["family"], state["provenance"], waived(state))
+        independent(reviewed, review["coverage"], review["family"], state["provenance"], waived(state, review["step"], review["binding"]["phase"]))
         require(review["coverage"].get("files") and set(fix["modified"]) <= set(review["coverage"]["files"]),
                 "closure fix lacks review coverage", 2)
         raw = record(proof["artifact"]); m = raw["snapshot_after"]["manifest"] if proof["artifact"]["kind"] == "package" else raw["manifest"]

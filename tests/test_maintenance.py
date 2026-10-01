@@ -200,11 +200,25 @@ class MaintenanceTests(unittest.TestCase):
         self.native(waive(artifact=f.package_ref()[0]), 1, 'every family as author')
         self.native(waive())
         self.assertEqual(len(f.state['independence_waivers']), 1)
-        self.native(review())
+        finding = dict(id='B1', kind='blocking', issue='wrong behavior', location='tracked.txt:1', change='correct it', risk='none', **{'class': 'MUST_FIX_NOW'})
+        self.native(f.report_input('review-primary', 'Anthropic', token='REVIEW_BLOCKING', artifact=art, coverage=coverage, findings=[finding]))
+        origin = f.state['accepted'][-1]['report']
         # The waiver names one reviewer family and one step; everything else keeps the family rule.
         self.native(f.report_input('review-control', 'Google', artifact=art, coverage=coverage), 1, 'same-family review')
+        # The waived reviewer's later closure stays valid when a later step re-verifies it.
+        (f.git.root / 'tracked.txt').write_bytes(b'repaired\n'); f.git.git('add', 'tracked.txt')
+        repaired, coverage = f.package_ref(families={'OpenAI': files, 'Anthropic': files, 'Google': files})
+        a = f.assignment('implementer'); a['fix'] = True
+        evidence = dict(tests=['focused assertion'], commands=['fixture command'], outputs=['passed'], findings=[dict(id='B1', report=origin)])
+        self.native(f.report_input('implementer', artifact=repaired, assignment=a, extra='FIX_EVIDENCE: ' + json.dumps(evidence)))
+        fix = f.state['accepted'][-1]['report']
+        self.native(f.report_input('review-primary', 'Anthropic', artifact=repaired, coverage=coverage, round=2))
+        proof = dict(schema_version=1, finding_id='B1', report=origin, artifact=repaired, fix_report=fix, review_report=f.state['accepted'][-1]['report'])
+        f.state['ledger'] = f.save([dict(id='B1', status='fixed', closure=f.save(proof))])
+        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['B1'])
         f.state['step'] = 'final-review'
-        self.native(f.report_input('review-final', 'Anthropic', artifact=art, coverage=coverage), 1, 'same-family review')
+        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['B1'])
+        self.native(f.report_input('review-final', 'Anthropic', artifact=repaired, coverage=coverage), 1, 'same-family review')
 
     def test_negative_check_and_review_ok_cannot_verify_barrier(self):
         f = self.f; art, coverage = f.package_ref()
