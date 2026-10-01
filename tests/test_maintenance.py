@@ -184,6 +184,28 @@ class MaintenanceTests(unittest.TestCase):
         (dep / 'lock.txt').write_text('v2\n')
         close(1, 'stale closure source')
 
+    def test_independence_waiver_only_for_units_authored_by_every_family(self):
+        f = self.f; files = f.git.git('diff', '--name-only', f.git.base).splitlines()
+        art, coverage = f.package_ref(families={'OpenAI': files, 'Anthropic': files, 'Google': files})
+        review = lambda: f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
+        self.native(review(), 1, 'same-family review')
+        decision = dict(schema_version=1, run_id='fixture-run', step=f.state['step'], phase=f.state['phase'], files=files,
+                        reviewer_family='Anthropic', user_decision='I reviewed these units myself; let Opus review them.')
+        waive = lambda artifact=art, **changed: self.case('waive-independence', authorization=f.save(dict(decision, **changed)), artifact=artifact)
+        self.native(waive(step='delivery'), 1, 'waiver binding mismatch')
+        self.native(waive(reviewer_family='Unknown'), 1, 'known reviewer family')
+        self.native(waive(user_decision=' '), 1, "user's decision")
+        self.native(waive(files=files + ['missing.txt']), 1, 'every family as author')
+        # A unit that still has an independent family cannot be waived.
+        self.native(waive(artifact=f.package_ref()[0]), 1, 'every family as author')
+        self.native(waive())
+        self.assertEqual(len(f.state['independence_waivers']), 1)
+        self.native(review())
+        # The waiver names one reviewer family and one step; everything else keeps the family rule.
+        self.native(f.report_input('review-control', 'Google', artifact=art, coverage=coverage), 1, 'same-family review')
+        f.state['step'] = 'final-review'
+        self.native(f.report_input('review-final', 'Anthropic', artifact=art, coverage=coverage), 1, 'same-family review')
+
     def test_negative_check_and_review_ok_cannot_verify_barrier(self):
         f = self.f; art, coverage = f.package_ref()
         rc, result = f.verified_run(code="raise SystemExit(7)")

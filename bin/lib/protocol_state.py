@@ -523,7 +523,25 @@ def report_fields(text, active, art, outcome, modified):
     return token, findings, line_json(text, "COVERAGE", {})
 
 
-def independent(art, coverage, reviewer_family, provenance=()):
+def known_families():
+    return set(roles_fact("FAMILY_MODELS").values()) | set(roles_fact("FAMILY_PREFIXES").values())
+
+
+def waived(state):
+    """Units the user released from the family rule for this step: (path, reviewer family) pairs."""
+    out = set()
+    for w in state.get("independence_waivers", []):
+        if w["step"] != state["step"] or w.get("phase") != state["phase"]: continue
+        auth = record(w["authorization"])
+        require(auth.get("schema_version") == 1 and auth.get("run_id") == state["orca_run"] and auth.get("step") == w["step"] and
+                auth.get("phase") == w.get("phase") and auth.get("files") == w["files"] and auth.get("reviewer_family") == w["reviewer_family"] and
+                isinstance(auth.get("user_decision"), str) and auth["user_decision"].strip(), "invalid independence waiver authorization")
+        out |= {(path, w["reviewer_family"]) for path in w["files"]}
+    return out
+
+
+def authors(art, provenance=()):
+    """Actual author families per file of a complete package, from its write receipts."""
     m = art["manifest"]
     require(m is not None, "review requires a complete package", 2)
     writers = {}
@@ -537,11 +555,16 @@ def independent(art, coverage, reviewer_family, provenance=()):
         actual = family(observed, source)
         require(actual == write["family"], "claimed author family differs from launch")
         for path in write["files"]: writers.setdefault(path, set()).add(actual)
+    return writers
+
+
+def independent(art, coverage, reviewer_family, provenance=(), waivers=()):
+    m = art["manifest"]; writers = authors(art, provenance)
     files = {f["path"] for f in m["files"]}
     require(set(coverage.get("files", [])) <= files, "unknown coverage file")
     for name in coverage.get("files", []):
         require(writers.get(name), "unknown actual author: " + name, 2)
-        require(reviewer_family not in writers[name], "same-family review: " + name)
+        require(reviewer_family not in writers[name] or (name, reviewer_family) in waivers, "same-family review: " + name)
     require(set(coverage.get("parts", [])) <= {p["path"] for p in m["parts"]}, "unknown coverage part")
     contracts = {c["id"]: c for c in m["coverage"]["contracts"]}
     for c in coverage.get("contracts", []):
@@ -643,7 +666,7 @@ def covered(state, art, roles):
         if r["role"] == "plan-reviewer":
             require(state["provenance"], "unknown plan authors", 2)
             for author in state["provenance"]: require(family(record(author)["result"], author) != r["family"], "same-family plan review")
-        if r["role"] in REVIEW and r["role"] != "plan-reviewer": independent(saved_art, coverage, r["family"], state["provenance"])
+        if r["role"] in REVIEW and r["role"] != "plan-reviewer": independent(saved_art, coverage, r["family"], state["provenance"], waived(state))
         require(not [f for f in r["findings"] if f["id"] not in state.get("closed_ledger_ids", [])] and r["token"] in ("REVIEW_OK", "GATE_OK", "APPROVED", "DONE", "DONE_WITH_CONCERNS"), "unresolved findings or verification")
     if reviews := [r for r in reports if r["role"] in REVIEW and r["role"] != "plan-reviewer"]:
         if art["manifest"] is None:
@@ -708,7 +731,7 @@ def review_closure(state, proof, finding, origin, pending=()):
         # loop re-reviews the current candidate, not each intermediate tree. It must share the
         # phase HEAD, cover the fix's files and (below) still be the current or committed source.
         require(written["head"] == reviewed["head"], "closure fix/review snapshot mismatch")
-        independent(reviewed, review["coverage"], review["family"], state["provenance"])
+        independent(reviewed, review["coverage"], review["family"], state["provenance"], waived(state))
         require(review["coverage"].get("files") and set(fix["modified"]) <= set(review["coverage"]["files"]),
                 "closure fix lacks review coverage", 2)
         raw = record(proof["artifact"]); m = raw["snapshot_after"]["manifest"] if proof["artifact"]["kind"] == "package" else raw["manifest"]
@@ -915,7 +938,7 @@ def validate(data):
         if lock:
             require((art["id"], art["snapshot_id"], active["role"], active["round"]) == (lock["artifact_id"], lock["snapshot_id"], lock["role"], lock["round"]), "format correction changed substantive artifact")
         actual_family = family(observed)
-        if active["role"] in REVIEW and active["role"] != "plan-reviewer": independent(art, coverage, actual_family, state["provenance"])
+        if active["role"] in REVIEW and active["role"] != "plan-reviewer": independent(art, coverage, actual_family, state["provenance"], waived(state))
         proofs = evidence(text, art) if active["role"] == "gate" and token == "GATE_OK" else []
         accepted = dict(role=active["role"], token=token, family=actual_family, step=state["step"], artifact_id=art["id"], snapshot_id=art["snapshot_id"], binding=active, outcome=payload["outcome"], modified=payload.get("filesModified", []),
                         report=report, artifact=data["artifact"], observation=data["observation"], findings=findings, coverage=coverage, evidence=proofs)
@@ -984,7 +1007,7 @@ def validate(data):
                 prior = [r for r in state["accepted"] if r["role"] == proposed["role"] and r["binding"]["round"] == proposed["round"]]
                 require(not any(r["family"] == family({"projection": {"provider": {"model": proposed["model"]}}}) for r in prior), "substantive review needs a new round")
             if proposed["role"] in REVIEW and proposed["role"] != "plan-reviewer":
-                independent(art, proposed.get("coverage", {}), family({"projection": {"provider": {"model": proposed["model"]}}}), state["provenance"])
+                independent(art, proposed.get("coverage", {}), family({"projection": {"provider": {"model": proposed["model"]}}}), state["provenance"], waived(state))
         proposed.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"])
         state["active"] = proposed
         if proposed["role"] in WRITE: state["write_ownership"] = ["pending:" + proposed["task_id"]]
@@ -1043,6 +1066,21 @@ def validate(data):
                 "cap extension must name open findings")
         require(isinstance(auth["user_decision"], str) and auth["user_decision"].strip(), "cap extension without the user's decision")
         state.setdefault("cap_extensions", []).append(dict(group=auth["group"], phase=auth["phase"], authorization=data["authorization"]))
+    elif action == "waive-independence":
+        # Only the user releases a unit from the family rule, and only where no independent family
+        # exists: every known family already authored it. The coordinator records that decision verbatim.
+        auth = record(data.get("authorization"))
+        need(auth, ("schema_version", "run_id", "step", "phase", "files", "reviewer_family", "user_decision"))
+        require(auth["schema_version"] == 1 and auth["run_id"] == state["orca_run"] and auth["step"] == state["step"] and
+                auth["phase"] == state["phase"], "independence waiver binding mismatch")
+        require(isinstance(auth["files"], list) and auth["files"] and all(isinstance(f, str) and f for f in auth["files"]) and
+                auth["reviewer_family"] in known_families(), "independence waiver must name files and a known reviewer family")
+        require(isinstance(auth["user_decision"], str) and auth["user_decision"].strip(), "independence waiver without the user's decision")
+        writers = authors(artifact(data.get("artifact"), state), state["provenance"])
+        for name in auth["files"]:
+            require(writers.get(name, set()) >= known_families(), "independence waiver needs every family as author: " + name)
+        state.setdefault("independence_waivers", []).append(dict(step=auth["step"], phase=auth["phase"], files=auth["files"],
+                                                                  reviewer_family=auth["reviewer_family"], authorization=data["authorization"]))
     elif action == "record-gate":
         # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
         require(state["step"] == "phase" and not state["write_ownership"], "script gate outside an unowned phase candidate")

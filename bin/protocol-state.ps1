@@ -406,7 +406,19 @@ function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
   }
   return @{token=$token;findings=$findings;coverage=(P-Line $text 'COVERAGE' @{})}
 }
-function P-Independent($art,$coverage,$family,$provenance=@()) {
+function P-KnownFamilies() { return @(@(V-Values (P-RolesFact 'FAMILY_MODELS'))+@(V-Values (P-RolesFact 'FAMILY_PREFIXES')) | Select-Object -Unique) }
+function P-Waived($s) {
+  # Units the user released from the family rule for this step: "path|reviewer family" entries.
+  $out=@()
+  foreach ($w in @($s['independence_waivers'])) {
+    if ($null -eq $w -or $w.step -cne $s.step -or -not (P-Eq $w.phase $s.phase)) { continue }
+    $auth=P-Record $w.authorization
+    P-Require ($auth.schema_version -eq 1 -and $auth.run_id -ceq $s.orca_run -and $auth.step -ceq $w.step -and (P-Eq $auth.phase $w.phase) -and (P-Eq $auth.files $w.files) -and $auth.reviewer_family -ceq $w.reviewer_family -and $auth.user_decision -is [string] -and $auth.user_decision.Trim()) 'invalid independence waiver authorization'
+    foreach ($path in $w.files) { $out+=,($path+'|'+$w.reviewer_family) }
+  };return ,$out
+}
+function P-Authors($art,$provenance=@()) {
+  # Actual author families per file of a complete package, from its write receipts.
   $m=$art.manifest;P-Require ($null -ne $m) 'review requires a complete package' 2;$writers=@{}
   foreach ($w in $m.provenance.writes) {
     $saved=P-Record @{path=$w.receipt_path;sha256=$w.receipt_sha256};$o=$saved.result;$d=$o.dispatch
@@ -415,9 +427,12 @@ function P-Independent($art,$coverage,$family,$provenance=@()) {
     $source=if ($ref.Count) { $ref[0] } else { $null }
     $actual=P-Family $o $source;P-Require ($actual -ceq $w.family) 'claimed author family differs from launch'
     foreach ($path in $w.files) { $writers[$path]=@($writers[$path])+$actual }
-  }
+  };return $writers
+}
+function P-Independent($art,$coverage,$family,$provenance=@(),$waived=@()) {
+  $m=$art.manifest;$writers=P-Authors $art $provenance
   P-Require (P-Subset $coverage.files @($m.files | ForEach-Object { $_.path })) 'unknown coverage file'
-  foreach ($name in $coverage.files) { P-Require ($writers[$name]) ('unknown actual author: '+$name) 2;P-Require ($family -cnotin $writers[$name]) ('same-family review: '+$name) }
+  foreach ($name in $coverage.files) { P-Require ($writers[$name]) ('unknown actual author: '+$name) 2;P-Require ($family -cnotin $writers[$name] -or (($name+'|'+$family) -cin @($waived))) ('same-family review: '+$name) }
   P-Require (P-Subset $coverage.parts @($m.parts | ForEach-Object { $_.path })) 'unknown coverage part'
   foreach ($c in $coverage.contracts) {
     $matches=@($m.coverage.contracts | Where-Object { $_.id -ceq $c.id });P-Require ($matches.Count -eq 1) 'unknown coverage contract'
@@ -483,7 +498,7 @@ function P-Covered($s,$art,$roles) {
     P-Require ($obs.dispatch.status -ceq 'completed' -and $obs.projection.evidence.durable -eq $true) 'accepted settlement missing' 2
     if ($r.role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { P-Require (P-Eq (P-Evidence (P-Ref $r.report) $a) $r.evidence) 'accepted evidence mismatch' }
     if ($r.role -ceq 'plan-reviewer') { P-Require ($s.provenance.Count) 'unknown plan authors' 2;foreach ($author in $s.provenance) { P-Require ((P-Family (P-Record $author).result $author) -cne $r.family) 'same-family plan review' } }
-    if ($r.role -cin $PReview -and $r.role -cne 'plan-reviewer') { P-Independent $a $r.coverage $r.family $s.provenance }
+    if ($r.role -cin $PReview -and $r.role -cne 'plan-reviewer') { P-Independent $a $r.coverage $r.family $s.provenance (P-Waived $s) }
     P-Require (-not @($r.findings | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count -and $r.token -cin @('REVIEW_OK','GATE_OK','APPROVED','DONE','DONE_WITH_CONCERNS')) 'unresolved findings or verification'
   }
   $reviews=@($reports | Where-Object { $_.role -cin $PReview -and $_.role -cne 'plan-reviewer' })
@@ -540,7 +555,7 @@ function P-ReviewClosure($s,$proof,$finding,$origin,$pending=$null) {
     # The positive re-review after the fix may cover a later round's cumulative source; it must share
     # the phase HEAD, cover the fix's files and (below) still be the current or committed source.
     P-Require ($written.head -ceq $reviewed.head) 'closure fix/review snapshot mismatch'
-    P-Independent $reviewed $review.coverage $review.family $s.provenance
+    P-Independent $reviewed $review.coverage $review.family $s.provenance (P-Waived $s)
     P-Require ($review.coverage.files.Count -gt 0 -and (P-Subset $fix.modified $review.coverage.files)) 'closure fix lacks review coverage' 2
     $raw=P-Record $proof.artifact;$m=if ($proof.artifact.kind -ceq 'package') { $raw.snapshot_after.manifest } else { $raw.manifest }
     $inputs=if ($proof.artifact.Contains('inputs')) { $proof.artifact.inputs } else { @() }
@@ -714,7 +729,7 @@ function P-Validate($data) {
       }
       if ($s.format_lock) { $lock=$s.format_lock;P-Require ($art.id -ceq $lock.artifact_id -and (P-Eq $art.snapshot_id $lock.snapshot_id) -and $a.role -ceq $lock.role -and $a.round -eq $lock.round) 'format correction changed substantive artifact' }
       $family=P-Family $o
-      if ($a.role -cin $PReview -and $a.role -cne 'plan-reviewer') { P-Independent $art $fields.coverage $family $s.provenance }
+      if ($a.role -cin $PReview -and $a.role -cne 'plan-reviewer') { P-Independent $art $fields.coverage $family $s.provenance (P-Waived $s) }
       $proofs=if ($a.role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { ,(P-Evidence $text $art) } else { ,@() }
       $accepted=@{role=$a.role;token=$fields.token;family=$family;step=$s.step;artifact_id=$art.id;snapshot_id=$art.snapshot_id;binding=$a;outcome=$payload.outcome;modified=@($payload.filesModified)
         report=$data.report;artifact=$data.artifact;observation=$data.observation;findings=$fields.findings;coverage=$fields.coverage;evidence=$proofs}
@@ -761,7 +776,7 @@ function P-Validate($data) {
         $groups=@{'plan-reviewer'='plan_review';'review-primary'='fused_review';'review-control'='fused_review';'review-final'='final_review'};$group=$groups[$p.role];if ($p.gate_fix) { $group='gate_fix' }
         if ($group) { $count=$s.rounds[$group];P-Require ($p.round -in @($count,($count+1)) -and $p.round -le (P-Cap $s $group)) ('round cap/sequence: '+$group);$s.rounds[$group]=$p.round }
         if ($group) { $family=P-Family @{projection=@{provider=@{model=$p.model}}};P-Require (-not @($s.accepted | Where-Object { $_.role -ceq $p.role -and $_.binding.round -eq $p.round -and $_.family -ceq $family }).Count) 'substantive review needs a new round' }
-        if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art $p.coverage (P-Family @{projection=@{provider=@{model=$p.model}}}) $s.provenance }
+        if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art $p.coverage (P-Family @{projection=@{provider=@{model=$p.model}}}) $s.provenance (P-Waived $s) }
       }
       $p['artifact_id']=$art.id;$p['snapshot_id']=$art.snapshot_id;$s.active=$p
       if ($p.role -cin $PWrite) { $s.write_ownership=@('pending:'+$p.task_id) }
@@ -811,6 +826,17 @@ function P-Validate($data) {
       P-Require ($auth.findings -is [Array] -and $auth.findings.Count -and (P-Subset $auth.findings @($s.open_ledger_ids))) 'cap extension must name open findings'
       P-Require ($auth.user_decision -is [string] -and $auth.user_decision.Trim()) "cap extension without the user's decision"
       $s['cap_extensions']=@(@(@($s['cap_extensions']) | Where-Object { $null -ne $_ })+,@{group=$auth.group;phase=$auth.phase;authorization=$data.authorization})
+    }
+    'waive-independence' {
+      # Only the user releases a unit from the family rule, and only where no independent family
+      # exists: every known family already authored it. The coordinator records that decision verbatim.
+      $auth=P-Record $data.authorization;P-Need $auth @('schema_version','run_id','step','phase','files','reviewer_family','user_decision')
+      P-Require ($auth.schema_version -eq 1 -and $auth.run_id -ceq $s.orca_run -and $auth.step -ceq $s.step -and (P-Eq $auth.phase $s.phase)) 'independence waiver binding mismatch'
+      P-Require ($auth.files -is [Array] -and $auth.files.Count -and -not @($auth.files | Where-Object { -not ($_ -is [string] -and $_) }).Count -and $auth.reviewer_family -cin (P-KnownFamilies)) 'independence waiver must name files and a known reviewer family'
+      P-Require ($auth.user_decision -is [string] -and $auth.user_decision.Trim()) "independence waiver without the user's decision"
+      $writers=P-Authors (P-Artifact $data.artifact $s) $s.provenance
+      foreach ($name in $auth.files) { P-Require ((P-Subset (P-KnownFamilies) @($writers[$name]))) ('independence waiver needs every family as author: '+$name) }
+      $s['independence_waivers']=@(@(@($s['independence_waivers']) | Where-Object { $null -ne $_ })+,@{step=$auth.step;phase=$auth.phase;files=$auth.files;reviewer_family=$auth.reviewer_family;authorization=$data.authorization})
     }
     'record-gate' {
       # verify-gate GATE_OK needs no worker; its sealed C4 results are the gate evidence.
