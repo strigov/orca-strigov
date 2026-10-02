@@ -479,7 +479,18 @@ function P-Commit($fact,$s) {
   $root=$s.worktree;P-Require ((V-GitText $root @('rev-parse',($fact.sha+'^{commit}'))) -ceq $fact.sha) 'commit not found' 2
   P-Require ($fact.sha -cne $fact.base) 'base is not a completion commit'
   [void](V-Git $root @('merge-base','--is-ancestor',$fact.base,$fact.sha));[void](V-Git $root @('merge-base','--is-ancestor',$fact.sha,'HEAD'))
-  $art=P-Artifact $fact.artifact $s $false;P-Require ($fact.base -ceq $art.head) 'commit base differs from accepted candidate HEAD';$expected=@{}
+  $art=P-Artifact $fact.artifact $s $false
+  if ($fact.artifact.kind -ceq 'plan') {
+    # A plan-only commit: exactly the accepted plan bytes at the live plan path on top of plan_base.
+    P-Require ($fact.base -ceq $s.plan_base) 'plan commit base differs from plan_base'
+    $live=if ($fact.artifact.Contains('source_path')) { $fact.artifact.source_path } else { $fact.artifact.path }
+    $name=[IO.Path]::GetFullPath($live).Substring([IO.Path]::GetFullPath($root).TrimEnd('\','/').Length+1).Replace('\','/')
+    $changed=@((V-GitText $root @('diff-tree','--no-commit-id','-r','--name-only',$fact.base,$fact.sha)).Split("`n") | Where-Object { $_ })
+    P-Require ($changed.Count -eq 1 -and $changed[0] -ceq $name) 'plan commit must change only the plan file'
+    P-Require ((V-Hash (V-Git $root @('show',($fact.sha+':'+$name)))) -ceq $art.id) 'plan commit blob differs from accepted plan'
+    $out=@{};foreach ($k in $art.Keys) { $out[$k]=$art[$k] };$out['head']=$fact.sha;return $out
+  }
+  P-Require ($fact.base -ceq $art.head) 'commit base differs from accepted candidate HEAD';$expected=@{}
   foreach ($label in $art.files.Keys) {
     if (-not $label.StartsWith('repo:')) { continue };$item=$art.files[$label]
     P-Require ($item.Contains('index') -or $item.type -ceq 'missing') 'accepted source was not staged'
@@ -802,10 +813,16 @@ function P-Validate($data) {
       foreach ($accepted in @(@($s.accepted)+@($s['script_gates']) | Where-Object { $null -ne $_ })) { foreach ($proof in $accepted.evidence) { P-Require (V-EvidenceValid (P-Record $proof)) 'accepted evidence no longer valid' } }
       if ($action -ceq 'prepare-commit') { $s.commit_barrier=@{expected_snapshot=$art.snapshot_id;expected_sha=$null;confirmed_sha=$null} }
       else {
-        $fact=$data.commit;$committed=P-Commit $fact $s;P-Require ($committed.snapshot_id -ceq $art.snapshot_id) 'commit artifact differs from accepted candidate'
-        $obj=P-Record $fact.artifact;$snap=if ($fact.artifact.kind -ceq 'snapshot') { $obj } else { $obj.snapshot_after }
-        $inputs=if ($data.artifact.Contains('inputs')) { $data.artifact.inputs } else { @() };$current=V-Snapshot $s.worktree $inputs $snap.manifest.exclusions
-        P-Require ($current.valid -and (P-Eq $current.manifest.files $committed.files)) 'hook/working-tree change after acceptance'
+        $fact=$data.commit;$committed=P-Commit $fact $s
+        if ($fact.artifact.kind -ceq 'plan') {
+          P-Require ($committed.id -ceq $art.id -and $art.id -ceq $s.plan.sha256) 'commit artifact differs from accepted candidate'
+          P-Require ((V-Hash ([IO.File]::ReadAllBytes($s.plan.path))) -ceq $committed.id) 'hook/working-tree change after acceptance'
+        } else {
+          P-Require ($committed.snapshot_id -ceq $art.snapshot_id) 'commit artifact differs from accepted candidate'
+          $obj=P-Record $fact.artifact;$snap=if ($fact.artifact.kind -ceq 'snapshot') { $obj } else { $obj.snapshot_after }
+          $inputs=if ($data.artifact.Contains('inputs')) { $data.artifact.inputs } else { @() };$current=V-Snapshot $s.worktree $inputs $snap.manifest.exclusions
+          P-Require ($current.valid -and (P-Eq $current.manifest.files $committed.files)) 'hook/working-tree change after acceptance'
+        }
         $s.commit_barrier=@{expected_snapshot=$art.snapshot_id;expected_sha=$fact.sha;confirmed_sha=$fact.sha}
         if ($s.step -cin @('phase','plan','quickfix') -and -not @($s.phase_commits | Where-Object { $_.sha -ceq $fact.sha }).Count) { $entry=P-Decode (V-Json $fact);$entry['phase']=$s.phase;$s.phase_commits+=,$entry }
         if ($action -ceq 'advance') {
@@ -849,13 +866,15 @@ function P-Validate($data) {
     }
     'resume' {
       if (-not $s.commit_barrier.confirmed_sha) {
-        foreach ($accepted in $s.accepted) {
-          if ($accepted.step -ceq $s.step) {
-            # A diagnosis or a verdict with unclosed findings approves nothing: its candidate is
-            # expected to be repaired, so it is history. Approvals must still match the tree.
-            $history=($accepted.role -ceq 'diagnosis') -or [bool]@($accepted.findings | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count
-            [void](P-Artifact $accepted.artifact $s (-not $history))
-          }
+        $entries=@($s.accepted | Where-Object { $_.step -ceq $s.step });$latestWriter=-1
+        for ($i=0;$i -lt $entries.Count;$i++) { if ($entries[$i].role -cin $PWrite) { $latestWriter=$i } }
+        for ($i=0;$i -lt $entries.Count;$i++) {
+          $accepted=$entries[$i]
+          # Entries before the latest accepted writer describe a replaced candidate; a diagnosis or a
+          # verdict with unclosed findings approves nothing. Those are history. The latest writer and
+          # every approval after it must still match the tree.
+          $history=($i -lt $latestWriter) -or ($accepted.role -ceq 'diagnosis') -or [bool]@($accepted.findings | Where-Object { $_.id -cnotin @($s.closed_ledger_ids) }).Count
+          [void](P-Artifact $accepted.artifact $s (-not $history))
         }
       }
     }

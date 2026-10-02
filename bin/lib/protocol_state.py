@@ -635,6 +635,14 @@ def commit_fact(fact, state):
     v.git(root, "merge-base", "--is-ancestor", fact["base"], fact["sha"])
     v.git(root, "merge-base", "--is-ancestor", fact["sha"], "HEAD")
     art = artifact(fact["artifact"], state, current=False)
+    if fact["artifact"].get("kind") == "plan":
+        # A plan-only commit: exactly the accepted plan bytes at the live plan path on top of plan_base.
+        require(fact["base"] == state["plan_base"], "plan commit base differs from plan_base")
+        name = artifact_path(fact["artifact"].get("source_path", fact["artifact"]["path"])).relative_to(artifact_path(root)).as_posix()
+        changed = v.text_git(root, "diff-tree", "--no-commit-id", "-r", "--name-only", fact["base"], fact["sha"]).split("\n")
+        require([x for x in changed if x] == [name], "plan commit must change only the plan file")
+        require(v.digest(v.git(root, "show", fact["sha"] + ":" + name)) == art["id"], "plan commit blob differs from accepted plan")
+        return dict(art, head=fact["sha"])
     require(fact["base"] == art.get("head"), "commit base differs from accepted candidate HEAD")
     expected = {}
     for label, item in art["files"].items():
@@ -1041,9 +1049,13 @@ def validate(data):
             state["commit_barrier"] = dict(expected_snapshot=art["snapshot_id"], expected_sha=None, confirmed_sha=None)
         else:
             fact = data.get("commit"); committed = commit_fact(fact, state)
-            require(committed["snapshot_id"] == art["snapshot_id"], "commit artifact differs from accepted candidate")
-            current = v.snapshot(state["worktree"], data["artifact"].get("inputs", []), json.loads(ref(fact["artifact"]))["manifest"]["exclusions"] if fact["artifact"]["kind"] == "snapshot" else json.loads(ref(fact["artifact"]))["snapshot_after"]["manifest"]["exclusions"])
-            require(current["valid"] and current["manifest"]["files"] == committed["files"], "hook/working-tree change after acceptance")
+            if fact["artifact"]["kind"] == "plan":
+                require(committed["id"] == art["id"] == state["plan"]["sha256"], "commit artifact differs from accepted candidate")
+                require(v.digest(artifact_path(state["plan"]["path"]).read_bytes()) == committed["id"], "hook/working-tree change after acceptance")
+            else:
+                require(committed["snapshot_id"] == art["snapshot_id"], "commit artifact differs from accepted candidate")
+                current = v.snapshot(state["worktree"], data["artifact"].get("inputs", []), json.loads(ref(fact["artifact"]))["manifest"]["exclusions"] if fact["artifact"]["kind"] == "snapshot" else json.loads(ref(fact["artifact"]))["snapshot_after"]["manifest"]["exclusions"])
+                require(current["valid"] and current["manifest"]["files"] == committed["files"], "hook/working-tree change after acceptance")
             state["commit_barrier"] = dict(expected_snapshot=art["snapshot_id"], expected_sha=fact["sha"], confirmed_sha=fact["sha"])
             if state["step"] in ("phase", "plan", "quickfix") and not any(x["sha"] == fact["sha"] for x in state["phase_commits"]):
                 state["phase_commits"].append(dict(fact, phase=state["phase"]))
@@ -1094,11 +1106,14 @@ def validate(data):
     elif action == "resume":
         if not state["commit_barrier"].get("confirmed_sha"):
             closed = state.get("closed_ledger_ids", [])
-            for accepted in state["accepted"]:
-                if accepted["step"] != state["step"]: continue
-                # A diagnosis or a verdict with unclosed findings approves nothing: its candidate is
-                # expected to be repaired, so it is history. Approvals must still match the tree.
-                history = accepted["role"] == "diagnosis" or any(f["id"] not in closed for f in accepted["findings"])
+            entries = [a for a in state["accepted"] if a["step"] == state["step"]]
+            latest_writer = max((i for i, a in enumerate(entries) if a["role"] in WRITE), default=-1)
+            for i, accepted in enumerate(entries):
+                # Entries before the latest accepted writer describe a replaced candidate; a diagnosis or a
+                # verdict with unclosed findings approves nothing. Those are history. The latest writer and
+                # every approval after it must still match the tree.
+                history = (i < latest_writer or accepted["role"] == "diagnosis" or
+                           any(f["id"] not in closed for f in accepted["findings"]))
                 artifact(accepted["artifact"], state, current=not history)
     else: raise Rejected("unknown action")
     state["barrier"] = barrier(state, phases)

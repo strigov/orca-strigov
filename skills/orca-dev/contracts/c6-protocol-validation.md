@@ -170,10 +170,11 @@ previous same-round entry in current `accepted`, while `report_history` retains
 every immutable attempt. Existing earlier-round replacement is unchanged. This
 lets a repaired candidate resume after its fresh gate and reviews; current
 accepted artifacts still must be current, and stale current approvals reject.
-On `resume`, a diagnosis or a verdict with unclosed findings is history, not an
-approval: its saved artifact is verified but need not match the working tree,
-because a fix is expected to replace that candidate. A verdict whose findings
-are all closed is checked against the tree like any approval.
+On `resume`, an entry accepted before the step's latest accepted writer, a
+diagnosis, or a verdict with unclosed findings is history, not an approval: its
+saved artifact is verified but need not match the working tree, because a later
+writer replaced that candidate. The latest writer and every approval after it
+are checked against the tree.
 Bootstrap failures are retained, not superseded by this fix rule.
 
 Required compact `state` fields:
@@ -223,7 +224,7 @@ Actions and their additional inputs:
 | `waive-independence` | `authorization`: an immutable record `{schema_version:1,run_id,step,phase,files,reviewer_family,user_decision}` of the user's explicit decision, plus the current `artifact`. Accepted only for units every known family already authored, so no independent reviewer exists; it lets the named family review the named files in that step. Never written without the user's words. |
 | `record-gate` | Current phase candidate `artifact` and `evidence`: the sealed C4 `result.json` references of a green verify-gate run. Checked like a gate report's `EVIDENCE`; it satisfies the phase's gate role without a gate worker and is cleared by `advance`. Final delivery still needs a gate report. |
 | `prepare-commit` | Fresh `fleet`, accepted `artifact`; verify roles, coverage, executable evidence, unresolved ledger IDs and staged candidate. Record expected snapshot with no invented commit SHA. |
-| `confirm-commit` / `advance` | Fresh `fleet`, accepted `artifact`, `commit:{sha,base,artifact}`. Read actual full Git commit/ancestry/tree, compare accepted index/source and current bytes; hook changes reject. Confirm the existing commit once after a crash; advance only after confirmation. |
+| `confirm-commit` / `advance` | Fresh `fleet`, accepted `artifact`, `commit:{sha,base,artifact}`. Read actual full Git commit/ancestry/tree, compare accepted index/source and current bytes; hook changes reject. A plan-only commit uses the accepted `kind:plan` artifact: `base` is `plan_base`, the commit changes exactly the plan path, and its blob is the accepted plan bytes. Confirm the existing commit once after a crash; advance only after confirmation. |
 | `finish-checkpoint` | Fresh `fleet`, accepted `artifact`: all phase commits must exist, then independent final review permits delivery, positive gate delivery permits completion metadata preparation. |
 | `complete` | Fresh `fleet`, completion `artifact`, actual separate `commit`; validate all phase commits, final review, delivery, unchanged implementation and verified plan-only done metadata. |
 

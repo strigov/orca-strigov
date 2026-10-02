@@ -183,9 +183,11 @@ class ClosureTests(unittest.TestCase):
         complete=copy.deepcopy(self.f.state)
         self.f.state.pop('report_history')
         self.close(origin,fix,review,art)
-        # Legacy ordered evidence can close the item; it is not full current
-        # approval while the retained primary still covers the old package.
-        self.validate(code=1,reason='stale or incomplete package')
+        # Legacy ordered evidence can close the item and resume keeps the retained
+        # primary as history of the replaced candidate; it is still not full current
+        # approval, so the commit barrier rejects until a fresh primary covers the package.
+        self.assertEqual(self.validate()['state']['barrier'],'awaiting_gate')
+        self.validate(dict(schema_version=1,action='prepare-commit',state=self.f.state,artifact=art,fleet=self.f.fleet()),code=2,reason='required report is missing')
         self.f.state=copy.deepcopy(complete)
         self.f.state['report_history'].reverse()
         self.close(origin,fix,review,art,1,'closure report order')

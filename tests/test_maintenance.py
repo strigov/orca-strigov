@@ -184,6 +184,48 @@ class MaintenanceTests(unittest.TestCase):
         (dep / 'lock.txt').write_text('v2\n')
         close(1, 'stale closure source')
 
+    def test_plan_revision_resume_and_plan_only_commit_confirmation(self):
+        f = self.f; f.state.update(phase=None, step='plan')
+        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
+        f.git.git('reset', '-q', 'tracked.txt'); f.git.git('checkout', '--', 'tracked.txt')  # only the plan is pending
+        def archive():
+            path = Path(f.save('', '.md')['path']); path.write_bytes(f.plan.read_bytes())
+            return dict(f.reference(path), kind='plan', source_path=str(f.plan))
+        first = archive()
+        self.native(f.report_input('plan-writer', token='PLAN_WRITTEN', artifact=first))
+        finding = dict(id='P1-B1', kind='blocking', issue='scope', location='plan.md', criterion='scope', change='narrow it', risk='none', **{'class': 'MUST_FIX_NOW'})
+        self.native(f.report_input('plan-reviewer', 'Anthropic', token='CHANGES_REQUESTED', artifact=first, findings=[finding]))
+        origin = f.state['accepted'][-1]['report']
+        f.plan.write_bytes(f.plan.read_bytes() + b'Narrowed scope.\n'); f.state['plan'] = f.reference(f.plan)
+        revised = archive()
+        fixed = dict(findings=[dict(id='P1-B1', report=origin)])
+        self.native(f.report_input('plan-reviser', token='REVISED', artifact=revised, round=2, extra='FIX_EVIDENCE: ' + json.dumps(fixed)))
+        fix = f.state['accepted'][-1]['report']
+        self.native(f.report_input('plan-reviewer', 'Anthropic', artifact=revised, round=2))
+        review = f.state['accepted'][-1]['report']
+        proof = dict(schema_version=1, finding_id='P1-B1', report=origin, artifact=revised, fix_report=fix, review_report=review)
+        f.state['ledger'] = f.save([dict(id='P1-B1', status='fixed', closure=f.save(proof))])
+        # The first writer's plan is history once the reviser replaced it; resume must not demand it current.
+        self.assertEqual([r['role'] for r in f.state['accepted']], ['plan-writer', 'plan-reviser', 'plan-reviewer'])
+        self.assertEqual(self.native(self.case())['state']['barrier'], 'awaiting_commit')
+        # A plan-only commit is confirmed from the plan artifact itself: plan_base, one changed path, the accepted bytes.
+        f.git.git('add', 'plan.md')
+        self.native(self.case('prepare-commit', artifact=revised, fleet=f.fleet()))
+        commit = lambda: f.git.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', 'docs(plans): add fixture') or f.git.git('rev-parse', 'HEAD').strip()
+        sha = commit()
+        fact = dict(sha=sha, base=f.git.base, artifact=revised)
+        before = copy.deepcopy(f.state)
+        self.native(self.case('confirm-commit', artifact=revised, commit=dict(fact, base=sha), fleet=f.fleet()), 1, 'base is not a completion commit')
+        self.native(self.case('confirm-commit', artifact=revised, commit=dict(fact, artifact=first), fleet=f.fleet()), 1, 'plan commit blob differs')
+        confirmed = self.native(self.case('confirm-commit', artifact=revised, commit=fact, fleet=f.fleet()))['state']
+        self.assertEqual(confirmed['commit_barrier']['confirmed_sha'], sha); self.assertEqual(confirmed['barrier'], 'ready_next_phase')
+        self.assertEqual([c['sha'] for c in confirmed['phase_commits']], [sha])
+        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['P1-B1'])
+        # A commit that also carries other files is not a plan-only commit.
+        f.state = before
+        (f.git.root / 'extra.txt').write_bytes(b'x\n'); f.git.git('add', 'extra.txt'); two = commit()
+        self.native(self.case('confirm-commit', artifact=revised, commit=dict(sha=two, base=sha, artifact=revised), fleet=f.fleet()), 1, 'plan commit')
+
     def test_independence_waiver_only_for_units_authored_by_every_family(self):
         f = self.f; files = f.git.git('diff', '--name-only', f.git.base).splitlines()
         art, coverage = f.package_ref(families={'OpenAI': files, 'Anthropic': files, 'Google': files})
