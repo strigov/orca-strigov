@@ -162,7 +162,7 @@ SESSION="$BIN/coordinator-session"
 echo "WS=$WS RPKG=$RPKG GATE=$GATE"
 ```
 
-On Windows (coordinator shell = PowerShell, see `orca-recipes.md` §9) use the native PowerShell ports instead — same names with a `.ps1` suffix, same arguments, exit codes and output shape, no bash / python3 / jq involved:
+On Windows (coordinator shell = PowerShell, see `recipes-windows.md`) use the native PowerShell ports instead — same names with a `.ps1` suffix, same arguments, exit codes and output shape, no bash / python3 / jq involved:
 
 ```powershell
 $PluginDir = '<absolute-loaded-plugin-root>'
