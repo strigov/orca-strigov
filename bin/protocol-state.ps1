@@ -949,7 +949,44 @@ function P-AgyEvidence($cli) {
   [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$logs[0].path}));exit 0
 }
 
+function P-Summary($cli) {
+  # Print the compact facts of a saved state or proposal; never the raw JSON. Read-only.
+  P-Require ($cli.Count -eq 2) 'usage: protocol-state summary STATE_OR_PROPOSAL_JSON'
+  $data=P-Decode ([IO.File]::ReadAllText($cli[1],$VUtf8).TrimStart([char]0xfeff))
+  $s=if ($data.Contains('action')) { $data.state } else { $data }
+  P-Require ($s -is [Collections.IDictionary] -and $s.Contains('accepted')) 'not a C6 state or proposal' 2
+  $name={ param($r) if ($r -is [Collections.IDictionary] -and $r.Contains('path') -and $r.path) { [IO.Path]::GetFileName([string]$r.path) } else { '-' } }
+  $short={ param($sha) if ($sha) { ([string]$sha).Substring(0,[Math]::Min(7,([string]$sha).Length)) } else { '-' } }
+  $get={ param($o,$k,$d='-') if ($o -is [Collections.IDictionary] -and $o.Contains($k) -and $null -ne $o[$k]) { $o[$k] } else { $d } }
+  $rows=New-Object 'Collections.Generic.List[string]'
+  if ($data.Contains('action')) { $rows.Add('proposal: action='+$data.action) }
+  $rows.Add(('mode={0} step={1} phase={2} barrier={3} base={4} run={5}' -f (& $get $s 'mode'),(& $get $s 'step'),(& $get $s 'phase'),(& $get $s 'barrier'),(& $short (& $get $s 'base' $null)),(& $get $s 'orca_run')))
+  $a=& $get $s 'active' $null
+  $rows.Add('active: '+$(if ($a -isnot [Collections.IDictionary]) { 'none' } else { 'role={0} round={1} task={2} dispatch={3} fix={4} model={5}' -f (& $get $a 'role'),(& $get $a 'round'),(& $get $a 'task_id'),(& $get $a 'dispatch_id'),(& $get $a 'fix' $false),(& $get $a 'model') }))
+  $rounds=@();foreach ($k in 'plan_review','fused_review','final_review','gate_fix') { $rounds+=,('{0}={1}/{2}' -f $k,(& $get $s.rounds $k),(P-Cap $s $k)) }
+  $rows.Add('rounds: '+($rounds -join ' '))
+  $rows.Add('write_ownership: ['+(@($s.write_ownership) -join ', ')+']')
+  $opened=@(& $get $s 'open_ledger_ids' @());$closed=@(& $get $s 'closed_ledger_ids' @())
+  $rows.Add(('open_ledger_ids ({0}): {1}' -f $opened.Count,$(if ($opened.Count) { $opened -join ', ' } else { '-' })))
+  $rows.Add('closed_ledger_ids: '+$closed.Count)
+  $rows.Add('accepted ('+@($s.accepted).Count+'):')
+  foreach ($r in @($s.accepted)) { $b=& $get $r 'binding' @{};$rows.Add(('  {0} {1} r{2} {3} {4} findings={5}' -f (& $get $r 'role'),(& $get $r 'token'),(& $get $b 'round'),(& $get $r 'step'),(& $name (& $get $r 'artifact' $null)),@(& $get $r 'findings' @()).Count)) }
+  $gates=@(& $get $s 'script_gates' @());$rows.Add('script_gates: '+$(if ($gates.Count) { @($gates | ForEach-Object { $_.step+' '+(& $name $_.artifact) }) -join ', ' } else { '-' }))
+  $commits=@(& $get $s 'phase_commits' @());$rows.Add('phase_commits: '+$(if ($commits.Count) { @($commits | ForEach-Object { [string](& $get $_ 'phase' 'None')+' '+(& $short (& $get $_ 'sha' $null)) }) -join ', ' } else { '-' }))
+  $cb=& $get $s 'commit_barrier' @{};$rows.Add('commit_barrier: '+$(if ($cb.Count) { 'expected={0} confirmed={1}' -f (& $short (& $get $cb 'expected_sha' $null)),(& $short (& $get $cb 'confirmed_sha' $null)) } else { '-' }))
+  $final=& $get $s 'final' @{};$rows.Add('final: '+$(if ($final.Count) { @($final.Keys | ForEach-Object { $_+'='+$(if ($final[$_] -is [Array]) { @($final[$_]).Count } else { 1 }) }) -join ', ' } else { '-' }))
+  $waivers=@(& $get $s 'independence_waivers' @())
+  $rows.Add(('cap_extensions: {0}  independence_waivers: {1}' -f @(& $get $s 'cap_extensions' @()).Count,$(if ($waivers.Count) { @($waivers | ForEach-Object { $_.step+'/'+[string]$_.phase+' '+(@($_.files) -join ',')+' -> '+$_.reviewer_family }) -join '; ' } else { '-' })))
+  $history=@(& $get $s 'report_history' @());$last=if ($history.Count) { $history[$history.Count-1] } else { $null }
+  $rows.Add('report_history: '+$history.Count+$(if ($null -ne $last) { ', last: {0} {1} r{2} {3}' -f (& $get $last 'role'),(& $get $last 'token'),(& $get (& $get $last 'binding' @{}) 'round'),(& $name (& $get $last 'report' $null)) } else { '' }))
+  $pr=& $get $s 'processed' @{}
+  $rows.Add(('processed: messages={0} deliveries={1}  used_fleet_ids={2}' -f @(& $get $pr 'messages' @()).Count,@(& $get $pr 'deliveries' @()).Count,@(& $get $s 'used_fleet_ids' @()).Count))
+  $rows.Add(('plan={0} ledger={1} workspace={2}' -f (& $name (& $get $s 'plan' $null)),(& $name (& $get $s 'ledger' $null)),(& $get $s 'workspace')))
+  [Console]::WriteLine(($rows -join "`n"));exit 0
+}
+
 try {
+  if ($args.Count -and $args[0] -ceq 'summary') { P-Summary $args }
   if ($args.Count -and $args[0] -ceq 'claude-model-evidence') { P-ClaudeEvidence $args }
   if ($args.Count -and $args[0] -ceq 'antigravity-model-evidence') { P-AgyEvidence $args }
   P-Require ($args.Count -in @(2,3) -and $args[0] -ceq 'validate') 'usage: protocol-state validate INPUT_JSON [RESUME_OUT]'

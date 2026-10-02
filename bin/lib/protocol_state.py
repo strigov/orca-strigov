@@ -1187,9 +1187,52 @@ def antigravity_model_evidence(args):
     return 0
 
 
+def summary(args):
+    """Print the compact facts of a saved state or proposal; never the raw JSON. Read-only."""
+    require(len(args) == 2, "usage: protocol-state summary STATE_OR_PROPOSAL_JSON")
+    data = v.load(args[1]); state = data.get("state") if "action" in data else data
+    require(isinstance(state, dict) and "accepted" in state, "not a C6 state or proposal", 2)
+    name = lambda r: Path(r["path"]).name if isinstance(r, dict) and r.get("path") else "-"
+    short = lambda sha: (sha or "-")[:7]
+    rows = []
+    if "action" in data: rows.append("proposal: action=%s" % data["action"])
+    rows.append("mode=%s step=%s phase=%s barrier=%s base=%s run=%s" % (state.get("mode"), state.get("step"), state.get("phase"),
+                state.get("barrier", "-"), short(state.get("base")), state.get("orca_run")))
+    a = state.get("active")
+    rows.append("active: " + ("none" if not a else "role=%s round=%s task=%s dispatch=%s fix=%s model=%s" % (
+        a.get("role"), a.get("round"), a.get("task_id"), a.get("dispatch_id"), a.get("fix", False), a.get("model"))))
+    caps = {k: cap(state, k) for k in CAPS} if state.get("rounds") else {}
+    rows.append("rounds: " + " ".join("%s=%s/%s" % (k, state["rounds"].get(k), caps[k]) for k in CAPS))
+    rows.append("write_ownership: %s" % (state.get("write_ownership") or []))
+    opened = state.get("open_ledger_ids") or []; closed = state.get("closed_ledger_ids") or []
+    rows.append("open_ledger_ids (%d): %s" % (len(opened), ", ".join(opened) or "-"))
+    rows.append("closed_ledger_ids: %d" % len(closed))
+    rows.append("accepted (%d):" % len(state["accepted"]))
+    for r in state["accepted"]:
+        b = r.get("binding", {})
+        rows.append("  %s %s r%s %s %s findings=%d" % (r.get("role"), r.get("token"), b.get("round"), r.get("step"), name(r.get("artifact")), len(r.get("findings") or [])))
+    gates = state.get("script_gates") or []
+    rows.append("script_gates: " + (", ".join("%s %s" % (g["step"], name(g["artifact"])) for g in gates) or "-"))
+    rows.append("phase_commits: " + (", ".join("%s %s" % (c.get("phase"), short(c.get("sha"))) for c in state.get("phase_commits") or []) or "-"))
+    cb = state.get("commit_barrier") or {}
+    rows.append("commit_barrier: " + ("-" if not cb else "expected=%s confirmed=%s" % (short(cb.get("expected_sha")), short(cb.get("confirmed_sha")))))
+    rows.append("final: " + (", ".join("%s=%d" % (k, len(x) if isinstance(x, list) else 1) for k, x in (state.get("final") or {}).items()) or "-"))
+    rows.append("cap_extensions: %d  independence_waivers: %s" % (len(state.get("cap_extensions") or []),
+                "; ".join("%s/%s %s -> %s" % (w["step"], w.get("phase"), ",".join(w["files"]), w["reviewer_family"]) for w in state.get("independence_waivers") or []) or "-"))
+    history = state.get("report_history") or []
+    last = history[-1] if history else None
+    rows.append("report_history: %d%s" % (len(history), "" if not last else ", last: %s %s r%s %s" % (last.get("role"), last.get("token"), last.get("binding", {}).get("round"), name(last.get("report")))))
+    pr = state.get("processed") or {}
+    rows.append("processed: messages=%d deliveries=%d  used_fleet_ids=%d" % (len(pr.get("messages") or []), len(pr.get("deliveries") or []), len(state.get("used_fleet_ids") or [])))
+    rows.append("plan=%s ledger=%s workspace=%s" % (name(state.get("plan")), name(state.get("ledger")), state.get("workspace")))
+    print("\n".join(rows))
+    return 0
+
+
 def main(args):
     state = None
     try:
+        if args and args[0] == "summary": return summary(args)
         if args and args[0] == "claude-model-evidence": return claude_model_evidence(args)
         if args and args[0] == "antigravity-model-evidence": return antigravity_model_evidence(args)
         require(len(args) in (2, 3) and args[0] == "validate", "usage: protocol-state validate INPUT_JSON [RESUME_OUT]")

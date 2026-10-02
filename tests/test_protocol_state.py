@@ -317,6 +317,18 @@ class ProtocolTests(unittest.TestCase):
         self.batch([(self.case(action='extend-cap', authorization=auth()), 0, ''), (dispatch(), 0, '')], previous=True)
         self.assertEqual(f.state['rounds']['fused_review'], 5)
 
+    def test_summary_prints_compact_facts_of_state_or_proposal(self):
+        f = self.f; state = self.valid(f.report_input())['state']
+        saved = f.save(state)['path']; proposal = f.save(dict(schema_version=1, action='resume', state=state))['path']
+        for path, head in ((saved, 'mode='), (proposal, 'proposal: action=resume')):
+            rc, out, err = command(f.argv('protocol-state', 'summary', path), f.git.root)
+            self.assertEqual(rc, 0, (out, err)); rows = out.splitlines()
+            self.assertTrue(rows[0].startswith(head), rows[0])
+            self.assertIn('barrier=awaiting_gate', out); self.assertIn('  implementer DONE r1 phase', out)
+            self.assertLess(len(rows), 40); self.assertLess(len(out), 4000)
+        rc, out, err = command(f.argv('protocol-state', 'summary', f.save(dict(no='state'))['path']), f.git.root)
+        self.assertEqual(rc, 2, (out, err)); self.assertIn('not a C6 state', out)
+
     def test_explicitly_empty_cannot_verify_is_not_unstructured(self):
         f = self.f; art, coverage = f.package_ref(); state = copy.deepcopy(f.state); cases = []
         for extra, code, why in [('CANNOT_VERIFY: []', 0, ''), ('CANNOT_VERIFY:', 0, ''),

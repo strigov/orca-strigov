@@ -37,7 +37,9 @@ Reads you may perform yourself:
 - a `CANNOT_VERIFY` item's literal `CHECK:` command, executed exactly as written;
 - Orca receipts and `worker_done` messages.
 
-Both rules are model-independent. If you find yourself arguing a rule away, that is the violation.
+**Rule 3 — large artifacts never transit your context.** C6 states, resumes and proposals (100–250 KB), fleet receipts, package manifests and sealed check results are files you reference by `{path,sha256}`, not text you read. To know where you are, run `"$BIN/protocol-state" summary <state-or-proposal.json>` (≈20 lines: barrier, active, rounds, open ledger ids, accepted, commits, waivers). To take one field from a receipt, query it (`--json` plus `jq -r .result.dispatch.status`, or a Python one-liner printing only that key). Never `cat`, `sed -n` or `Get-Content` such a file whole, and never paste one into a proposal by value. Build proposals by writing JSON that points at the files. If a helper prints a full state (validate does), do not re-read the file it wrote; use `summary`.
+
+All three rules are model-independent. If you find yourself arguing a rule away, that is the violation.
 
 ### Pre-flight gate
 

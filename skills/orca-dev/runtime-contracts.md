@@ -522,7 +522,10 @@ pass acceptance/commit while that finding lacks its positive bound CHECK.
 
 `bin/protocol-state validate INPUT_JSON [RESUME_OUT]` (native Windows:
 `bin/protocol-state.ps1`) prints `VALID`, `INVALID` or `UNVERIFIABLE`, then one
-JSON result, exiting 0/1/2. It validates one coordinator proposal, executes only
+JSON result, exiting 0/1/2. `bin/protocol-state summary STATE_OR_PROPOSAL_JSON`
+prints the compact facts of a saved state or proposal (barrier, active, rounds,
+open ledger ids, accepted entries, commits, waivers) in about twenty lines; it is
+read-only and is the only way the coordinator inspects such a file. It validates one coordinator proposal, executes only
 bounded read-only Git queries, and optionally atomically writes the resulting
 compact state inside the existing plan workspace. Rejection leaves any prior
 resume untouched; input artifacts cannot be overwritten. It never dispatches,
