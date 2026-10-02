@@ -24,10 +24,23 @@ Do not change the coordinator model/effort or specialist effort defaults here.
 
 ## Assemble exactly one task body
 
-1. Take the literal mandatory boundary from orca-recipes.md section 1.
-2. Append a blank line and the filled selected role body.
-3. For an outcome-v1 body append the filled text of
-   prompts/outcome-worker-contract.md. Do not also append the standard role body.
+Use the bundled helper; the template never transits your context:
+
+1. `"$BIN/prompt-fill" list <template>.md` (Windows: `& "$BIN\prompt-fill.ps1" list …`)
+   prints the template's fenced blocks with their headings and `[PLACEHOLDERS]`.
+2. Write a request JSON in the workspace:
+   `{"schema_version":1,"template":"implementer-prompt.md","block":"First-round","fields":{"REPORT_FILE":"<abs>","RUNTIME_CONTRACTS_PATH":"<abs>","FROZEN_ASSIGNMENT":"<json>"},"replacements":{"<repo-root>":"<abs>","<slug>":"…","<id>":"…"},"outcome_contract":false,"prepend":"","append":"","output":"<abs new spec path>"}`.
+   `block` is a heading prefix or an index; `fields` fill `[UPPER_SNAKE]` placeholders
+   (all of the block's placeholders are required, unknown ones are rejected);
+   `replacements` substitute the coordinator-side prose tokens the receipt
+   reports under `worker_tokens` (`<repo-root>`, `<slug>`, `<id>`, scope lines);
+   tokens addressed to the worker (copying Orca preamble values) stay as they are.
+   `prepend` carries a fresh-fallback re-brief, `append` the platform/budget lines.
+3. `"$BIN/prompt-fill" fill REQUEST_JSON` writes the spec as the literal mandatory
+   boundary from orca-recipes.md section 1, a blank line, the filled body and, for
+   `outcome_contract:true`, the filled prompts/outcome-worker-contract.md. It prints
+   `VALID` with `{path,sha256,bytes,worker_tokens}`; `INVALID` names the defect and
+   writes nothing. Pass that file to `task-create --spec "$(cat …)"`.
 4. Keep the live Orca preamble under Orca's control; never synthesize its IDs.
 
 This is still a self-contained assignment: the user's actual request, authorized

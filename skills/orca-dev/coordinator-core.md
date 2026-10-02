@@ -50,7 +50,8 @@ bookkeeping reads above; bundled orchestration references, `orca --version`, `or
 `orca orchestration run-* / task-create / task-list / worker-list / worker-start /
 dispatch / worker-show / check`; `orca terminal create / wait / read`; helper-path
 resolution; `sdd-workspace --name <slug>`; `run-check capabilities` on POSIX;
-`wait-agent-ready`; `wait-worker-event REQUEST_JSON`; `collect-worker-fleet REQUEST_JSON`; and
+`wait-agent-ready`; `wait-worker-event REQUEST_JSON`; `collect-worker-fleet REQUEST_JSON`;
+`prompt-fill list TEMPLATE` / `prompt-fill fill REQUEST_JSON`; and
 `protocol-state validate INPUT_JSON [RESUME_OUT]`; and the C8
 `coordinator-session bind / checkpoint / status / hold / resume` commands.
 Create the original-request, spec, state and raw receipt files needed by those
@@ -252,4 +253,4 @@ host. Inspect workers when the waiter returns a delivery, attention or error.
 - `./roles.md` — who runs what (models, efforts, cascades, family rule, planning profiles)
 - `./orca-recipes.md` — launch paths A/B, blockers, waiting, release, retries
 - `./prompts/plan-writer-prompt.md` (Mode A / Mode B), `plan-reviewer-prompt.md`, `implementer-prompt.md`, `frontend-implementer-prompt.md`, `verification-gate-prompt.md`, `review-primary-prompt.md`, `review-control-prompt.md`, `synthesize-review-prompt.md`, `final-review-prompt.md`, `quickfix-prompt.md`, `diagnosis-prompt.md`
-- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`, `../../bin/wait-worker-event`, `../../bin/collect-worker-fleet` (+ their `.ps1` ports for Windows)
+- `../../bin/verify-gate`, `../../bin/review-package`, `../../bin/sdd-workspace`, `../../bin/wait-agent-ready`, `../../bin/wait-worker-event`, `../../bin/collect-worker-fleet`, `../../bin/prompt-fill` (+ their `.ps1` ports for Windows)

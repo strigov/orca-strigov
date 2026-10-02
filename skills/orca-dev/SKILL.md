@@ -61,7 +61,7 @@ prompts, historical bridge incidents, or both OS recipes.
 | An approved parallel group | coordinator-parallel.md plus the phase/commit sections |
 | Launch, wait, retention, recovery or release | Relevant sections of orca-recipes.md |
 | JSON, artifacts, check execution or transition evidence | runtime-contracts.md (index, C6 rejection table, report binding), then only the one contracts/*.md file it names |
-| Worker prompt selection and assembly | prompt-routing.md and only the selected role template |
+| Worker prompt selection and assembly | prompt-routing.md; `prompt-fill list` names the template's placeholders and `prompt-fill fill` writes the spec — the template itself is never read |
 
 The coordinator-* files preserve the detailed baseline protocol, with corrected
 report-path wording. They are part of this skill, not optional historical notes.

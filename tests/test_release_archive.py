@@ -59,6 +59,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                     "install.sh",
                     "bin/collect-worker-fleet",
                     "bin/coordinator-session",
+                    "bin/prompt-fill",
                     "bin/protocol-state",
                     "bin/review-package",
                     "bin/run-check",
