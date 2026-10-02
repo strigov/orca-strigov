@@ -60,7 +60,7 @@ prompts, historical bridge incidents, or both OS recipes.
 | Any source commit, final review, delivery or archival | coordinator-finish.md |
 | An approved parallel group | coordinator-parallel.md plus the phase/commit sections |
 | Launch, wait, retention, recovery or release | Relevant sections of orca-recipes.md |
-| JSON, artifacts, check execution or transition evidence | Relevant sections of runtime-contracts.md |
+| JSON, artifacts, check execution or transition evidence | runtime-contracts.md (index, C6 rejection table, report binding), then only the one contracts/*.md file it names |
 | Worker prompt selection and assembly | prompt-routing.md and only the selected role template |
 
 The coordinator-* files preserve the detailed baseline protocol, with corrected

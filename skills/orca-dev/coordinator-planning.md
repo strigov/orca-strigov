@@ -23,7 +23,7 @@ role/profile selection. No runtime barrier is waived by this split.
    validating the produced plan; independent review uses that exact plan artifact.
 4. Wait. Accepted `PLAN_WRITTEN` → Step 2. `BLOCKED` / `NEEDS_AUTHORIZATION` keeps bootstrap: read the report, resolve the missing requirement/authority, retain failed history and validate a fresh plan-writer Task/Dispatch/ATTEMPT at round 1. A format correction may bind a pending draft but does not authorize readers; a failed correction also stays in bootstrap. Follow the existing recovery route for an unavailable writer.
    If `state.plan` is null but the failed writer left an unparseable draft at the
-   target path, follow runtime-contracts.md **First-plan bootstrap**: verify
+   target path, follow contracts/c6-protocol-validation.md **First-plan bootstrap**: verify
    settlement, ownership and absence of artifact/report bindings, then preserve
    the draft under a fresh workspace recovery path with its original path/hash
    recorded. Resume and validate the retry only after the original path is absent;

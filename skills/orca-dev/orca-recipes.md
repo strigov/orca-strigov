@@ -119,11 +119,11 @@ Before the first dispatch of a session run `install.sh --check <repo>` (read-onl
 
 ## 4. Waiting
 
-For a worker-owned long shell command, load [runtime-contracts.md](runtime-contracts.md#c3--one-local-command-owner) C3 on demand. Use `run-check run SPEC_JSON` (native Windows: `run-check.ps1`) and let the shell block. Its owner receives full log/result paths, explicit deadline/cancel policy, diagnostic progress and an optional shared local resource key. `run-check wait` observes a new diagnostic state or completion; it never transfers ownership. The coordinator receives significant findings from the owner rather than observing the same log. Silence/no-progress permits bounded diagnosis, not a kill, new writer or resource takeover. Do not add Schedule/model timers, monitoring workers or an Orca process API. A required command terminal uses the verified `orca terminal wait --terminal <handle> --for exit --timeout-ms ...`; this waits for that terminal, not an arbitrary PID. Preserve heartbeat and settlement duties from the live preamble.
+For a worker-owned long shell command, load [C3](contracts/c3-command-owner.md) on demand. Use `run-check run SPEC_JSON` (native Windows: `run-check.ps1`) and let the shell block. Its owner receives full log/result paths, explicit deadline/cancel policy, diagnostic progress and an optional shared local resource key. `run-check wait` observes a new diagnostic state or completion; it never transfers ownership. The coordinator receives significant findings from the owner rather than observing the same log. Silence/no-progress permits bounded diagnosis, not a kill, new writer or resource takeover. Do not add Schedule/model timers, monitoring workers or an Orca process API. A required command terminal uses the verified `orca terminal wait --terminal <handle> --for exit --timeout-ms ...`; this waits for that terminal, not an arbitrary PID. Preserve heartbeat and settlement duties from the live preamble.
 
 For **worker settlement**, run one C7 waiter in the coordinator's shell. Prepare
 its request in the existing plan workspace using the actual CLI, Run and awaited
-Dispatch IDs; the [C7 contract](runtime-contracts.md#c7--worker-event-waiter) gives
+Dispatch IDs; the [C7 contract](contracts/c7-worker-event-waiter.md) gives
 the JSON shape. Allocate a fresh output directory per invocation.
 
 ```bash
@@ -221,7 +221,7 @@ locations, Claude launch). A POSIX coordinator does not load that file.
 
 ## C6 validation before lifecycle effects
 
-Read [runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume)
+Read [C6](contracts/c6-protocol-validation.md)
 for the single input schema and Report binding. For each proposal that requires
 fresh fleet evidence, run the collector **in the existing coordinator shell**:
 
@@ -230,7 +230,7 @@ fresh fleet evidence, run the collector **in the existing coordinator shell**:
 ```
 
 Native Windows: `& "$BIN\collect-worker-fleet.ps1" "$dir\fleet-request-<ATTEMPT>.json"`.
-The [C6 collector contract](runtime-contracts.md#c6-fleet-collector-no-orca-terminal)
+The [C6 collector contract](contracts/c6-protocol-validation.md#c6-fleet-collector-no-orca-terminal)
 defines the small request. On exit 0 read the
 one-line result and load its `fleet_file` with JSON tools; set the proposal's
 `fleet` to that file's `fleet` array (path/hash/cursor references). Do not retype

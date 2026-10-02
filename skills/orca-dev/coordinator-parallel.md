@@ -13,7 +13,7 @@ Two pending phases sharing `parallel_group` run concurrently. Preconditions: pla
 2. Create both child worktrees with `orca worktree create --name <slug>-<phase>
    --setup run --json` before launching workers. Record their actual paths/IDs
    and the group-start parent HEAD in the immutable C6 `track_group` record
-   (runtime-contracts.md, Child tracks and BASE). C6 verifies the plan content in
+   (contracts/c6-protocol-validation.md, Child tracks and BASE). C6 verifies the plan content in
    parent history and each child, BASE ancestry, Run ownership registration and
    at most two active child tracks. The parent and unrelated trees consume no
    slots. Do the platform's installer check and any already-authorized trust

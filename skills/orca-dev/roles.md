@@ -7,7 +7,7 @@ Model ids are provider-opaque strings passed through Orca (`--model` / `--effort
 ## Families
 
 C6 validates actual launch model families and the minimum independent coverage
-against [runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume).
+against [C6](contracts/c6-protocol-validation.md).
 All author families for each changed unit survive fallback/fix waves; a reviewer
 must be outside every author family for its assigned files and both contract
 sides. Complementary final assignments share one capped round. Unknown origin

@@ -81,7 +81,8 @@ If you cannot fill a field, you have lost protocol state: re-read the plan front
 
 Use the deterministic C6 `protocol-state validate` barrier for every dispatch,
 report acceptance, commit/advance and resume; read its input/receipt contract in
-[runtime-contracts.md](runtime-contracts.md#c6--protocol-validation-and-resume)
+[C6](contracts/c6-protocol-validation.md); after a rejection start from the
+reason table in [runtime-contracts.md](runtime-contracts.md#c6-rejections--what-to-supply)
 on demand. Keep the compact JSON resume in the existing plan workspace. VALID
 permits only the proposed action; INVALID/UNVERIFIABLE never permits completion.
 Supply fresh complete fleet receipts before new ownership/review/commit, actual
