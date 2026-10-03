@@ -76,8 +76,9 @@ only `id`, `decision` and `check`. A finding is resolved when:
 
 - the latest accepted review of the same role on the current candidate is a later
   round and no longer lists it (the normal fix → re-review path); or
-- its ledger entry has decision `DEFER`, `NIT`, `REJECTED_BY_SCOPE` or
-  `ESCALATED_TO_HUMAN`; or
+- its ledger entry has decision `DEFER`, `NIT` or `REJECTED_BY_SCOPE`
+  (`ESCALATED_TO_HUMAN` keeps it open: ask the user, then record their answer as
+  one of those three or as a fix); or
 - it is `cannot_verify` and its ledger `check` names the sealed `result.json` of
   the literal CHECK, which reported exit code 0.
 

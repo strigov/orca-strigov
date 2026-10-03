@@ -9,7 +9,7 @@ $PCaps=[ordered]@{plan_review=4;fused_review=4;final_review=2;gate_fix=2}
 $PGood=@{'plan-reviewer'=@('APPROVED');gate=@('GATE_OK');'review-primary'=@('REVIEW_OK');'review-control'=@('REVIEW_OK');'review-final'=@('REVIEW_OK');quickfix=@('DONE','DONE_WITH_CONCERNS')}
 $PWritten=@('DONE','DONE_WITH_CONCERNS','PLAN_WRITTEN','REVISED','SYNTHESIS_DONE')
 $PReady=@{plan=@('plan-reviewer');quickfix=@('quickfix');phase=@('gate','review-primary','review-control');'final-review'=@('review-final');delivery=@('gate');completion=@()}
-$PDecisions=@('DEFER','NIT','REJECTED_BY_SCOPE','ESCALATED_TO_HUMAN')
+$PDecisions=@('DEFER','NIT','REJECTED_BY_SCOPE')  # ESCALATED_TO_HUMAN keeps a finding open until the user decides
 $PKeys=@('schema_version','mode','plan','ledger_path','orca_run','plan_base','phase','base','step','worktree','worktree_id','workspace','active','rounds',
   'cap_extensions','independence_waivers','provenance','accepted','write_ownership','phase_commits','final_source','processed_messages','used_fleet_ids')
 

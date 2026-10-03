@@ -21,7 +21,7 @@ GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["
 WRITTEN = ["DONE", "DONE_WITH_CONCERNS", "PLAN_WRITTEN", "REVISED", "SYNTHESIS_DONE"]
 READY = {"plan": ["plan-reviewer"], "quickfix": ["quickfix"], "phase": ["gate", "review-primary", "review-control"],
          "final-review": ["review-final"], "delivery": ["gate"], "completion": []}
-DECISIONS = ["DEFER", "NIT", "REJECTED_BY_SCOPE", "ESCALATED_TO_HUMAN"]
+DECISIONS = ["DEFER", "NIT", "REJECTED_BY_SCOPE"]  # ESCALATED_TO_HUMAN keeps a finding open until the user decides
 KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base", "phase", "base", "step", "worktree",
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")

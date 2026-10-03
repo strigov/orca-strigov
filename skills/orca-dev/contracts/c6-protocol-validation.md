@@ -170,9 +170,10 @@ SECURITY/DATA_LOSS findings return `decision:risk-escalation`.
 
 A finding of an accepted entry is **resolved** when:
 
-- the ledger entry with its id has `decision` `DEFER`, `NIT`,
-  `REJECTED_BY_SCOPE` or `ESCALATED_TO_HUMAN` (record the user's decision for
-  the last one); or
+- the ledger entry with its id has `decision` `DEFER`, `NIT` or
+  `REJECTED_BY_SCOPE`; `ESCALATED_TO_HUMAN` and `ACCEPTED` leave it unresolved
+  until the user's answer is recorded as one of the three or the finding is
+  fixed and re-reviewed; or
 - it is `cannot_verify` and the ledger entry has `check`: an absolute path to a
   C4 `result.json` that exists and reports integer `exit_code` 0; or
 - it is `blocking` and the latest accepted entry of the same role on the

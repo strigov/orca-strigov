@@ -49,9 +49,10 @@ report; the user reads the ledger.
 
 A blocking finding is resolved when the latest accepted review of the current
 candidate (same role, later round, artifact = the candidate) no longer lists
-it, or when the ledger marks it `DEFER` / `NIT` / `REJECTED_BY_SCOPE` /
-`ESCALATED_TO_HUMAN` — the validator reads the ledger only for those four
-decisions, by id, and for `check` entries. A `cannot_verify` item blocks the
+it, or when the ledger marks it `DEFER` / `NIT` / `REJECTED_BY_SCOPE` — the
+validator reads the ledger only for those three decisions, by id, and for
+`check` entries; `ESCALATED_TO_HUMAN` keeps the finding open until the user's
+answer is recorded (decided after the first implementation). A `cannot_verify` item blocks the
 commit until the ledger holds a `check` entry for its id with a result path;
 the validator checks that the file exists and reports `exit_code == 0`, not
 its bytes.

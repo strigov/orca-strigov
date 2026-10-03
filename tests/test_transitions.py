@@ -355,9 +355,11 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check=str(forged))))['state']['barrier'], 'awaiting_resolution')
         passing = str(Path(self.passing_evidence()[0]['path']))
         self.ok(action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=ledger(dict(id='CV1', check=passing)))
-        for decision in ('DEFER', 'NIT', 'REJECTED_BY_SCOPE', 'ESCALATED_TO_HUMAN'):
+        for decision in ('DEFER', 'NIT', 'REJECTED_BY_SCOPE'):
             self.ok(ledger=ledger(dict(id='CV1', decision=decision)), barrier='awaiting_commit')
-        self.ok(ledger=ledger(dict(id='CV1', decision='ACCEPTED')), barrier='awaiting_resolution')
+        # Escalation to the user keeps the finding open until the user's decision is recorded as one of the three.
+        for decision in ('ACCEPTED', 'ESCALATED_TO_HUMAN'):
+            self.ok(ledger=ledger(dict(id='CV1', decision=decision)), barrier='awaiting_resolution')
         self.no(1, 'invalid ledger', ledger=ledger(dict(id='CV1'), dict(id='CV1')))
         self.no(1, 'ledger path differs from state', ledger=f.save([]))
 
