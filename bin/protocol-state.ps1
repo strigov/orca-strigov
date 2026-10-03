@@ -488,7 +488,8 @@ function P-Commit($fact,$s) {
     $changed=@((V-GitText $root @('diff-tree','--no-commit-id','-r','--name-only',$fact.base,$fact.sha)).Split("`n") | Where-Object { $_ })
     P-Require ($changed.Count -eq 1 -and $changed[0] -ceq $name) 'plan commit must change only the plan file'
     P-Require ((V-Hash (V-Git $root @('show',($fact.sha+':'+$name)))) -ceq $art.id) 'plan commit blob differs from accepted plan'
-    $out=@{};foreach ($k in $art.Keys) { $out[$k]=$art[$k] };$out['head']=$fact.sha;return $out
+    # The committed plan bytes stay the historical source of plan closures after later metadata edits.
+    $out=@{};foreach ($k in $art.Keys) { $out[$k]=$art[$k] };$out['head']=$fact.sha;$out['files']=@{('repo:'+$name)=@{sha256=$art.id}};return $out
   }
   P-Require ($fact.base -ceq $art.head) 'commit base differs from accepted candidate HEAD';$expected=@{}
   foreach ($label in $art.files.Keys) {
@@ -832,6 +833,7 @@ function P-Validate($data) {
           $s.rounds.fused_review=0;$s.rounds.gate_fix=0
         }
         if ($action -ceq 'complete') {
+          P-Require ($fact.artifact.kind -cne 'plan') 'completion commit needs the delivery snapshot artifact'
           P-Require ($fact.sha -cnotin @($s.phase_commits | ForEach-Object { $_.sha })) 'completion requires a separate commit'
           P-Final $s $phases $committed;$s.final['completion']=$fact
         }

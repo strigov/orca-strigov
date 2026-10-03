@@ -225,6 +225,12 @@ class MaintenanceTests(unittest.TestCase):
         f.state = before
         (f.git.root / 'extra.txt').write_bytes(b'x\n'); f.git.git('add', 'extra.txt'); two = commit()
         self.native(self.case('confirm-commit', artifact=revised, commit=dict(sha=two, base=sha, artifact=revised), fleet=f.fleet()), 1, 'plan commit')
+        # Phase-start metadata edits the live plan; the closure stays proven by the committed plan bytes.
+        f.state = confirmed
+        self.native(self.case('advance', artifact=revised, commit=fact, fleet=f.fleet()))
+        f.plan.write_bytes(f.plan.read_bytes().replace(b'status: implementing', b'status: in-progress').replace(b'    base: ' + f.git.base.encode(), b'    base: ' + sha.encode()))
+        advanced = self.native(self.case(plan=f.reference(f.plan)))['state']
+        self.assertEqual((advanced['phase'], advanced['closed_ledger_ids'], advanced['plan']['sha256']), ('F1', ['P1-B1'], f.reference(f.plan)['sha256']))
 
     def test_independence_waiver_only_for_units_authored_by_every_family(self):
         f = self.f; files = f.git.git('diff', '--name-only', f.git.base).splitlines()

@@ -642,7 +642,8 @@ def commit_fact(fact, state):
         changed = v.text_git(root, "diff-tree", "--no-commit-id", "-r", "--name-only", fact["base"], fact["sha"]).split("\n")
         require([x for x in changed if x] == [name], "plan commit must change only the plan file")
         require(v.digest(v.git(root, "show", fact["sha"] + ":" + name)) == art["id"], "plan commit blob differs from accepted plan")
-        return dict(art, head=fact["sha"])
+        # The committed plan bytes stay the historical source of plan closures after later metadata edits.
+        return dict(art, head=fact["sha"], files={"repo:" + name: {"sha256": art["id"]}})
     require(fact["base"] == art.get("head"), "commit base differs from accepted candidate HEAD")
     expected = {}
     for label, item in art["files"].items():
@@ -1067,6 +1068,7 @@ def validate(data):
                 state["accepted"] = []; state["script_gates"] = []; state["commit_barrier"] = {}; state["active"] = None
                 state["rounds"]["fused_review"] = 0; state["rounds"]["gate_fix"] = 0
             if action == "complete":
+                require(fact["artifact"]["kind"] != "plan", "completion commit needs the delivery snapshot artifact")
                 require(fact["sha"] not in {f["sha"] for f in state["phase_commits"]}, "completion requires a separate commit")
                 final_facts(state, phases, committed)
                 state["final"]["completion"] = fact
