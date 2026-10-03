@@ -183,8 +183,9 @@ refreshes Codex's installed plugin cache.
 
 1. Open your app's repository in Orca and start a new Codex or Claude Code session.
 2. Confirm all three skills resolve from this plugin and its hooks are trusted.
-3. Send the request from the example above. Implementation requests can also
-   activate `orca-dev` without the explicit skill tag.
+3. Send the request from the example above. Inside an Orca terminal an
+   implementation request activates `orca-dev` without the explicit skill tag;
+   outside Orca (desktop Codex, a plain terminal) only `$orca-dev` does.
 
 Claude's explicit command is `/orca-strigov:orca-dev <task>`. Choose one
 development coordinator for an objective; do not run another orchestration plugin's

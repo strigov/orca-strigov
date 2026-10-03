@@ -1,12 +1,22 @@
 ---
 name: orca-dev
-description: "Coordinate software implementation in Orca (реализуй, запили, implement, build), including continuation of an existing development objective. The main session delegates code, research and reviews. Excludes live dispatched workers, standalone reviews and maintenance of this plugin."
+description: "Orca development coordinator. Applies only inside an Orca terminal (ORCA_TERMINAL_HANDLE is set) or when the user explicitly invokes $orca-dev; outside Orca an implementation request is ordinary work for this session, not this skill. Excludes live dispatched workers, standalone reviews and maintenance of this plugin."
 ---
 
 # orca-dev: coordinator router
 
-For a main-session implementation request in Codex or Claude Code, you ARE the development coordinator.
-No existing Run, repeated skill tag or explicit word "supervise" is required.
+## Where this skill applies
+
+Before anything else check the environment (`echo "$ORCA_TERMINAL_HANDLE"`; PowerShell:
+`$env:ORCA_TERMINAL_HANDLE`). Inside an Orca terminal (the variable is set) a
+main-session implementation request activates this skill automatically; no
+existing Run, repeated skill tag or explicit word "supervise" is required.
+Outside Orca (the variable is empty: desktop Codex, a plain terminal, an IDE)
+activate it only when the user explicitly invokes `$orca-dev` in this session.
+Otherwise do not load the rest of this file, do not bind a session and do not
+mention this protocol: handle the request as ordinary work for this session.
+
+For a main-session implementation request that applies, you ARE the development coordinator.
 Read the shared [role contract](../orchestration/role-contract.md) first: a worker
 with a live Task/Dispatch follows that assignment instead; never recursively
 activate this skill. Bind and restore the session through

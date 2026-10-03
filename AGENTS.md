@@ -10,8 +10,9 @@ An Orca worker follows its live assignment and lifecycle preamble. Do not load
 or restart the coordinator protocol merely because the assignment asks for code.
 A standalone maintenance session may inspect and edit this repository directly.
 When a coordinator user asks for implementation ("реализуй", "запили", "implement",
-"build this feature"), automatically load the installed orca-dev skill. Explicit
-$orca-dev invocation also activates it. Standalone reviews and dispatched workers
+"build this feature") inside an Orca terminal (ORCA_TERMINAL_HANDLE is set),
+automatically load the installed orca-dev skill. Outside Orca only an explicit
+$orca-dev invocation activates it. Standalone reviews and dispatched workers
 do not activate the coordinator workflow. The repository maintenance exception
 above permits direct authorized edits here. Never emulate unavailable Orca receipts.
 
