@@ -471,23 +471,18 @@ class ProtocolFixture(VerificationFixture):
                 self.git.base + '\n    consumes: []\n    produces: ["C1"]\n---\nFixture plan.\n', encoding='utf-8')
         (self.git.root / 'tracked.txt').write_text('candidate\n', encoding='utf-8')
         self.git.git('add', '--all')
-        self.state = dict(schema_version=1, mode='quickfix' if quickfix else 'plan',
-            plan=None if quickfix else self.reference(self.plan), ledger=None, orca_run='fixture-run',
-            plan_base=self.git.base, phase=None if quickfix else 'F1', base=self.git.base,
-            step='quickfix' if quickfix else 'phase', worktree=str(self.git.root), worktree_id='fixture-worktree',
-            workspace=str(self.workspace), active=None, rounds=dict(plan_review=0, fused_review=0, final_review=0, gate_fix=0),
-            format_corrections={}, accepted=[], processed=dict(messages=[], deliveries=[]), open_ledger_ids=[],
-            write_ownership=[], phase_commits=[], commit_barrier={}, final={}, provenance=[])
+        self.quickfix = quickfix
+        self.state = self.v2_state()
 
     def v2_state(self):
-        """The same fixture as a schema 2 C6 state (agreed C6 v2 shape)."""
-        s = self.state
-        plan = s['plan'] and self.plan_ref()
-        return dict(schema_version=2, mode=s['mode'], plan=plan, ledger_path=None, orca_run=s['orca_run'], plan_base=s['plan_base'],
-                    phase=s['phase'], base=s['base'], step=s['step'], worktree=s['worktree'], worktree_id=s['worktree_id'],
-                    workspace=s['workspace'], active=None, rounds=dict(s['rounds']), cap_extensions=[], independence_waivers=[],
-                    provenance=list(s['provenance']), accepted=[], write_ownership=[], phase_commits=[], final_source=None,
-                    processed_messages=[], used_fleet_ids=[])
+        """A fresh schema 2 C6 state for this fixture (phase F1, or the plan-less quickfix step)."""
+        return dict(schema_version=2, mode='quickfix' if self.quickfix else 'plan', plan=None if self.quickfix else self.plan_ref(),
+                    ledger_path=None, orca_run='fixture-run', plan_base=self.git.base, phase=None if self.quickfix else 'F1',
+                    base=self.git.base, step='quickfix' if self.quickfix else 'phase', worktree=str(self.git.root),
+                    worktree_id='fixture-worktree', workspace=str(self.workspace), active=None,
+                    rounds=dict(plan_review=0, fused_review=0, final_review=0, gate_fix=0), cap_extensions=[],
+                    independence_waivers=[], provenance=[], accepted=[], write_ownership=[], phase_commits=[],
+                    final_source=None, processed_messages=[], used_fleet_ids=[])
 
     def plan_ref(self, path=None):
         path = Path(path or self.plan)
@@ -599,9 +594,10 @@ class ProtocolFixture(VerificationFixture):
         return [dict(self.save(dict(id='fixture-fleet-' + uuid.uuid4().hex, ok=True, result=result)), cursor=None)]
 
     def report_input(self, role='implementer', family='OpenAI', token=None, artifact=None, coverage=None, findings=None, round=1, extra='', assignment=None):
-        artifact = artifact or self.snapshot_ref()
-        obj = read_json(artifact['path']) if artifact['kind'] != 'plan' else {}
-        aid = obj.get('package_id', obj.get('snapshot_id', artifact['sha256']))
+        # artifact=False: no artifact (a first plan writer that produced no plan).
+        artifact = self.snapshot_ref() if artifact is None else artifact
+        obj = read_json(artifact['path']) if artifact and artifact['kind'] != 'plan' else {}
+        aid = obj.get('package_id', obj.get('snapshot_id', artifact['sha256'])) if artifact else None
         sid = obj.get('snapshot_after', obj).get('snapshot_id')
         a = dict(assignment) if assignment else self.assignment(role, family, round)
         a.update(artifact_id=aid, snapshot_id=sid)
@@ -623,8 +619,10 @@ class ProtocolFixture(VerificationFixture):
         message = dict(id='fixture-message-' + str(self.serial), type='worker_done', run_id='fixture-run', from_handle='fixture-terminal',
             subject=token, payload=json.dumps(dict(taskId=a['task_id'], dispatchId=a['dispatch_id'], outcome='succeeded',
                 reportPath=report['path'], filesModified=['tracked.txt'])))
-        return dict(schema_version=1, action='accept-report', state=self.state, artifact=artifact, report=report,
+        data = dict(schema_version=1, action='accept-report', state=self.state, artifact=artifact, report=report,
                     observation=observation, event=self.save(dict(ok=True, result=dict(message=message))), message_id=message['id'])
+        if not artifact: data.pop('artifact')
+        return data
 
     def validate(self, data=None, action='resume', output=None, **fields):
         data = data or dict(schema_version=1, action=action, state=self.state, **fields)

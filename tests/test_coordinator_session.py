@@ -155,7 +155,7 @@ class CoordinatorSessionTests(unittest.TestCase):
         next_phase = ('  - id: F2\n    risk: none\n    base: pending\n'
                       '    consumes: ["C1"]\n    produces: []\n')
         f.plan.write_text(f.plan.read_text().replace('---\nFixture plan.', next_phase + '---\nFixture plan.'))
-        f.state['plan'] = f.reference(f.plan)
+        f.state['plan'] = f.plan_ref()
         f.git.git('add', 'plan.md')
         self.bind()
         self.assertEqual(f.validate(f.report_input())[0], 0)
@@ -276,7 +276,7 @@ class CoordinatorSessionTests(unittest.TestCase):
         f = self.f; self.bind()
         art, _ = f.package_ref()
         fact = f.commit(art)
-        f.state['phase_commits'] = [dict(fact, phase='F1')]
+        f.state['phase_commits'] = [dict(phase='F1', step='phase', sha=fact['sha'], base=fact['base'], candidate='recorded')]
         f.state['step'] = 'final-review'
         art, coverage = f.package_ref()
         self.assertEqual(f.validate(f.report_input('review-final', 'Anthropic', artifact=art, coverage=coverage))[0], 0)
@@ -289,17 +289,16 @@ class CoordinatorSessionTests(unittest.TestCase):
         self.checkpoint(dict(schema_version=1, action='resume', state=f.state))
         self.assertIn('awaiting_completion_commit', self.hook()['reason'])
         f.plan.write_text(f.plan.read_text().replace('status: implementing', 'status: done'))
-        f.git.git('add', 'plan.md'); f.state['plan'] = f.reference(f.plan)
-        proofs = f.gate_evidence(); completed = f.gate_snapshot
-        self.assertEqual(f.validate(f.report_input('gate', artifact=completed, extra='EVIDENCE: ' + json.dumps(proofs)))[0], 0)
+        f.git.git('add', 'plan.md')
+        completed = f.snapshot_ref()
         completion = f.commit(completed)
         self.assertNotEqual(fact['sha'], completion['sha'])
-        proposal = dict(schema_version=1, action='complete', state=f.state,
+        proposal = dict(schema_version=1, action='complete', state=f.state, plan=f.plan_ref(),
                         artifact=completed, commit=completion, fleet=f.fleet())
         self.checkpoint(proposal)
         self.assertEqual(self.hook(), {})
         self.assertEqual(f.validate(proposal)[0], 0)
-        self.checkpoint(dict(schema_version=1, action='resume', state=f.state))
+        self.checkpoint(dict(schema_version=1, action='resume', state=f.state, plan=f.plan_ref()))
         self.assertIn('resume-only', self.hook()['reason'])
 
 

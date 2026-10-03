@@ -72,7 +72,7 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(result[0], 0, result)
         art, coverage = f.package_ref()
         self.assertEqual(f.helper('validate-package', art['path'])[0], 0)
-        fact = f.commit(art); f.state['phase_commits'] = [dict(fact, phase='F1')]
+        fact = f.commit(art); f.state['phase_commits'] = [dict(phase='F1', step='phase', sha=fact['sha'], base=fact['base'], candidate='recorded')]
         art, coverage = f.package_ref()
         # A partial review cannot satisfy both sides of the package contract.
         partial = copy.deepcopy(coverage); partial['contracts'] = []

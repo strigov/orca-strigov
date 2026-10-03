@@ -1,12 +1,11 @@
 """Maintenance regressions: identical byte inputs through Python and native C6."""
 import copy
 import json
-import os
 from pathlib import Path
 import sys
 import unittest
 
-from support import ProtocolFixture, ROOT, WINDOWS, command, read_json
+from support import ProtocolFixture, ROOT, WINDOWS, command
 
 
 class MaintenanceTests(unittest.TestCase):
@@ -40,342 +39,92 @@ class MaintenanceTests(unittest.TestCase):
     def case(self, action='resume', **fields):
         return copy.deepcopy(dict(schema_version=1, action=action, state=self.f.state, **fields))
 
-    def native(self, data, code=0, reason=''):
-        rc, token, result = self.f.validate(data)
-        print(json.dumps(dict(action=data['action'], code=rc, token=token,
-                              reason=result.get('reason'), barrier=result.get('state', {}).get('barrier'))), flush=True)
-        self.assertEqual(rc, code, result); self.assertIn(reason, result.get('reason', ''))
-        return result
-
-    def test_crlf_report_bytes_and_original_hash(self):
+    def plan_step(self):
         f = self.f; f.state.update(phase=None, step='plan')
         f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
+        return f.plan_artifact()
+
+    def test_crlf_report_bytes_and_original_hash(self):
+        f = self.f; art = self.plan_step()
         for role, family, extra in [('plan-reviewer', 'Anthropic', '## Проверка\nКириллица в отчёте'),
                                     ('implementer', 'OpenAI', 'FIX_EVIDENCE: {"tests":["T"],"commands":["C"],"outputs":["O"]}')]:
-            data = f.report_input(role, family, artifact=dict(f.state['plan'], kind='plan'), round=2, extra=extra)
+            data = f.report_input(role, family, artifact=art, round=2, extra=extra)
             p = Path(data['report']['path'])
             p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
             data['report'] = f.reference(p)
             self.both(data)
             p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
-            self.both(data, 1, 'hash mismatch')
+            self.both(data, 1, 'hash mismatch')  # the same delivery, re-validated from its own prior state
             p.write_bytes(p.read_bytes().replace(b'\n', b'\r\n'))
 
-    def test_bootstrap_request_to_plan_and_independent_review(self):
+    def test_first_plan_writer_to_independent_review(self):
         f = self.f; f.plan.unlink(); f.git.git('reset', '-q')
-        request = dict(schema_version=1, run_id='fixture-run', worktree_id='fixture-worktree',
-                       plan_base=f.git.base, plan_path=str(f.plan), request='Implement the authorized fixture task.')
-        f.state.update(plan=None, phase=None, step='bootstrap', authorization=f.save(request))
-        self.both(self.case())
-        art = dict(f.state['authorization'], kind='request')
+        f.state.update(phase=None, step='plan', plan=dict(path=str(f.plan), sha256=None, structure=None))
+        self.assertEqual(self.both(self.case())['state']['barrier'], 'awaiting_plan_writer')
         p = f.assignment('plan-writer'); p['dispatch_id'] = None
-        bad = dict(p, role='implementer')
-        self.both(self.case('dispatch', proposed=bad, artifact=art, fleet=f.fleet()), 1, 'bootstrap')
-        self.both(self.case('dispatch', proposed=p, artifact=art, fleet=f.fleet()))
-        bound = dict(p, dispatch_id='bootstrap-writer')
-        self.both(self.case('bind-dispatch', observation=f.observation(bound, 'running')))
-        text = ('---\nprotocol_version: 2\norca_run: fixture-run\nplan_base: '+f.git.base+
-                '\nrequest_sha256: '+f.state['authorization']['sha256']+
-                '\nstatus: draft\ncontracts: []\nphases:\n  - id: F1\n    risk: none\n    base: '+f.git.base+
-                '\n    consumes: []\n    produces: []\n---\nActual first plan.\n')
-        f.plan.write_bytes(text.encode())
-        plan = f.reference(f.plan)
-        data = f.report_input('plan-writer', token='PLAN_WRITTEN', artifact=dict(plan, kind='plan'), assignment=f.state['active'])
-        data['plan'] = plan
-        if self._testMethodName.endswith('_format_correction'):
-            report=Path(data['report']['path']);text=report.read_text(encoding='utf-8')
-            report.write_bytes('\n'.join(l for l in text.splitlines() if not l.startswith('BINDING:')).encode())
-            data['report']=f.reference(report)
-            self.both(data,1,'BINDING')
-            proposed=f.assignment('plan-writer');proposed['dispatch_id']=None
-            correction=self.case('format-correction',proposed=proposed,plan=plan,artifact=dict(plan,kind='plan'),
-                                 report=data['report'],observation=data['observation'],outcome='succeeded',files_modified=[],fleet=f.fleet())
-            self.both(correction)
-            bound=dict(proposed,dispatch_id='corrected-bootstrap-writer')
-            self.both(self.case('bind-dispatch',observation=f.observation(bound,'running')))
-            data=f.report_input('plan-writer',token='PLAN_WRITTEN',artifact=dict(plan,kind='plan'),assignment=f.state['active'])
-        self.both(data)
-        self.assertEqual(f.state['step'], 'plan')
-        reviewer=f.assignment('plan-reviewer','Anthropic');reviewer['dispatch_id']=None
-        self.both(self.case('dispatch',proposed=reviewer,artifact=dict(plan,kind='plan'),fleet=f.fleet()))
-        bound=dict(reviewer,dispatch_id='first-independent-review')
-        self.both(self.case('bind-dispatch',observation=f.observation(bound,'running')))
-        self.both(f.report_input('plan-reviewer', 'Anthropic', artifact=dict(plan, kind='plan'),assignment=f.state['active']))
-        self.assertEqual(len(f.state['provenance']), 1)
+        self.both(self.case('dispatch', proposed=dict(p, role='implementer'), fleet=f.fleet()), 1, 'only a plan-writer')
+        self.both(self.case('dispatch', proposed=p, fleet=f.fleet()))
+        self.both(self.case('bind-dispatch', observation=f.observation(dict(p, dispatch_id='first-writer'), 'running')))
+        f.plan.write_bytes(('---\nprotocol_version: 2\norca_run: fixture-run\nplan_base: ' + f.git.base +
+                            '\nstatus: draft\ncontracts: []\nphases:\n  - id: F1\n    risk: none\n'
+                            '    consumes: []\n    produces: []\n---\nActual first plan.\n').encode())
+        art = f.plan_artifact()
+        data = f.report_input('plan-writer', token='PLAN_WRITTEN', artifact=art, assignment=f.state['active'])
+        self.both(data, 1, 'assigned plan mismatch')  # the writer's plan reaches the state only with its fresh reference
+        data['plan'] = f.plan_ref()
+        self.assertEqual(self.both(data)['state']['barrier'], 'awaiting_plan_review')
+        reviewer = f.assignment('plan-reviewer', 'Anthropic'); reviewer['dispatch_id'] = None
+        self.both(self.case('dispatch', proposed=reviewer, artifact=art, fleet=f.fleet()))
+        self.both(self.case('bind-dispatch', observation=f.observation(dict(reviewer, dispatch_id='first-review'), 'running')))
+        self.both(f.report_input('plan-reviewer', 'Anthropic', artifact=art, assignment=f.state['active']))
+        self.assertEqual((len(f.state['provenance']), f.state['barrier']), (1, 'awaiting_commit'))
 
-    def test_bootstrap_report_format_correction(self):
-        self.test_bootstrap_request_to_plan_and_independent_review()
-
-    def test_closing_status_without_check_never_removes_barrier(self):
-        f = self.f; f.state.update(phase=None, step='plan')
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
-        art = dict(f.state['plan'], kind='plan')
-        finding = dict(id='CV1', kind='cannot_verify', issue='assertion not run', location='tracked.txt:1',
-                       check='fixture assertion command', expect='exit 0 proves the assertion')
-        self.both(f.report_input('plan-reviewer', 'Anthropic', artifact=art, findings=[finding]))
-        original = copy.deepcopy(f.state)
-        for status in ('fixed', 'resolved', 'closed', 'verified-by-controller'):
-            f.state = copy.deepcopy(original)
-            f.state['ledger'] = f.save([dict(id='CV1', decision='ACCEPTED', status=status)])
-            self.both(self.case(), 2, 'closure evidence')
-
-    def test_check_closure_positive_negative_stale_mutated_wrong_and_idempotent(self):
-        f = self.f; f.state.update(phase=None, step='plan')
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
-        result_ref = f.gate_evidence()[0]; result = read_json(result_ref['path'])
-        art = dict(f.state['plan'], kind='plan')
+    def test_ledger_status_never_resolves_without_decision_or_check(self):
+        f = self.f; art = self.plan_step()
         finding = dict(id='CV1', kind='cannot_verify', issue='assertion not run', location='plan.md',
-                       check=result['command'], expect='exit 0 proves the assertion')
-        self.native(f.report_input('plan-reviewer', 'Anthropic', artifact=art, findings=[finding]))
-        original = copy.deepcopy(f.state)
-        proof = dict(schema_version=1, finding_id='CV1', report=f.state['accepted'][0]['report'],
-                     artifact=art, result=result_ref, command=finding['check'], expect=finding['expect'])
-        for status in ('fixed','resolved','closed','verified-by-controller'):
-            f.state = copy.deepcopy(original)
-            f.state['ledger'] = f.save([dict(id='CV1', status=status, decision='ACCEPTED', closure=f.save(proof))])
-            one = self.native(self.case())['state']
-            self.assertEqual(one['closed_ledger_ids'], ['CV1'])
-            self.assertEqual(self.native(self.case())['state'], one)
-            self.native(self.case('prepare-commit', artifact=f.snapshot_ref(), fleet=f.fleet()))
-        for key, value, reason in [('finding_id','OTHER','finding binding'),
-                                    ('command','different command','CHECK binding'),
-                                    ('expect','different expectation','CHECK binding'),
-                                    ('result',dict(result_ref, sha256='0'*64),'hash mismatch')]:
-            f.state = copy.deepcopy(original)
-            f.state['ledger'] = f.save([dict(id='CV1', status='fixed', closure=f.save(dict(proof, **{key:value})))])
-            self.native(self.case(), 1, reason)
-        f.state = copy.deepcopy(original)
-        f.state['ledger'] = f.save([dict(id='CV1', status='fixed', closure=f.save(proof))])
-        log = Path(result['stdout_log']); before = log.read_bytes(); log.write_bytes(b'mutated')
-        self.native(self.case(), 1, 'closure CHECK evidence'); log.write_bytes(before)
-        (f.git.root/'tracked.txt').write_bytes(b'stale candidate')
-        self.native(self.case(), 1, 'stale closure source')
+                       check='fixture assertion command', expect='exit 0 proves the assertion')
+        self.assertEqual(self.both(f.report_input('plan-reviewer', 'Anthropic', artifact=art, findings=[finding]))['state']['barrier'],
+                         'awaiting_resolution')
+        ledger = f.workspace / 'ledger.json'
+        for status in ('fixed', 'resolved', 'closed', 'verified-by-controller'):
+            ledger.write_text(json.dumps([dict(id='CV1', decision='ACCEPTED', status=status, closure=dict(path='/receipt', sha256='0' * 64))]))
+            self.assertEqual(self.both(self.case(ledger=f.reference(ledger)))['state']['barrier'], 'awaiting_resolution')
+        ledger.write_text(json.dumps([dict(id='CV1', decision='DEFER')]))
+        self.assertEqual(self.both(self.case(ledger=f.reference(ledger)))['state']['barrier'], 'awaiting_commit')
 
-    def test_check_closure_transfers_to_later_positive_review_candidate(self):
-        f = self.f; dep = f.git.root / 'vendor-input'; dep.mkdir(); (dep / 'lock.txt').write_text('v1\n')
-        with open(f.git.root / '.git/info/exclude', 'a', encoding='utf-8') as x: x.write('/vendor-input/\n')
-        check = lambda: f.verified_run(code="print('assertion holds')", declaration=dict(inputs=[str(dep)]))
-        first, coverage = f.package_ref()
-        rc, old = check(); self.assertEqual(rc, 0, old)
-        finding = dict(id='CV1', kind='cannot_verify', issue='assertion not run', location='tracked.txt:1',
-                       check=old['command'], expect='exit 0')
-        self.native(f.report_input('review-primary', 'Anthropic', artifact=first, coverage=coverage, findings=[finding]))
-        origin = f.state['accepted'][-1]['report']
-        # Other findings of the round are fixed, so the candidate leaves the bytes the finding was raised on.
-        (f.git.root / 'tracked.txt').write_bytes(b'repaired\n'); f.git.git('add', 'tracked.txt')
-        repaired, coverage = f.package_ref()
-        self.native(f.report_input('review-primary', 'Anthropic', artifact=repaired, coverage=coverage, round=2))
-        review = f.state['accepted'][-1]['report']
-        rc, new = check(); self.assertEqual((rc, new['command']), (0, old['command']), new)
-        result = lambda run: f.reference(Path(run['run_dir']) / 'result.json')
-        proof = dict(schema_version=1, finding_id='CV1', report=origin, artifact=repaired, result=result(new),
-                     command=finding['check'], expect=finding['expect'], review_report=review)
-        original = copy.deepcopy(f.state)
-        def close(code=0, reason='', **changed):
-            f.state = copy.deepcopy(original); receipt = {k: x for k, x in dict(proof, **changed).items() if x is not None}
-            f.state['ledger'] = f.save([dict(id='CV1', status='verified-by-controller', decision='ACCEPTED', closure=f.save(receipt))])
-            return self.native(self.case(), code, reason)
-        self.assertEqual(close()['state']['closed_ledger_ids'], ['CV1'])
-        close(1, 'CHECK binding', review_report=None)               # a later candidate needs its re-review
-        close(1, 'CHECK binding', command='different command')
-        close(1, 'closure phase/round mismatch', review_report=origin)  # the finding's own report is not a re-review
-        close(1, 'closure review artifact mismatch', artifact=first)
-        close(1, 'closure snapshot mismatch', result=result(old))     # the CHECK ran on the replaced bytes
-        (dep / 'lock.txt').write_text('v2\n')
-        close(1, 'stale closure source')
-
-    def test_plan_revision_resume_and_plan_only_commit_confirmation(self):
-        f = self.f; f.state.update(phase=None, step='plan')
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
-        f.git.git('reset', '-q', 'tracked.txt'); f.git.git('checkout', '--', 'tracked.txt')  # only the plan is pending
-        def archive():
-            path = Path(f.save('', '.md')['path']); path.write_bytes(f.plan.read_bytes())
-            return dict(f.reference(path), kind='plan', source_path=str(f.plan))
-        first = archive()
-        self.native(f.report_input('plan-writer', token='PLAN_WRITTEN', artifact=first))
-        finding = dict(id='P1-B1', kind='blocking', issue='scope', location='plan.md', criterion='scope', change='narrow it', risk='none', **{'class': 'MUST_FIX_NOW'})
-        self.native(f.report_input('plan-reviewer', 'Anthropic', token='CHANGES_REQUESTED', artifact=first, findings=[finding]))
-        origin = f.state['accepted'][-1]['report']
-        f.plan.write_bytes(f.plan.read_bytes() + b'Narrowed scope.\n'); f.state['plan'] = f.reference(f.plan)
-        revised = archive()
-        fixed = dict(findings=[dict(id='P1-B1', report=origin)])
-        self.native(f.report_input('plan-reviser', token='REVISED', artifact=revised, round=2, extra='FIX_EVIDENCE: ' + json.dumps(fixed)))
-        fix = f.state['accepted'][-1]['report']
-        self.native(f.report_input('plan-reviewer', 'Anthropic', artifact=revised, round=2))
-        review = f.state['accepted'][-1]['report']
-        proof = dict(schema_version=1, finding_id='P1-B1', report=origin, artifact=revised, fix_report=fix, review_report=review)
-        f.state['ledger'] = f.save([dict(id='P1-B1', status='fixed', closure=f.save(proof))])
-        # The first writer's plan is history once the reviser replaced it; resume must not demand it current.
-        self.assertEqual([r['role'] for r in f.state['accepted']], ['plan-writer', 'plan-reviser', 'plan-reviewer'])
-        self.assertEqual(self.native(self.case())['state']['barrier'], 'awaiting_commit')
-        # A plan-only commit is confirmed from the plan artifact itself: plan_base, one changed path, the accepted bytes.
-        f.git.git('add', 'plan.md')
-        self.native(self.case('prepare-commit', artifact=revised, fleet=f.fleet()))
-        commit = lambda: f.git.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', 'docs(plans): add fixture') or f.git.git('rev-parse', 'HEAD').strip()
-        sha = commit()
-        fact = dict(sha=sha, base=f.git.base, artifact=revised)
-        before = copy.deepcopy(f.state)
-        self.native(self.case('confirm-commit', artifact=revised, commit=dict(fact, base=sha), fleet=f.fleet()), 1, 'base is not a completion commit')
-        self.native(self.case('confirm-commit', artifact=revised, commit=dict(fact, artifact=first), fleet=f.fleet()), 1, 'plan commit blob differs')
-        confirmed = self.native(self.case('confirm-commit', artifact=revised, commit=fact, fleet=f.fleet()))['state']
-        self.assertEqual(confirmed['commit_barrier']['confirmed_sha'], sha); self.assertEqual(confirmed['barrier'], 'ready_next_phase')
-        self.assertEqual([c['sha'] for c in confirmed['phase_commits']], [sha])
-        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['P1-B1'])
-        # A commit that also carries other files is not a plan-only commit.
-        f.state = before
-        (f.git.root / 'extra.txt').write_bytes(b'x\n'); f.git.git('add', 'extra.txt'); two = commit()
-        self.native(self.case('confirm-commit', artifact=revised, commit=dict(sha=two, base=sha, artifact=revised), fleet=f.fleet()), 1, 'plan commit')
-        # Phase-start metadata edits the live plan; the closure stays proven by the committed plan bytes.
-        f.state = confirmed
-        self.native(self.case('advance', artifact=revised, commit=fact, fleet=f.fleet()))
-        f.plan.write_bytes(f.plan.read_bytes().replace(b'status: implementing', b'status: in-progress').replace(b'    base: ' + f.git.base.encode(), b'    base: ' + sha.encode()))
-        advanced = self.native(self.case(plan=f.reference(f.plan)))['state']
-        self.assertEqual((advanced['phase'], advanced['closed_ledger_ids'], advanced['plan']['sha256']), ('F1', ['P1-B1'], f.reference(f.plan)['sha256']))
-
-    def test_independence_waiver_only_for_units_authored_by_every_family(self):
-        f = self.f; files = f.git.git('diff', '--name-only', f.git.base).splitlines()
-        art, coverage = f.package_ref(families={'OpenAI': files, 'Anthropic': files, 'Google': files})
-        review = lambda: f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
-        self.native(review(), 1, 'same-family review')
-        decision = dict(schema_version=1, run_id='fixture-run', step=f.state['step'], phase=f.state['phase'], files=files,
-                        reviewer_family='Anthropic', user_decision='I reviewed these units myself; let Opus review them.')
-        waive = lambda artifact=art, **changed: self.case('waive-independence', authorization=f.save(dict(decision, **changed)), artifact=artifact)
-        self.native(waive(step='delivery'), 1, 'waiver binding mismatch')
-        self.native(waive(reviewer_family='Unknown'), 1, 'known reviewer family')
-        self.native(waive(user_decision=' '), 1, "user's decision")
-        self.native(waive(files=files + ['missing.txt']), 1, 'every family as author')
-        # A unit that still has an independent family cannot be waived.
-        self.native(waive(artifact=f.package_ref()[0]), 1, 'every family as author')
-        self.native(waive())
-        self.assertEqual(len(f.state['independence_waivers']), 1)
-        finding = dict(id='B1', kind='blocking', issue='wrong behavior', location='tracked.txt:1', change='correct it', risk='none', **{'class': 'MUST_FIX_NOW'})
-        self.native(f.report_input('review-primary', 'Anthropic', token='REVIEW_BLOCKING', artifact=art, coverage=coverage, findings=[finding]))
-        origin = f.state['accepted'][-1]['report']
-        # The waiver names one reviewer family and one step; everything else keeps the family rule.
-        self.native(f.report_input('review-control', 'Google', artifact=art, coverage=coverage), 1, 'same-family review')
-        # The waived reviewer's later closure stays valid when a later step re-verifies it.
-        (f.git.root / 'tracked.txt').write_bytes(b'repaired\n'); f.git.git('add', 'tracked.txt')
-        repaired, coverage = f.package_ref(families={'OpenAI': files, 'Anthropic': files, 'Google': files})
-        a = f.assignment('implementer'); a['fix'] = True
-        evidence = dict(tests=['focused assertion'], commands=['fixture command'], outputs=['passed'], findings=[dict(id='B1', report=origin)])
-        self.native(f.report_input('implementer', artifact=repaired, assignment=a, extra='FIX_EVIDENCE: ' + json.dumps(evidence)))
-        fix = f.state['accepted'][-1]['report']
-        self.native(f.report_input('review-primary', 'Anthropic', artifact=repaired, coverage=coverage, round=2))
-        proof = dict(schema_version=1, finding_id='B1', report=origin, artifact=repaired, fix_report=fix, review_report=f.state['accepted'][-1]['report'])
-        f.state['ledger'] = f.save([dict(id='B1', status='fixed', closure=f.save(proof))])
-        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['B1'])
-        f.state['step'] = 'final-review'
-        self.assertEqual(self.native(self.case())['state']['closed_ledger_ids'], ['B1'])
-        self.native(f.report_input('review-final', 'Anthropic', artifact=repaired, coverage=coverage), 1, 'same-family review')
-
-    def test_negative_check_and_review_ok_cannot_verify_barrier(self):
+    def test_cannot_verify_alone_is_not_a_blocking_verdict(self):
         f = self.f; art, coverage = f.package_ref()
         rc, result = f.verified_run(code="raise SystemExit(7)")
         self.assertEqual(rc, 7)
         finding = dict(id='CV-negative', kind='cannot_verify', issue='check failed', location='tracked.txt',
                        check=result['command'], expect='exit 0')
-        self.native(f.report_input('review-control','Anthropic',artifact=art,coverage=coverage,findings=[finding]))
-        self.assertEqual(f.state['barrier'], 'awaiting_resolution')
-        proof = dict(schema_version=1, finding_id=finding['id'], report=f.state['accepted'][0]['report'], artifact=art,
-                     result=f.reference(Path(result['run_dir'])/'result.json'), command=finding['check'], expect=finding['expect'])
-        f.state['ledger'] = f.save([dict(id=finding['id'], status='resolved', closure=f.save(proof))])
-        self.native(self.case('prepare-commit', artifact=art, fleet=f.fleet()), 1, 'negative closure CHECK')
-        # An altered copy cannot borrow the unmodified negative run's seal.
-        forged=dict(proof,result=f.save(dict(result,exit_code=0)))
-        for status in ('fixed','resolved','closed','verified-by-controller'):
-            f.state['ledger']=f.save([dict(id=finding['id'],status=status,closure=f.save(forged))])
-            self.native(self.case(),1,'closure CHECK evidence')
-        f.state['ledger'] = None
-        data=f.report_input('review-control','Anthropic',token='REVIEW_BLOCKING',artifact=art,coverage=coverage,findings=[finding])
-        self.native(data, 1, 'findings/verdict conflict')
+        data = f.report_input('review-control', 'Anthropic', token='REVIEW_BLOCKING', artifact=art, coverage=coverage, findings=[finding])
+        self.both(data, 1, 'findings/verdict conflict')
+        self.both(f.report_input('review-control', 'Anthropic', artifact=art, coverage=coverage, findings=[finding]))
+        self.both(f.report_input('review-primary', 'Google', artifact=art, coverage=coverage))
+        rc, passed = f.verified_run(code="print('assertion holds')"); self.assertEqual(rc, 0, passed)
+        self.both(self.case('record-gate', artifact=art, evidence=[f.reference(Path(passed['run_dir']) / 'result.json')]))
+        ledger = f.workspace / 'ledger.json'
+        for run, code in ((result, 1), (passed, 0)):
+            ledger.write_text(json.dumps([dict(id='CV-negative', check=str(Path(run['run_dir']) / 'result.json'))]))
+            self.both(self.case('prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger)), code,
+                      'unresolved findings: CV-negative' if code else '')
 
-    def test_three_immutable_reports_same_round_and_retained_terminal(self):
-        f=self.f; art=f.snapshot_ref(); saved=[]
+    def test_each_attempt_has_its_own_immutable_report(self):
+        f = self.f; art = f.snapshot_ref(); saved = []
         for i in range(3):
-            a=f.assignment();a['fix']=i>0
-            extra='' if i==0 else 'FIX_EVIDENCE: {"tests":["assertion"],"commands":["command"],"outputs":["pass"]}\n## Fix round 1\nCurrent fixes.'
-            data=f.report_input(artifact=art,extra=extra,assignment=a)
-            self.native(data);saved.append(data['report'])
-        self.assertEqual(len({r['path'] for r in saved}),3)
-        self.assertEqual(len(f.state['report_history']),3)
-        for r in saved: self.assertEqual(f.reference(r['path']),r)
-        p=Path(saved[0]['path']);p.write_bytes(p.read_bytes()+b'mutated accepted report')
-        self.native(self.case(),1,'hash mismatch')
-
-    def test_ordinary_plan_finding_closes_with_fix_and_independent_review_without_check(self):
-        f=self.f;f.state.update(phase=None,step='plan')
-        f.state['provenance']=[f.observation(f.assignment('plan-writer'))]
-        def archive():
-            path=Path(f.save('', '.md')['path']);path.write_bytes(f.plan.read_bytes())
-            return dict(f.reference(path),kind='plan',source_path=str(f.plan))
-        art=archive()
-        finding=dict(id='B1',kind='blocking',issue='wording changes the scope',location='plan.md',
-                     criterion='scope',**{'class':'MUST_FIX_NOW'},change='correct wording',risk='none')
-        data=f.report_input('plan-reviewer','Anthropic',token='CHANGES_REQUESTED',artifact=art,findings=[finding])
-        self.both(data);origin=data['report']
-        f.plan.write_bytes(f.plan.read_bytes()+b'Corrected scope wording.\n');f.state['plan']=f.reference(f.plan)
-        repaired=archive()
-        fixed=dict(findings=[dict(id='B1',report=origin)])
-        data=f.report_input('plan-reviser',token='REVISED',artifact=repaired,round=2,extra='FIX_EVIDENCE: '+json.dumps(fixed))
-        self.both(data);fix=data['report']
-        data=f.report_input('plan-reviewer','Anthropic',artifact=repaired,round=2)
-        self.both(data);review=data['report']
-        self.assertEqual(f.state['barrier'],'awaiting_resolution')
-        proof=dict(schema_version=1,finding_id='B1',report=origin,artifact=repaired,fix_report=fix,review_report=review)
-        for status in ('fixed','resolved','closed','verified-by-controller'):
-            f.state['ledger']=f.save([dict(id='B1',status=status,closure=f.save(proof))])
-            self.both(self.case());self.assertEqual(f.state['closed_ledger_ids'],['B1'])
-        f.state['ledger']=f.save([dict(id='B1',status='fixed',closure=f.save(dict(proof,fix_report=review)))])
-        self.both(self.case(),1,'successful fix')
-
-    def tracks(self, conflict=False):
-        f=self.f
-        phase=lambda i,cons='[]',prod='[]': ('  - id: F'+str(i)+'\n    risk: none\n    base: '+f.git.base+
-                                            '\n    consumes: '+cons+'\n    produces: '+prod+'\n')
-        f.plan.write_bytes(('---\nprotocol_version: 2\norca_run: fixture-run\nplan_base: '+f.git.base+
-                           '\ncontracts: ["C1"]\nphases:\n'+phase(1,prod='["C1"]' if conflict else '[]')+
-                           phase(2,cons='["C1"]' if conflict else '[]')+phase(3)+'---\nTracks.\n').encode())
-        f.git.git('add','--all')
-        f.git.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=','commit','-qm','group start')
-        head=f.git.git('rev-parse','HEAD').strip();f.state['plan']=f.reference(f.plan)
-        group=dict(schema_version=1,run_id='fixture-run',parent_worktree=str(f.git.root),parent_head=head,
-                   plan=f.state['plan'],tracks=[])
-        for i in (1,2,3):
-            p=f.base/('child worktree '+str(i))
-            f.git.git('worktree','add','--detach','-q',str(p),head)
-            group['tracks'].append(dict(id='T'+str(i),worktree=str(p),worktree_id='child-'+str(i),phase='F'+str(i),base=head))
-        f.state.update(phase=None,step='plan')
-        return group
-
-    def test_track_count_git_records_unrelated_bad_base_and_target_binding(self):
-        f=self.f;group=self.tracks();first=copy.deepcopy(group);first['tracks']=first['tracks'][:2]
-        f.state['track_group']=f.save(first);self.both(self.case())
-        f.state['track_group']=f.save(group);self.both(self.case(),1,'two active child tracks')
-        bad=copy.deepcopy(first);bad['tracks'][0]['base']=f.git.base
-        f.state['track_group']=f.save(bad);self.both(self.case(),1,'track BASE')
-        f.state['track_group']=f.save(first)
-        f.state.update(worktree=first['tracks'][0]['worktree'],worktree_id='wrong-id',phase='F1',base=first['parent_head'])
-        self.both(self.case(),2,'TARGET track binding')
-
-    def test_track_resume_merged_completed_and_incomplete(self):
-        f=self.f;group=self.tracks();t=group['tracks'][0];path=Path(t['worktree'])
-        # Real accepted staged snapshot and commit in the first child, then merge.
-        (path/'tracked.txt').write_bytes(b'completed track\n')
-        f.git.git('-C',str(path),'add','tracked.txt')
-        saved_root=f.git.root; saved_workspace=f.workspace
-        f.git.root=path;f.workspace=path/'.superpowers/sdd/runner-fixture';f.workspace.mkdir(parents=True)
-        (f.workspace.parent/'.gitignore').write_bytes(b'*\n')
-        art=f.snapshot_ref();fact=f.commit(art);f.git.root=saved_root;f.workspace=saved_workspace
-        f.git.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=',
-                  'merge','--no-ff','-m','merge completed track',fact['sha'])
-        f.state['track_group']=f.save(group);f.state['track_commits']=[dict(fact,track_id=t['id'])]
-        self.native(self.case());self.assertEqual(len(f.state['track_commits']),1)
-        self.native(self.case())
-
-    def test_parallel_producer_consumer_conflict(self):
-        f=self.f;group=self.tracks(conflict=True);group['tracks']=group['tracks'][:2]
-        f.state['track_group']=f.save(group)
-        self.both(self.case(),1,'producer/consumer conflict')
+            a = f.assignment(); a['fix'] = i > 0
+            extra = '' if i == 0 else 'FIX_EVIDENCE: {"tests":["assertion"],"commands":["command"],"outputs":["pass"]}\n## Fix round 1\nCurrent fixes.'
+            data = f.report_input(artifact=art, extra=extra, assignment=a)
+            self.both(data); saved.append(data['report'])
+        self.assertEqual(len({r['path'] for r in saved}), 3)
+        self.assertEqual([r['report'] for r in f.state['accepted']], saved)
+        reused = f.report_input(artifact=art, assignment=dict(f.assignment(), fix=True),
+                                extra='FIX_EVIDENCE: {"tests":["a"],"commands":["c"],"outputs":["p"]}')
+        event = json.loads(Path(reused['event']['path']).read_text())
+        payload = json.loads(event['result']['message']['payload']); payload['reportPath'] = saved[0]['path']
+        event['result']['message']['payload'] = json.dumps(payload)
+        self.both(dict(reused, report=saved[0], event=f.save(event)), 1, 'report path already bound to an accepted attempt')
 
 
 if __name__ == '__main__': unittest.main()

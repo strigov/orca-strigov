@@ -71,29 +71,22 @@ def save(path, value):
 
 
 def active_pending(state):
-    active = state["active"]
-    if not active:
-        return False
-    dispatch = active.get("dispatch_id")
-    return not dispatch or not any(r["binding"].get("dispatch_id") == dispatch
-                                  for r in state.get("report_history", state["accepted"]))
+    # C6 clears `active` when it accepts that Dispatch's report.
+    return bool(state["active"])
 
 
 def read_proposal(binding):
     ref = binding.get("proposal")
     require(ref is not None, "no C6 checkpoint: bootstrap or restore the pending stage")
     proposal = protocol.record(ref)
-    state, decision = protocol.validate(proposal)
-    # C6 deliberately returns early for heartbeats/duplicate deliveries. Those
-    # receipts are valid checkpoints, but their previous barrier is not current.
-    if decision != "accepted":
-        state["barrier"] = protocol.barrier(state, protocol.plan_facts(state))
+    # C6 recomputes the barrier for every action, including heartbeats and duplicates.
+    state, _ = protocol.validate(proposal)
     require(state["worktree"] == binding["worktree"]
             and state["workspace"] == binding["workspace"], "C6 workspace differs from binding")
     require(not binding.get("orca_run") or state["orca_run"] == binding["orca_run"],
             "C6 Run differs from binding")
     complete = (state["barrier"] == "complete" and not active_pending(state)
-                and not state["write_ownership"] and not state["open_ledger_ids"]
+                and not state["write_ownership"]
                 and ((state["mode"] == "quickfix" and proposal["action"] == "confirm-commit")
                      or (state["mode"] == "plan" and proposal["action"] == "complete")))
     return state, complete
@@ -102,9 +95,8 @@ def read_proposal(binding):
 def progress(state):
     return dict(run=state["orca_run"], phase=state["phase"], step=state["step"],
                 barrier=state["barrier"], active=state["active"],
-                commit=state["commit_barrier"].get("confirmed_sha"),
-                accepted=[r["report"]["sha256"] for r in state["accepted"]],
-                open_ledger_ids=state["open_ledger_ids"])
+                commit=(state["phase_commits"] or [{}])[-1].get("sha"),
+                accepted=[[r["role"], r["token"], r["round"], r["candidate"]] for r in state["accepted"]])
 
 
 def operate(action, request):
@@ -148,8 +140,7 @@ def operate(action, request):
             if mark != binding["progress"]:
                 binding["stop_attempts"] = 0
             binding.update(proposal=proposal_ref, progress=mark, orca_run=state["orca_run"],
-                           bookkeeping=[str(safe(state[k]["path"])) for k in ("plan", "ledger")
-                                        if state.get(k)])
+                           bookkeeping=[str(safe(p)) for p in ((state["plan"] or {}).get("path"), state["ledger_path"]) if p])
         elif action == "hold":
             require(request.get("kind") in HOLD_KINDS and isinstance(request.get("reason"), str)
                     and request["reason"].strip(), "hold needs a typed reason")

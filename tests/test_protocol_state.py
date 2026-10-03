@@ -1,4 +1,4 @@
-"""C6 bounded deterministic protocol inputs and real owned Git commit barriers."""
+"""C6 v2 report binding, model proof, caps, fleet and commit inputs over real owned Git artifacts."""
 import copy
 import hashlib
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import unittest
 
-from support import ProtocolFixture, command, read_json, write_json
+from support import ProtocolFixture, command, plan_structure, read_json, write_json
 
 
 class ProtocolTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(r[0],1,r);self.assertIn(why,r[2]['reason'])
         report.write_text(text); bad['report'] = f.reference(report)
         (f.git.root / 'tracked.txt').write_text('late hook mutation')
-        self.reject(bad, contains='stale snapshot')
+        self.reject(bad, contains='stale artifact')
 
     def test_subject_leads_with_the_report_token_and_may_explain_after_it(self):
         # Bureau F4 r5 (2026-09-28): the worker sent "DONE_WITH_CONCERNS: R4-B2 fixed, ..." while report line 1
@@ -82,38 +82,28 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(all(r[0]==0 for r in results),results)
         self.assertEqual([r[2]['decision'] for r in results],['stale','not-completion','accepted','duplicate','not-completion'])
         self.assertEqual(results[0][2]['state']['accepted'],[])
-        self.assertEqual(results[1][2]['state']['processed']['deliveries'],[])
-        self.assertEqual(results[2][2]['state']['processed']['deliveries'],['delivery-fixture'])
+        self.assertEqual(results[1][2]['state']['processed_messages'],['old','beat'])
+        self.assertEqual(results[2][2]['state']['processed_messages'],['old','beat',good['id']])
+        self.assertIsNone(results[2][2]['state']['active'])
         self.assertEqual(len(f.state['accepted']),1)
+        # Without an active Dispatch a new completion is unverifiable, a processed one stays a duplicate.
+        fresh=dict(good,id='late');self.batch([(dict(data,state=f.state,event=f.save(dict(ok=True,result=dict(message=fresh))),message_id='late'),2,'no current Dispatch')])
 
-    def test_role_format_fields_risk_and_single_correction(self):
+    def test_role_format_fields_and_risk_escalation(self):
+        # A defective report is rejected and its role re-dispatched; there is no format-correction action.
         f = self.f; art, coverage = f.package_ref()
         data = f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
         p = Path(data['report']['path']); p.write_text(p.read_text().replace('SPEC: OK\n', ''))
-        data['report'] = f.reference(p)
-        defective=self.case(data)
-        proposed = f.assignment('review-primary', 'Anthropic'); proposed['dispatch_id'] = None
-        fix = dict(schema_version=1, action='format-correction', state=f.state, proposed=proposed,
-                   artifact=art, report=data['report'], observation=data['observation'], outcome='succeeded', files_modified=[], fleet=f.fleet())
-        bound = dict(proposed, dispatch_id='corrected-dispatch')
-        results=self.batch([(defective,1,'SPEC/QUALITY'),(self.case(fix),0,''),
-                           (self.case(action='bind-dispatch', observation=f.observation(bound)),0,'')],previous=True)
-        self.assertEqual(results[0]['next_action'],'format-correction')
-        self.assertEqual(f.state['rounds']['fused_review'], 0)
-        data = f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage)
-        f.state['format_corrections'][f.state['active']['dispatch_id']] = 1
-        p = Path(data['report']['path']); p.write_text(p.read_text().replace('QUALITY: OK\n', '')); data['report'] = f.reference(p)
-        repeated=self.case(data)
+        data['report'] = f.reference(p); defective = self.case(data)
         finding = dict(id='F', kind='blocking', issue='defect', location='tracked.txt:1',
                        authorization_relation='outside plan', why_now='breaks contract', minimal_fix='remove')
-        data = f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding])
-        f.state.pop('format_lock', None)
-        missing=self.case(data)
+        missing = self.case(f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding]))
         finding['risk'] = 'SECURITY'
-        data = f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding])
-        results=self.batch([(repeated,1,'SPEC/QUALITY'),(missing,1,'finding fields'),(self.case(data),0,'')])
-        self.assertEqual(results[0]['next_action'],'protocol-blocker')
-        self.assertEqual(results[2]['decision'],'risk-escalation')
+        risky = self.case(f.report_input('review-control', 'Anthropic', 'REVIEW_BLOCKING', art, coverage, [finding]))
+        legacy = dict(schema_version=1, action='format-correction', state=f.state)
+        results = self.batch([(defective, 1, 'SPEC/QUALITY'), (missing, 1, 'finding fields'), (risky, 0, ''), (legacy, 1, 'unknown action')])
+        self.assertEqual(results[0]['next_action'], 'resolve-protocol-blocker')
+        self.assertEqual(results[2]['decision'], 'risk-escalation')
 
     def test_plan_simplicity_risk_contracts_legacy_and_fix_evidence(self):
         f = self.f
@@ -131,26 +121,37 @@ class ProtocolTests(unittest.TestCase):
             cases.append((dict(schema_version=1,action='resume',state=s),code,reason))
         s=copy.deepcopy(f.state);s['active']=None;s['plan']=f.save(original.replace('    risk: none\n',''),'.md')
         cases.append((dict(schema_version=1,action='resume',state=s),1,'risk'))
-        self.assertEqual(self.batch(cases)[-1]['next_action'],'format-correction')
+        other=original.replace('orca_run: fixture-run','orca_run: other-run')
+        s=copy.deepcopy(f.state);s['plan']=dict(f.save(other,'.md'),structure=plan_structure(other))
+        cases.append((dict(schema_version=1,action='resume',state=s),1,'plan/run/base mismatch'))
+        self.assertEqual(self.batch(cases[4:])[-1]['next_action'],'resolve-protocol-blocker')
+        self.batch(cases[:4])
+        s=copy.deepcopy(f.state);s['plan']=dict(f.state['plan'],structure='0'*64)
+        self.batch([(dict(schema_version=1,action='resume',state=s),1,'plan structure differs from state'),
+                    (dict(schema_version=1,action='resume',state=dict(f.state,plan=f.save('no frontmatter\n','.md'))),2,'missing plan frontmatter')])
 
-    def test_all_caps_and_unverified_done_barrier(self):
+    def test_all_caps_and_state_shape(self):
         f = self.f
         cases=[]
         for key, cap in [('plan_review',4), ('fused_review',4), ('final_review',2), ('gate_fix',2)]:
             s=copy.deepcopy(f.state);s['rounds'][key]=cap+1
-            cases.append(dict(schema_version=1,action='resume',state=s))
+            cases.append((dict(schema_version=1,action='resume',state=s),1,'round cap: '+key))
             f.state['rounds'][key]=cap
-        s=copy.deepcopy(f.state);s['format_corrections']['bad']=2
-        cases.append(dict(schema_version=1,action='resume',state=s))
-        f.state['format_corrections'] = {}
         art=f.snapshot_ref(); p=f.assignment('plan-reviewer', 'Anthropic', round=5);p['dispatch_id']=None
-        self.batch([(d,1,'cap') for d in cases]+[(self.case(action='dispatch',proposed=p,artifact=art,fleet=f.fleet()),1,'round cap/sequence')])
-        f.plan.write_text(f.plan.read_text().replace('status: implementing', 'status: done'))
-        f.state['plan'] = f.reference(f.plan); f.state['step'] = 'completion'
-        pending=self.case()
-        f.state['commit_barrier'] = dict(confirmed_sha=f.git.base)
-        results=self.batch([(pending,0,''),(self.case(),2,'unverified commit barrier')])
-        self.assertEqual(results[0]['state']['barrier'],'awaiting_completion_commit')
+        cases.append((self.case(action='dispatch',proposed=p,artifact=art,fleet=f.fleet()),1,'round cap/sequence'))
+        self.batch(cases)
+        s=lambda **changed: dict(schema_version=1,action='resume',state=dict(copy.deepcopy(f.state),**changed))
+        legacy=dict(copy.deepcopy(f.state),schema_version=1)
+        missing=copy.deepcopy(f.state);missing.pop('used_fleet_ids')
+        self.batch([(s(step='bootstrap'),1,'invalid protocol mode/step'),(s(mode='quickfix'),1,'invalid protocol mode/step'),
+                    (s(workspace='relative'),1,'absolute workspace required'),(s(base='0'*40),2,'missing recorded base'),
+                    (dict(schema_version=1,action='resume',state=legacy),2,'schema 1 state: run protocol-state migrate'),
+                    (dict(schema_version=1,action='resume',state=missing),2,'missing facts')])
+        self.batch([(s(worktree=str(f.workspace)),2,'TARGET is not a Git worktree'),(dict(schema_version=2,action='resume',state=f.state),2,'unsupported input schema'),
+                    (s(plan=dict(f.state['plan'],sha256=None)),2,'missing plan outside the plan step'),(self.case(action='advance'),2,'advance before the phase commit'),
+                    (self.case(action='no-such-action'),1,'unknown action'),(self.case(plan=dict(f.state['plan'],path=str(f.workspace/'other.md'))),1,'plan path differs')])
+        f.state['step'] = 'completion'
+        self.assertEqual(self.batch([(self.case(),0,'')])[0]['state']['barrier'],'awaiting_completion_commit')
 
     def test_fleet_live_unknown_external_retained_pages_and_pending(self):
         f = self.f; artifact = f.snapshot_ref(); proposed = f.assignment(family='Anthropic'); proposed['dispatch_id'] = None
@@ -203,10 +204,9 @@ class ProtocolTests(unittest.TestCase):
         data = f.report_input('review-final', 'Google', artifact=art, coverage=coverage)
         self.batch([(same_family,1,'same-family'),(self.case(data),0,'')])
         # Real phase commit binds the staged bytes; no prepared metadata can replace it.
-        fact = f.commit(art); f.state['phase_commits'] = [dict(fact, phase='F1')]
-        # Check historical accepted artifact after commit via prepare snapshot's equal files.
+        fact = f.commit(art); f.state['phase_commits'] = [dict(phase='F1', step='phase', sha=fact['sha'], base=fact['base'], candidate='recorded')]
         current, current_coverage = f.package_ref({'OpenAI':['tracked.txt','plan.md'], 'Anthropic':['tracked.txt']}, start_families=['Anthropic'])
-        coverage = current_coverage; coverage['contracts'][0]['consumer'] = []
+        coverage = current_coverage; coverage['contracts'][0]['producer'] = []
         data = f.report_input('review-final', 'Google', artifact=current, coverage=coverage, round=2)
         self.batch([(self.case(data),0,''),
                     (self.case(action='finish-checkpoint',artifact=current,fleet=f.fleet()),2,'incomplete contract')],previous=True)
@@ -238,7 +238,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(results[1][2]['state']['barrier'],'complete')
         self.assertEqual(len(f.state['phase_commits']), 1)
         (f.git.root/'tracked.txt').write_text('hook changed source')
-        self.reject(action='confirm-commit', contains='hook/working-tree', artifact=art, commit=fact, fleet=f.fleet())
+        self.reject(action='confirm-commit', contains='stale artifact', artifact=art, commit=fact, fleet=f.fleet())
 
     def test_final_checkpoint_requires_phase_commit_and_delivery_proof(self):
         f = self.f; f.state['step'] = 'final-review'; art, coverage = f.package_ref()
@@ -246,25 +246,23 @@ class ProtocolTests(unittest.TestCase):
         data['observation']=f.observation(f.state['active'],model=None,start=f.start_receipt(f.state['active']))
         self.batch([(self.case(data),0,''),
                     (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),2,'uncommitted phases')],previous=True)
-        fact = f.commit(art); f.state['phase_commits'] = [dict(fact, phase='F1')]
+        fact = f.commit(art); f.state['phase_commits'] = [dict(phase='F1', step='phase', sha=fact['sha'], base=fact['base'], candidate='recorded')]
         art, coverage = f.package_ref()
         data=f.report_input('review-final','Anthropic',artifact=art,coverage=coverage,round=2)
         self.batch([(self.case(data),0,''),
                     (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),0,''),
                     (self.case(action='finish-checkpoint',artifact=art,fleet=f.fleet()),2,'required report')],previous=True)
-        self.assertEqual(f.state['barrier'], 'awaiting_delivery')
+        self.assertEqual((f.state['barrier'], f.state['accepted']), ('awaiting_delivery', []))
         proofs=f.gate_evidence(); delivered=f.gate_snapshot
         data=f.report_input('gate',artifact=delivered,extra='EVIDENCE: '+json.dumps(proofs))
         self.batch([(self.case(data),0,''),
                     (self.case(action='finish-checkpoint',artifact=delivered,fleet=f.fleet()),0,'')],previous=True)
         self.assertEqual(f.state['barrier'],'awaiting_completion_commit')
         f.plan.write_text(f.plan.read_text().replace('status: implementing','status: done'))
-        f.git.git('add','plan.md');f.state['plan']=f.reference(f.plan)
-        proofs=f.gate_evidence(); completed=f.gate_snapshot
-        self.valid(f.report_input('gate', artifact=completed, extra='EVIDENCE: '+json.dumps(proofs)))
-        completion=f.commit(completed)
-        cases=[dict(schema_version=1,action='complete',state=f.state,artifact=completed,commit=completion,fleet=f.fleet()),
-               dict(schema_version=1,action='resume',state=f.state)]
+        f.git.git('add','plan.md')
+        completed=f.snapshot_ref(); completion=f.commit(completed)
+        cases=[dict(schema_version=1,action='complete',state=f.state,artifact=completed,commit=completion,fleet=f.fleet(),plan=f.plan_ref()),
+               dict(schema_version=1,action='resume',state=f.state,plan=f.plan_ref())]
         results=f.validate_many(cases,previous=True)
         self.assertTrue(all(r[0]==0 for r in results),results)
         self.assertEqual(results[1][2]['state']['barrier'],'complete')
@@ -282,9 +280,12 @@ class ProtocolTests(unittest.TestCase):
         results = self.batch([(self.case(action='record-gate', artifact=art, evidence=[proof]), 0, ''),
                               (self.case(action='prepare-commit', artifact=art, fleet=f.fleet()), 0, '')], previous=True)
         self.assertEqual(results[0]['state']['barrier'], 'awaiting_commit')
-        self.assertEqual(f.state['commit_barrier']['expected_snapshot'], read_json(art['path'])['snapshot_after']['snapshot_id'])
+        self.assertEqual([(r['role'], r['report']) for r in f.state['accepted'] if r['role'] == 'gate'], [('gate', None)])
+        f.state['write_ownership'] = ['writer-dispatch']
+        self.batch([(self.case(action='record-gate', artifact=art, evidence=[proof]), 1, 'script gate outside an unowned phase')])
 
-    def test_script_gate_inputs_match_package_by_source_and_stay_fresh(self):
+    def test_script_gate_declared_inputs_are_soft(self):
+        # v2: declared check inputs are recorded, not re-proven; the gate binds the candidate's repository bytes.
         f = self.f; dep = f.git.root / 'vendor-input'; dep.mkdir(); (dep / 'lock.txt').write_text('v1\n')
         with open(f.git.root / '.git/info/exclude', 'a', encoding='utf-8') as x: x.write('/vendor-input/\n')
         art, coverage = f.package_ref()
@@ -297,12 +298,15 @@ class ProtocolTests(unittest.TestCase):
         gate = self.case(action='record-gate', artifact=art, evidence=[proof])
         self.batch([(gate, 0, '')])
         (dep / 'lock.txt').write_text('v2\n')
-        self.batch([(gate, 1, 'stale check inputs')])
+        self.batch([(dict(gate, state=f.state), 0, '')])
+        (f.git.root / 'tracked.txt').write_text('other bytes\n')
+        self.batch([(dict(gate, state=f.state), 1, 'stale artifact')])
 
     def test_user_extends_a_reached_review_cap_by_one_round(self):
         f = self.f; art, coverage = f.package_ref()
+        finding = dict(id='F1-R4-B1', kind='blocking', issue='still wrong', location='tracked.txt:1', change='fix', risk='none', **{'class': 'MUST_FIX_NOW'})
+        self.valid(f.report_input('review-primary', 'Anthropic', token='REVIEW_BLOCKING', artifact=art, coverage=coverage, findings=[finding], round=4))
         f.state['rounds']['fused_review'] = 4
-        f.state['ledger'] = f.save([dict(id='F1-R4-B1', status='open', decision='ESCALATED_TO_HUMAN')])
         proposed = f.assignment('review-primary', 'Anthropic', round=5); proposed['dispatch_id'] = None; proposed['coverage'] = coverage
         def auth(**change):
             record = dict(schema_version=1, run_id='fixture-run', phase='F1', group='fused_review', extra_rounds=1,
@@ -312,15 +316,20 @@ class ProtocolTests(unittest.TestCase):
         early = copy.deepcopy(f.state); early['rounds']['fused_review'] = 3
         self.batch([(dispatch(), 1, 'round cap/sequence'),
                     (self.case(action='extend-cap', authorization=auth(phase='F2')), 1, 'cap extension binding mismatch'),
-                    (self.case(action='extend-cap', authorization=auth(findings=['closed-id'])), 1, 'must name open findings'),
+                    (self.case(action='extend-cap', authorization=auth(extra_rounds=2)), 1, 'cap extension binding mismatch'),
+                    (self.case(action='extend-cap', authorization=auth(findings=['closed-id'])), 1, 'must name accepted findings'),
+                    (self.case(action='extend-cap', authorization=auth(user_decision='')), 1, "cap extension without the user's decision"),
                     (dict(schema_version=1, action='extend-cap', state=early, authorization=auth()), 1, 'before the cap is reached')])
         self.batch([(self.case(action='extend-cap', authorization=auth()), 0, ''), (dispatch(), 0, '')], previous=True)
         self.assertEqual(f.state['rounds']['fused_review'], 5)
+        again = f.assignment('review-primary', 'Anthropic', round=5); again['dispatch_id'] = None; again['coverage'] = coverage
+        f.state['accepted'].append(dict(f.state['accepted'][0], round=5))
+        self.batch([(self.case(action='dispatch', proposed=again, artifact=art, fleet=f.fleet()), 1, 'substantive review needs a new round')])
 
     def test_summary_prints_compact_facts_of_state_or_proposal(self):
         f = self.f; state = self.valid(f.report_input())['state']
         saved = f.save(state)['path']; proposal = f.save(dict(schema_version=1, action='resume', state=state))['path']
-        for path, head in ((saved, 'mode='), (proposal, 'proposal: action=resume')):
+        for path, head in ((saved, 'schema=2 mode='), (proposal, 'proposal: action=resume')):
             rc, out, err = command(f.argv('protocol-state', 'summary', path), f.git.root)
             self.assertEqual(rc, 0, (out, err)); rows = out.splitlines()
             self.assertTrue(rows[0].startswith(head), rows[0])
