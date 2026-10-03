@@ -81,7 +81,8 @@ function P-Latest($s,[string]$role,$cand) {
 function P-Checked($item) {
   $path=V-Get $item 'check'
   try { if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false };$result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff)) } catch { return $false }
-  return ($result -is [Collections.IDictionary] -and ($result['exit_code'] -is [int] -or $result['exit_code'] -is [long]) -and $result['exit_code'] -eq 0)
+  # A sealed run-check result (seal intact) that exited 0; bytes are not compared.
+  return ($result -is [Collections.IDictionary] -and ($result['exit_code'] -is [int] -or $result['exit_code'] -is [long]) -and $result['exit_code'] -eq 0 -and (V-EvidenceValid $result))
 }
 function P-Unresolved($s,$cand,$decisions) {
   # Resolved: a ledger decision; a cannot_verify check with exit 0; a later round of the role on cand omitting it.

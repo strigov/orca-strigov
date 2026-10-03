@@ -118,10 +118,11 @@ def latest(state, role, cand):
 
 
 def checked(item):
+    """A cannot_verify item is checked by a sealed run-check result (seal intact) that exited 0; bytes are not compared."""
     path = item.get("check")
     try: result = v.load(path) if isinstance(path, str) and Path(path).is_absolute() else None
     except (OSError, ValueError): return False
-    return isinstance(result, dict) and type(result.get("exit_code")) is int and result["exit_code"] == 0
+    return isinstance(result, dict) and result.get("exit_code") == 0 and v.evidence_valid(result)
 
 
 def unresolved(state, cand, decisions):

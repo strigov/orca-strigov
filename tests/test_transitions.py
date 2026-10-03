@@ -351,6 +351,8 @@ class TransitionTests(unittest.TestCase):
         self.no(1, 'unresolved findings: CV1', action='prepare-commit', artifact=art, fleet=f.fleet(),
                 ledger=ledger(dict(id='CV1', check=self.failing_result())))
         self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check='relative/result.json')))['state']['barrier'], 'awaiting_resolution')
+        forged = f.workspace / 'forged-result.json'; forged.write_text('{"exit_code": 0}', encoding='utf-8')
+        self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check=str(forged))))['state']['barrier'], 'awaiting_resolution')
         passing = str(Path(self.passing_evidence()[0]['path']))
         self.ok(action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=ledger(dict(id='CV1', check=passing)))
         for decision in ('DEFER', 'NIT', 'REJECTED_BY_SCOPE', 'ESCALATED_TO_HUMAN'):
