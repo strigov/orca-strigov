@@ -1,238 +1,238 @@
-# C6 — protocol validation and resume
+# C6 — protocol validation (v2: the transition, not the history)
 
 Part of [runtime-contracts.md](../runtime-contracts.md); load only when the index says so.
 
-## First-plan bootstrap
-
-Before a plan exists, the coordinator saves this authorization record in the
-workspace and puts its reference in `state.authorization`:
-
-```json
-{"schema_version":1,"run_id":"<live Run>","worktree_id":"<actual target>","plan_base":"<full existing HEAD>","plan_path":"<absolute future plan path inside worktree>","request":"<actual authorized user task and constraints>"}
-```
-
-Initialize ordinary empty state with `mode:plan`, `step:bootstrap`, `plan:null`,
-`phase:null`, `base:plan_base`. Initially reports, authors, phase commits and tracks
-are empty. `resume`, `dispatch`, `bind-dispatch`, `accept-report` and one
-format correction are the only bootstrap actions. Only a first-round plan-writer
-may be assigned; the dispatch artifact is the authorization reference with
-`kind:request`. C6 freezes its raw hash before launch. The writer receives the
-real request, produces the real target plan with `request_sha256` in frontmatter,
-and binds PLAN_WRITTEN to the plan's actual hash. Acceptance supplies `plan` and
-the matching plan artifact, then transitions to `step:plan`. Existing plan-less
-quickfix behavior is separate. Readers, revisers and implementers cannot consume
-a request as a substitute for a plan; foreign or mutated plan hashes reject.
-
-An accepted BLOCKED/NEEDS_AUTHORIZATION keeps `step:bootstrap`. Retain its report,
-settlement and author observation in their original order; after resolving the
-blocker, resume and create a fresh Task/Dispatch/ATTEMPT for plan-writer round 1.
-Only verifiable failed first-writer history is allowed during bootstrap. A draft
-supplied with a failed response or format correction may bind `state.plan` to the
-authorized path, but does not unlock readers or revisers. Only accepted
-PLAN_WRITTEN advances the step; a failed format correction also needs a fresh
-writer attempt. Keep the malformed report protected and read-only.
-
-If a failed first writer leaves an unparseable draft at the authorized plan path
-while `state.plan` is still null, the existing-file guard also blocks a new writer.
-After the attempt is settled, verify that no active or unresolved writer owns the
-path and that no accepted artifact or protected report binds that draft. Preserve
-the regular file without overwriting anything: move it to a fresh recovery path
-inside the existing workspace, recording its original path and raw SHA-256.
-Verify the preserved bytes and the absence of the original before resuming and
-validating the new first-writer dispatch against the same authorization. Do not
-clear history, alter authorization, or move a bound plan/protected report this
-way. If ownership or bindings cannot be verified, recovery remains blocked.
-
-## Child tracks and BASE
-
-Before any track dispatch, create child worktrees separately from worker launch.
-Git 2.36+ is required for literal `worktree list --porcelain -z` records.
-Save an immutable `state.track_group` reference to:
-
-```json
-{"schema_version":1,"run_id":"<live Run>","parent_worktree":"<absolute parent>","parent_head":"<verified group-start commit>","plan":{"path":"<frozen shared plan>","sha256":"<raw hash>"},"tracks":[{"id":"T1","worktree":"<absolute child>","worktree_id":"<actual Orca id>","phase":"F1","base":"<same parent_head>"}]}
-```
-
-The sealed group is the per-track BASE source. C6 parses NUL-separated Git
-worktree records, verifies parent and child membership, unique paths/IDs, actual
-commit ancestry from plan_base and the phase's planned base to parent_head, and
-that each child's HEAD descends from its recorded BASE. Target phase/worktree ID
-and state.base must match its registration. The shared plan/hash never changes
-in a child. This narrowly replaces the sequential phase.base equality check;
-it does not permit a guessed BASE. Two active producers cannot conflict or run
-with a consumer of an active producer. The parent and unrelated worktrees are
-excluded from the slot count; unknown TARGET writers still block in fleet checks.
-
-`state.track_commits` may contain `{track_id,sha,base,artifact}` only after the
-accepted child source/index matches that real commit and the commit is an
-ancestor of the actual parent HEAD (merged). A status string does not free a
-slot. Retain completed and incomplete track records on resume; C6 verifies the
-completed history and counts only the remaining active children. Archive a group
-only after its merges/integration are verified; never remove unmerged work.
-
-## Evidence-backed ledger closure
-
-Every closing status (`fixed`, `resolved`, `closed`, `verified-by-controller`)
-requires `closure:{path,sha256}` pointing to immutable evidence appropriate to
-the finding kind. For `cannot_verify`, use a CHECK receipt:
-
-```json
-{"schema_version":1,"finding_id":"<exact FINDINGS id>","report":{"path":"<accepted source report>","sha256":"<raw hash>"},"artifact":{"kind":"package","path":"<checked artifact>","sha256":"<raw hash>"},"result":{"path":"<C4 result.json>","sha256":"<raw hash>"},"command":"<executed assertion command>","expect":"<literal expectation>"}
-```
-
-The report must be in accepted history and contain that finding. For
-`cannot_verify`, artifact, command and expect must exactly match the originating
-report's assigned artifact and finding. CHECK commands must assert the literal
-expectation and return zero only when it holds; a print-only diagnostic cannot
-prove an arbitrary expectation. If the expectation needs human judgment, keep
-the finding open. When fixes of the same round have replaced the finding's
-candidate, run the unchanged CHECK on the repaired candidate and add
-`"review_report":{"path":"<accepted independent re-review>","sha256":"<hash>"}`:
-`artifact` must then equal the artifact of that accepted positive review of the
-same Run, phase and step, from a later round and later in `report_history`,
-which no longer raises the finding. Command and expect stay the finding's
-literal values. Either way the CHECK's source and its declared inputs must
-still be the current or committed candidate. For an ordinary repaired blocking
-finding, use this receipt instead of introducing another mandatory runtime CHECK:
-
-```json
-{"schema_version":1,"finding_id":"<exact id>","report":{"path":"<original accepted report>","sha256":"<hash>"},"artifact":{"kind":"plan|package","path":"<reviewed repaired artifact>","sha256":"<hash>"},"fix_report":{"path":"<accepted fix report>","sha256":"<hash>"},"review_report":{"path":"<accepted independent re-review>","sha256":"<hash>"}}
-```
-
-All three reports must be accepted and retain matching actual settlement/binding.
-Their order in `report_history` must be original finding, actual fix response,
-then independent re-review, using distinct Task/Dispatch attempts. For an older
-state without `report_history`, the ordered `accepted` list suffices only if it
-still contains all three unambiguous records; missing chronology is UNVERIFIABLE.
-Never infer order from file timestamps or round numbers alone. The fix and review
-must match the original Run, phase and step; the re-review round must follow the
-finding's round. A same-round fix uses `binding.fix:true`; a later fix round or
-plan-reviser response retains its existing role contract.
-
-The fix report's existing FIX_EVIDENCE object adds
-`"findings":[{"id":"<exact finding id>","report":{"path":"<original accepted report>","sha256":"<raw hash>"}}]`.
-Include exactly one matching entry for each addressed finding, supplied by the
-coordinator from accepted history. Tests/commands/outputs remain required for
-code fixes; a text-only plan revision needs this binding and per-item section
-notes, without a new runtime CHECK. An initial pre-finding implementation report,
-a fix for another finding/report, or a review accepted before the fix cannot
-close the item. The independent re-review must be APPROVED/REVIEW_OK and omit the
-resolved finding. A plan fix and its review cover the same repaired plan hash. A
-code fix and its review share the phase HEAD; the review may be a later round's
-positive re-review of the cumulative candidate (a multi-round loop never re-reviews
-each intermediate tree), and the closure `artifact` is that reviewed package. Its
-coverage includes the fix's modified files, and its source must still be the current
-candidate or a verified committed one. Recheck family independence.
-No runtime test is added merely for a wording correction. A REVIEW_BLOCKING
-report cannot become REVIEW_OK by changing the ledger. A later clean review
-also cannot silently erase an unresolved finding from earlier accepted history.
-
-C6 revalidates the result seal, request/check binding, exit 0, complete logs and
-unchanged source evidence. Package/snapshot files and HEAD must match; a plan's
-raw bytes must be among the checked source files. The current source must still
-match; only a verified recorded commit may explain HEAD movement. Missing,
-mutated, wrong-finding, stale or negative evidence rejects closure and preserves
-the prior state/barrier. A closure of a committed earlier delivery remains valid
-only when its complete source/index is proven by that recorded commit and actual
-ancestry; later phases require their own review. Store a negative result with the open finding and send
-it to the authorized fixer; it remains a mandatory blocker. `closed_ledger_ids`
-is recomputed from proofs on every call, never trusted from input. Re-reading the
-same valid proof is idempotent. REVIEW_OK may include cannot_verify but cannot
-pass acceptance/commit while that finding lacks its positive bound CHECK.
-
-## C6 — protocol validation and resume
+## What C6 checks
 
 `bin/protocol-state validate INPUT_JSON [RESUME_OUT]` (native Windows:
-`bin/protocol-state.ps1`) prints `VALID`, `INVALID` or `UNVERIFIABLE`, then one
-JSON result, exiting 0/1/2. `bin/protocol-state summary STATE_OR_PROPOSAL_JSON`
-prints the compact facts of a saved state or proposal (barrier, active, rounds,
-open ledger ids, accepted entries, commits, waivers) in about twenty lines; it is
-read-only and is the only way the coordinator inspects such a file. It validates one coordinator proposal, executes only
-bounded read-only Git queries, and optionally atomically writes the resulting
-compact state inside the existing plan workspace. Rejection leaves any prior
-resume untouched; input artifacts cannot be overwritten. It never dispatches,
-acknowledges a Delivery, releases a worker, commits, upgrades legacy metadata or
-selects the next model. The coordinator performs those actions through Orca/Git
-only after a matching valid proposal. `VALID` means the proposal passed its
-mechanical checks, not that a plan/phase is complete; inspect `state.barrier`.
+`bin/protocol-state.ps1`) checks one coordinator proposal and prints `VALID`,
+`INVALID` (contradictory bound facts, exit 1) or `UNVERIFIABLE` (missing facts or
+unknown ownership/family, exit 2), then one JSON line. VALID carries
+`{decision,state}`; a rejection carries `{reason,next_action}`. With
+`RESUME_OUT` the resulting state is written atomically to a new path inside the
+existing plan workspace; a rejection leaves any prior file untouched and input
+artifacts are never overwritten. C6 runs only bounded read-only Git queries. It
+never dispatches, acknowledges a Delivery, releases a worker, commits, edits the
+plan or selects a model. `VALID` means this transition passed; inspect
+`state.barrier` for what is pending.
 
-Input has `schema_version:1`, `action`, `state`, plus action-specific references.
-A file reference is `{path:<absolute literal path>,sha256:<raw byte hash>}`;
-missing files/facts or unknown ownership/family are UNVERIFIABLE, contradictory
-bound facts are INVALID. Paths through symlinks/reparse points are rejected.
-Only coordinator-owned, saved real receipts are evidence in production; fixture
-receipts are simulations. The validator does not authenticate a fabricated local
-receipt or reconstruct an omitted author history. Keep the original reports and
-receipts immutable; a new fix/correction report gets a new durable path.
+C6 checks the **current transition** against the **current candidate** (the
+bytes of the working tree under review). It does not re-prove history: the state
+is the coordinator's bookkeeping, produced mechanically from earlier VALID
+results, and each call reads only its own hashed inputs plus the plan and ledger
+supplied fresh. Three hard invariants carry the safety:
 
-A successful same-role, same-step/phase fix with `fix:true` replaces that role's
-previous same-round entry in current `accepted`, while `report_history` retains
-every immutable attempt. Existing earlier-round replacement is unchanged. This
-lets a repaired candidate resume after its fresh gate and reviews; current
-accepted artifacts still must be current, and stale current approvals reject.
-On `resume`, an entry accepted before the step's latest accepted writer, a
-diagnosis, or a verdict with unclosed findings is history, not an approval: its
-saved artifact is verified but need not match the working tree, because a later
-writer replaced that candidate. The latest writer and every approval after it
-are checked against the tree.
-Bootstrap failures are retained, not superseded by this fix rule.
+1. **One writer per tree** — before a writer dispatch and before any commit, a
+   fresh complete fleet shows no live or unverifiable writer in the worktree.
+2. **Commit = accepted candidate** — a commit's tree equals the staged bytes of
+   the candidate that the gate and both reviews (or the step's required roles)
+   accepted; a plan-only commit holds exactly the approved plan bytes.
+3. **Independent review** — a reviewer's actual model family is outside every
+   actual author family of each covered file, except files the user released
+   with `waive-independence` because every known family authored them.
 
-Required compact `state` fields:
+Also checked per transition: report binding, the actual launched model, round
+caps and the user's records. Soft facts are never blocking: declared check
+inputs, deferred findings and cannot_verify outcomes are ledger and report
+content for the user to read.
 
-- `schema_version:1`, `mode:plan|quickfix`, `plan` and `ledger` references (null
-  only for authorized first-plan bootstrap or quickfix / no ledger), `orca_run`, full `plan_base`, current
-  `phase` (null for planning/quickfix), full recorded `base`, `step`
-  (`bootstrap|plan|phase|quickfix|final-review|delivery|completion`).
-- Absolute `worktree`, its actual Orca `worktree_id`, existing `workspace`;
-  `active` assignment or null; `rounds:{plan_review:0,fused_review:0,final_review:0,gate_fix:0}`;
-  `format_corrections:{}`, `accepted:[]`, `processed:{messages:[],deliveries:[]}`,
-  `open_ledger_ids:[]`, `write_ownership:[]`, `phase_commits:[]`,
-  `commit_barrier:{}`, `final:{}`, `provenance:[]` (actual plan author observations).
+Other subcommands: `protocol-state summary STATE_OR_PROPOSAL_JSON` prints the
+compact facts of a saved state or proposal (read-only; the coordinator's only
+way to inspect one). `protocol-state migrate STATE_V1_JSON OUT_JSON` converts a
+schema 1 state once (see Migration). `claude-model-evidence` and
+`antigravity-model-evidence` freeze model proof (see Observations).
 
-New plan metadata uses `protocol_version: 2`, `orca_run`, `plan_base` and
-`contracts: ["C1",...]`; every phase declares `risk`, `base` before launch,
-`consumes: []`, `produces: []` as one-line JSON arrays matching body contract IDs.
-Consumers reference earlier producers. The plan reviewer checks their meaning;
-the coordinator only checks the structure and IDs. Legacy plans or resumes
-without required proof remain UNVERIFIABLE. Do not retroactively certify a run
-started before this contract. An explicit `plan` input can update the same path's
-reference before assignment, after an authorized plan-author result, or at the
-completion metadata checkpoint; it never edits the plan.
+## Proposal and references
 
-`artifact` adds `kind:request|plan|snapshot|package` to a file reference. A plan uses its
-raw hash. Archive each plan revision's bytes in the workspace before acceptance;
-its artifact `path` names that immutable copy and `source_path` names the live
-plan. The current copy's SHA must equal state.plan.sha256 and source_path must
-equal state.plan.path. This preserves accepted plan evidence when later metadata
-or an authorized revision changes the live file. A snapshot is a valid C4 record
-(optional `inputs:[]`); a package is a
-complete C5 manifest. Current reader artifacts must still match the working tree.
-C4 evidence and C5 packages may have different exclusion lists/IDs: cross-role
-checks compare actual manifest files and HEAD, while each binding retains its
-own exact artifact/snapshot ID. New source edits require new evidence/reviews.
+```json
+{"schema_version":1,"action":"<action>","state":{...},"plan":{"path","sha256"},"ledger":{"path","sha256"}, "<action inputs>":...}
+```
 
-Actions and their additional inputs:
+A file reference is `{path:<absolute literal path>,sha256:<raw byte hash>}`.
+Paths through symlinks/reparse points are rejected. Hashes cover the original
+bytes (BOM, CRLF, EOF); only after the hash check do both backends parse CRLF as
+LF. Only saved real receipts are evidence in production; fixture receipts are
+simulations, and C6 does not authenticate a fabricated local receipt.
 
-| Action | Required facts and result |
+`plan` and `ledger` are optional on every action and are supplied fresh by the
+coordinator whenever their files changed; the state keeps the plan reference and
+only the ledger path.
+
+## State (schema 2)
+
+```json
+{"schema_version":2,"mode":"plan|quickfix","plan":{"path","sha256","structure"}|null,"ledger_path":null,
+ "orca_run","plan_base","phase","base","step","worktree","worktree_id","workspace",
+ "active":null,"rounds":{"plan_review":0,"fused_review":0,"final_review":0,"gate_fix":0},
+ "cap_extensions":[],"independence_waivers":[],"provenance":[],"accepted":[],"write_ownership":[],
+ "phase_commits":[],"final_source":null,"processed_messages":[],"used_fleet_ids":[],"barrier":"..."}
+```
+
+- `mode:plan` uses steps `plan`, `phase`, `final-review`, `delivery`,
+  `completion`; `mode:quickfix` uses only step `quickfix` with `plan:null`.
+- `plan` starts as `{path:<absolute future plan path>,sha256:null,structure:null}`
+  before the first plan exists. `phase` is null in the plan and quickfix steps.
+- `plan_base` and `base` are full existing commits; `worktree` is the Git
+  worktree top level, `workspace` the existing plan workspace.
+- `accepted` holds entries of the **current step and phase only**:
+  `{role,token,round,phase,step,candidate,artifact,findings,coverage,family,report,dispatch_id,evidence}`.
+  `advance` and `finish-checkpoint` clear it.
+- `phase_commits`: `{phase,step,sha,base,candidate}` per confirmed commit (plan,
+  phase, final-fix, quickfix and completion commits).
+- `provenance`: observation references of every accepted writer (plan authors
+  for plan-review independence; Path A start receipts for C5 write receipts).
+- `final_source`: the candidate the final review accepted (set by
+  `finish-checkpoint`); delivery and the completion commit must match it.
+
+## Plan reference and bookkeeping
+
+Plan frontmatter uses `protocol_version: 2`, the actual `orca_run` and full
+`plan_base` (given to the plan writer up front, so the reviewed bytes are the
+committed bytes), one-line JSON `contracts`, and phases with `risk`
+(`none|SECURITY|DATA_LOSS|REGRESSION`), one-line JSON `consumes`/`produces`
+(consumers reference earlier producers) and, once the phase starts, `base`.
+In a phase step the current phase's `base` must equal `state.base`.
+
+`plan.structure` is the SHA-256 of the frontmatter with its bookkeeping lines
+removed, a NUL, then the body. Bookkeeping lines are top-level `status:`,
+`plan_base:`, `orca_run:`, `commits:` and phase-level (four-space) `status:`,
+`base:`, `commits:`. Every call verifies the plan file against `plan.sha256`
+and `structure`. A fresh `plan` reference with the same path is accepted on any
+action when its structure is unchanged; any other change is accepted only on
+`accept-report` of the active plan-writer/plan-reviser (and then must be the
+delivered artifact). Everything else is `plan change outside the plan
+author/review path`.
+
+## Artifacts and the candidate
+
+`artifact` adds `kind:plan|snapshot|package` to a file reference. A plan
+artifact names an immutable workspace copy of the plan (`source_path` = the live
+plan path); its id and candidate are its raw hash. A snapshot is a valid C4
+record; a package is a complete C5 manifest whose `package_id` matches its
+content. A **candidate** is the SHA-256 of the canonical JSON map
+`{path: sha256 (or type)}` over the artifact's `repo:` entries, excluding
+missing entries and the plan file. HEAD, capture exclusions, staging and
+declared inputs are not part of it: a C4 snapshot and a C5 package of the same
+bytes are the same candidate, and a commit that leaves the bytes unchanged
+(phase or final-fix) does not stale an accepted review.
+
+A *current* artifact matches a fresh snapshot of the worktree (same candidate);
+otherwise `stale artifact`. Dispatch, accept-report, record-gate,
+prepare-commit, finish-checkpoint and waive-independence require current
+artifacts; confirm-commit and complete check currency inside the commit check.
+
+## Actions
+
+| Action | Inputs and effect |
 | --- | --- |
-| `resume` | Reconcile recorded actual commits and current artifact hashes; return the pending barrier without executing it. |
-| `dispatch` | Fresh `fleet`, `artifact`, `proposed` assignment (`run_id,task_id,dispatch_id:null,role,phase,round,worktree_id,model`, review `coverage`, optional `gate_fix:true`). Freeze intent before launch; writers remain pending until bound. |
-| `bind-dispatch` | Saved `observation` binds the pending fresh Task to the actual Dispatch/model/worktree; retries of an old Dispatch are not a fresh review. |
-| `accept-report` | `event`, exact `message_id`, settled `observation`, `report`, `artifact`. Read subject/outcome/path from the actual message payload. Stale IDs and heartbeats do not complete work; duplicate message IDs are idempotent. An empty timed-out wait is not completion. |
-| `format-correction` | Fresh `fleet`, defective `report`, its settled `observation`, unchanged `artifact`, `outcome`, `files_modified`, and new same-role/round `proposed`. One correction only. |
-| `extend-cap` | `authorization`: an immutable record `{schema_version:1,run_id,phase,group,extra_rounds:1,findings,user_decision}` of the user's explicit decision at a reached cap. `findings` must be open ledger IDs; each record adds one round to that phase's cap. Never written without the user's words. |
-| `waive-independence` | `authorization`: an immutable record `{schema_version:1,run_id,step,phase,files,reviewer_family,user_decision}` of the user's explicit decision, plus the current `artifact`. Accepted only for units every known family already authored, so no independent reviewer exists; it lets the named family review the named files in that step. Never written without the user's words. |
-| `record-gate` | Current phase candidate `artifact` and `evidence`: the sealed C4 `result.json` references of a green verify-gate run. Checked like a gate report's `EVIDENCE`; it satisfies the phase's gate role without a gate worker and is cleared by `advance`. Final delivery still needs a gate report. |
-| `prepare-commit` | Fresh `fleet`, accepted `artifact`; verify roles, coverage, executable evidence, unresolved ledger IDs and staged candidate. Record expected snapshot with no invented commit SHA. |
-| `confirm-commit` / `advance` | Fresh `fleet`, accepted `artifact`, `commit:{sha,base,artifact}`. Read actual full Git commit/ancestry/tree, compare accepted index/source and current bytes; hook changes reject. A plan-only commit uses the accepted `kind:plan` artifact: `base` is `plan_base`, the commit changes exactly the plan path, and its blob is the accepted plan bytes. Confirm the existing commit once after a crash; advance only after confirmation. |
-| `finish-checkpoint` | Fresh `fleet`, accepted `artifact`: all phase commits must exist, then independent final review permits delivery, positive gate delivery permits completion metadata preparation. |
-| `complete` | Fresh `fleet`, completion `artifact`, actual separate `commit`; validate all phase commits, final review, delivery, unchanged implementation and verified plan-only done metadata. |
+| `resume` | Structure only: state shape, plan, bases, caps; returns the barrier. |
+| `dispatch` | `fleet`, `proposed` (`run_id,task_id,dispatch_id:null,role,phase,round,worktree_id,model`, review `coverage`, optional `fix:true`, `gate_fix:true`), `artifact` (omitted only for the first plan-writer before the plan exists). Freezes the assignment in `active`; a writer becomes `pending:<task>` in `write_ownership`. Reviewer rounds go `count` or `count+1` within the cap; repeating a role/round with the same family needs a new round; review coverage must be independent. |
+| `bind-dispatch` | `observation` of the pending fresh Task (not a `--retry-of`); the actual model must match the proposal (a roles.md `MODEL_ALIASES` alias matches its full-id prefix). A writer then owns the worktree. |
+| `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). See Accepting a report. Clears `active`. |
+| `record-gate` | Current `artifact` and `evidence` (sealed C4 `result.json` references of a green verify-gate run) in the phase or delivery step with no writer; recorded as an accepted `gate` GATE_OK entry. |
+| `prepare-commit` | `fleet`, current `artifact`; the candidate is ready and nothing is unstaged. Records nothing. |
+| `confirm-commit` | `fleet`, the accepted `artifact`, `commit:{sha,base}`. Readiness plus the commit check; records the commit once (a repeat confirms the same commit idempotently). Steps `plan`, `phase`, `quickfix`, `final-review` (final-fix commit). |
+| `advance` | After a confirmed commit of this step/phase: next phase with `base` = that commit, or `final-review` after the last phase. Clears `accepted`, `active`, fused-review and gate-fix rounds. |
+| `finish-checkpoint` | `fleet`, current `artifact`; all phases committed. `final-review` → `delivery` (records `final_source`), `delivery` → `completion` (the gate's candidate must equal `final_source`). Clears `accepted`. |
+| `complete` | `fleet`, `artifact` whose candidate equals `final_source`, a separate `commit`; the commit check holds and the committed plan has top-level `status: done`. |
+| `extend-cap` | `authorization`: `{schema_version:1,run_id,phase,group,extra_rounds:1,findings,user_decision}` at a reached cap, naming accepted finding ids. One round per record. |
+| `waive-independence` | `authorization`: `{schema_version:1,run_id,step,phase,files,reviewer_family,user_decision}` and the current package `artifact`; only files every known family authored. |
 
-Saved `event` is an accepted send receipt's `result.message`, or a check receipt's
-`result.messages` and `deliveryId`. Payload may be a JSON string. Only the selected
-message is processed; a whole Delivery becomes ackable after every contained
-message is processed, including stale/heartbeat messages. The coordinator then
-uses the actual `check --ack` command. There is no model timer polling.
+`extend-cap` and `waive-independence` records are the user's words, saved
+verbatim by the coordinator; never written without them.
+
+## Accepting a report
+
+The saved `event` is a send receipt's `result.message` or a check receipt's
+`result.messages`; payload may be a JSON string. Only `message_id` is
+processed. A processed id is `duplicate`; an empty timed-out wait and
+non-`worker_done` messages are `not-completion`; a `worker_done` for another
+Run/Task/Dispatch is `stale`. These change nothing but `processed_messages`.
+
+A completion is accepted only when: `observation` shows the active Dispatch
+`completed` with durable evidence; the sender is its assignee; the payload's
+`reportPath` is the report and the subject's first token (anything after `:` or
+whitespace is ignored) equals report line 1; the report path is not already bound
+to an accepted entry; the artifact is current, and for a reader it is the
+assigned one; the report satisfies the worker contract in runtime-contracts.md
+(verdict token, outcome, BINDING equal to the live assignment including
+artifact and snapshot ids, role sections, FINDINGS, COVERAGE, FIX_EVIDENCE on
+fix rounds, gate EVIDENCE); a successful plan author delivered the current plan.
+Reviews (except plan review) pass the independence check on their coverage;
+a plan reviewer's family differs from every recorded writer family. Gate
+`GATE_OK` EVIDENCE: valid sealed C4 results of this candidate, at least one
+passing, inherited failures proven by a BASE baseline with the same signature,
+no reused origin where independent replay is required. A defective report is
+rejected and the role is simply re-dispatched (a new Task, same round).
+SECURITY/DATA_LOSS findings return `decision:risk-escalation`.
+
+## Resolution and readiness
+
+A finding of an accepted entry is **resolved** when:
+
+- the ledger entry with its id has `decision` `DEFER`, `NIT`,
+  `REJECTED_BY_SCOPE` or `ESCALATED_TO_HUMAN` (record the user's decision for
+  the last one); or
+- it is `cannot_verify` and the ledger entry has `check`: an absolute path to a
+  C4 `result.json` that exists and reports integer `exit_code` 0; or
+- it is `blocking` and the latest accepted entry of the same role on the
+  current candidate came later, has a higher round, and no longer lists the id.
+
+The ledger is a JSON array of objects with unique string `id`; C6 reads nothing
+else from it. A candidate is **ready** for the step's commit or checkpoint when
+the latest accepted entry of each required role on that candidate is positive
+and no finding of the step is unresolved:
+
+| Step | Required roles (positive token) |
+| --- | --- |
+| `plan` | `plan-reviewer` (APPROVED) on the plan bytes |
+| `phase` | `gate` (GATE_OK or record-gate), `review-primary`, `review-control` (REVIEW_OK) |
+| `quickfix` | `quickfix` (DONE / DONE_WITH_CONCERNS) |
+| `final-review` | `review-final` (REVIEW_OK) |
+| `delivery` | `gate` (GATE_OK or record-gate) on `final_source` |
+
+The reviews' COVERAGE together covers every file (except the plan file), part
+and contract side of the first review's package. Reviews of earlier candidates
+stay in `accepted` only for their findings.
+
+## Commits
+
+`commit:{sha,base}` uses full SHAs; the commit exists, differs from `base`,
+descends from `base` and is an ancestor of HEAD.
+
+- **Plan-only commit** (plan step): `base` = `plan_base`, the commit changes
+  exactly the plan path, and that blob hashes to the approved plan bytes.
+- **Source commit**: `base` = the accepted artifact's HEAD; a fresh snapshot
+  still is the candidate; nothing is unstaged; every present repository entry
+  is staged; the commit tree without the plan file equals those index entries;
+  a committed plan has the state's structure (bookkeeping lines may differ).
+
+Hooks or formatters that change bytes after acceptance therefore reject. Recover
+a crashed commit by confirming the existing commit from Git; never commit twice.
+
+## Final steps and barriers
+
+After the last phase commit `advance` enters `final-review`. A final-fix commit
+(confirm-commit in `final-review`) keeps the final review valid when the bytes
+are those reviewed. `finish-checkpoint` then records `final_source` and moves to
+`delivery`; a delivery gate on the same candidate moves to `completion`; the
+separate completion commit (top-level `status: done`) completes the plan.
+
+`state.barrier`, in order: `awaiting_writer` (a writer intent or bound writer);
+after a recorded commit of this step `ready_next_phase`, `awaiting_final_review`
+or `complete`; `awaiting_final_review`, `awaiting_delivery`,
+`awaiting_completion_commit` in the final steps; `awaiting_plan_writer` /
+`awaiting_implementation` without a candidate (no entry, or the last writer
+failed); `awaiting_commit` when ready; else `awaiting_plan_review` /
+`awaiting_gate` without the first required role, `awaiting_resolution` with a
+non-positive latest required report or an unresolved finding, `awaiting_review`
+otherwise. The candidate of the plan step is the plan; of other steps the last
+accepted non-diagnosis entry.
+
+Caps: plan review 4, fused review 4 per phase, final review 2, consecutive gate
+fix 2. Only the user lifts a reached cap, one round per `extend-cap` record.
+
+## Observations and actual model
 
 Saved `observation` is current `worker-show --dispatch ID --json`: `ok`,
 `result.dispatch` (`id,taskId,runId,status,assigneeHandle,retryOfDispatchId`),
@@ -297,26 +297,22 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   conversation-to-transcript link is the directory name recorded by the builder,
   weaker than Claude's single transcript; a per-process model switch is conflicting.
 
-`bind-dispatch` compares the actual model with the proposal exactly, except that
-a Claude alias from roles.md `MODEL_ALIASES` matches a full id with its prefix.
 Actual model-to-family mapping lives only in roles.md. C5 write provenance points
-to these hashed observations; unknown/mixed authors need explicit independent
-coverage, including cross-family agent/model launches.
+to these hashed observations; unknown or mixed authors need independent coverage.
+
+## Fleet
 
 `fleet` is an array of hashed `worker-list --json --limit 100` page references,
-each with its input `cursor` (null for the first page). Collect all pages across
-all local runs. The adapter checks `scope.source:all`, `page.total/hasMore/nextCursor`,
-unique dispatch IDs and each worker's workspace, dispatch status, resource
-ownership, terminal state and durable/liveness projection. Incomplete/unknown
-observations block; prior receipt IDs cannot be reused for a new proposal. A
-durably completed or failed retained terminal is not a writer even when its
-workspace is null, provided ownership is not external/user-owned/pre-existing
-and release is not pending/unknown. Other null-workspace records remain unknown.
-Unknown/external ownership
-or pending/unknown release blocks the affected worktree. An unbound writer intent
-also blocks: bind/reconcile it before another proposal. The limit is two active
-child tracks of this Run; the parent and unrelated worktrees do not consume slots.
-TARGET ownership is still checked against the complete fresh fleet.
+each with its input `cursor` (null for the first page), across all local runs.
+C6 checks `scope.source:all`, `page.total/hasMore/nextCursor`, unique dispatch
+IDs and each worker's workspace, dispatch status, resource ownership, terminal
+state and durable/liveness projection. Incomplete/unknown observations block; a
+receipt id proves freshness once (`used_fleet_ids`). A durably completed or
+failed retained terminal is not a writer even when its workspace is null,
+provided ownership is not external/user-owned/pre-existing and release is not
+pending/unknown; other null-workspace records remain unknown. Unknown/external
+ownership or pending/unknown release in the worktree blocks, as does an unbound
+writer intent: bind or reconcile it before another proposal.
 
 ### C6 fleet collector (no Orca terminal)
 
@@ -356,15 +352,15 @@ The collector verifies `ok:true`, distinct receipt IDs, a stable
 `_meta.runtimeId`, all-Run scope with no Run filter, limit 100, stable total,
 unique Dispatch IDs, complete pagination and no partial-host error. Changed,
 missing, malformed or scoped evidence fails closed, with no retry or terminal
-fallback. It does not decide writer safety; the existing C6 validator still
-checks the original worker rows and rejects unknown/external ownership.
+fallback. It does not decide writer safety; the C6 validator still checks the
+original worker rows and rejects unknown/external ownership.
 
 Only a complete collection publishes `fleet.json`:
 `{schema_version:1,fleet:[{path,sha256,cursor},...],runtime_id,worker_count,page_count}`.
 Copy its `fleet` array mechanically into the C6 proposal. Original page bytes
 remain authoritative and hashed; this manifest is not an Orca receipt and does
 not authorize a transition by itself. Collect fresh receipts for the next
-required proposal; prior receipt IDs cannot be reused.
+required proposal.
 
 Stdout is one JSON line. Exit 0: `event:collected`, `fleet_file`, `output_dir`,
 `page_count`, `worker_count`, `schema_version:1`. Exit 1: `event:error`, `reason`
@@ -376,12 +372,24 @@ Shared isolated fixtures: `python3 -B -m unittest discover -s tests
 -p test_worker_fleet.py -v`; native Windows uses `python` and `ORCA_TEST_SHELL`
 for each PowerShell. The finite fake CLI cannot contact real Orca/settings.
 
-Caps remain plan review 4, fused review 4 per phase, final review 2, consecutive
-gate-fix 2 and one format correction. Only the user can lift a reached cap, one
-round at a time, through `extend-cap` with their verbatim decision; C6 rechecks it. Complementary independent reports use the
-same final round; rerunning the same role/family substantively needs a new round.
-Unresolved accepted ledger findings and CANNOT_VERIFY prevent commit. Prepared
-YAML `done`, a skipped/failed commit, budget exhaustion or a success-shaped wrapper
-message cannot establish completion. Resume barriers distinguish writer,
-resolution, gate/review, phase commit, final review, delivery and completion
-commit. A confirmed commit is recovered from Git facts, never rerun blindly.
+## Migration from schema 1
+
+A schema 1 state is UNVERIFIABLE (`schema 1 state: run protocol-state migrate`).
+`protocol-state migrate STATE_V1_JSON OUT_JSON` (input: a state or a proposal;
+output: a new absolute file) runs once: `bootstrap` becomes the plan step with
+the authorized plan path; it keeps the plan reference (structure computed from
+the current bytes, which must match its hash), the ledger path, the current
+step/phase's `accepted` entries (request-artifact entries dropped) and recorded
+script gates as gate entries, phase commits and the completion commit (each with
+its artifact's candidate), the final review's candidate as `final_source`,
+cap extensions, waivers, provenance, rounds, processed message ids and used fleet
+ids. Everything else is dropped. Then run `resume` on the output.
+
+## Removed in v2
+
+Ledger closure receipts (`closure`, `review_closure`, CHECK binding, fix/review
+order), `report_history`, `protected_reports`, `format-correction` and its cap,
+`commit_barrier` and `final` replay, `script_gates`, `processed.deliveries`,
+child tracks (`track_group`), the first-plan request record and bootstrap step,
+resume currency rules and declared-input freshness. None of them is read; the
+coordinator does not write or re-prove them.

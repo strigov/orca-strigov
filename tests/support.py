@@ -46,6 +46,16 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
+def plan_structure(text):
+    """C6 v2 plan structure digest: frontmatter minus bookkeeping lines (top-level status, plan_base,
+    orca_run, commits; phase status, base, commits), a NUL, then the body. Independent of the validator."""
+    import re
+    text = text.replace('\r\n', '\n').removeprefix('\ufeff')
+    match = re.match(r'^---\n(.*?)\n---(?:\n|$)', text, re.S)
+    front = re.sub(r'^(?:status|plan_base|orca_run|commits|    status|    base|    commits):.*(?:\n|$)', '', match[1], flags=re.M)
+    return hashlib.sha256((front + '\0' + text[match.end():]).encode('utf-8')).hexdigest()
+
+
 def until(probe, timeout=5):
     end = time.monotonic() + timeout * TIME_SCALE
     while time.monotonic() < end:
@@ -469,6 +479,31 @@ class ProtocolFixture(VerificationFixture):
             format_corrections={}, accepted=[], processed=dict(messages=[], deliveries=[]), open_ledger_ids=[],
             write_ownership=[], phase_commits=[], commit_barrier={}, final={}, provenance=[])
 
+    def v2_state(self):
+        """The same fixture as a schema 2 C6 state (agreed C6 v2 shape)."""
+        s = self.state
+        plan = s['plan'] and self.plan_ref()
+        return dict(schema_version=2, mode=s['mode'], plan=plan, ledger_path=None, orca_run=s['orca_run'], plan_base=s['plan_base'],
+                    phase=s['phase'], base=s['base'], step=s['step'], worktree=s['worktree'], worktree_id=s['worktree_id'],
+                    workspace=s['workspace'], active=None, rounds=dict(s['rounds']), cap_extensions=[], independence_waivers=[],
+                    provenance=list(s['provenance']), accepted=[], write_ownership=[], phase_commits=[], final_source=None,
+                    processed_messages=[], used_fleet_ids=[])
+
+    def plan_ref(self, path=None):
+        path = Path(path or self.plan)
+        return dict(self.reference(path), structure=plan_structure(path.read_text(encoding='utf-8-sig')))
+
+    def plan_artifact(self):
+        """An immutable workspace copy of the live plan, as a kind:plan artifact."""
+        self.serial += 1
+        copy = self.workspace / ('plan-copy-' + str(self.serial) + '.md'); copy.write_bytes(self.plan.read_bytes())
+        return dict(self.reference(copy), kind='plan', source_path=str(self.plan))
+
+    def git_commit(self, message='protocol fixture', *options):
+        self.git.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', message, *options)
+        return self.git.git('rev-parse', 'HEAD').strip()
+
     def reference(self, path, **extra):
         return dict(path=str(path), sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(), **extra)
 
@@ -645,14 +680,17 @@ class ProtocolFixture(VerificationFixture):
             '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', 'protocol fixture')
         return dict(sha=self.git.git('rev-parse', 'HEAD').strip(), base=base, artifact=artifact)
 
-    def package_ref(self, families=None, contracts=None, start_families=()):
+    def package_ref(self, families=None, contracts=None, start_families=(), claims=None, unbound=False):
         files = self.git.git('diff', '--name-only', self.git.base).splitlines()
         writes = []
         for family, names in (families or {'OpenAI': files}).items():
             a = self.assignment(family=family)
             receipt = self.observation(a, model=None, start=self.start_receipt(a)) if family in start_families else self.observation(a)
             if 'start' in receipt: self.state['provenance'].append(receipt)
-            writes.append(dict(family=family, files=names, receipt_path=receipt['path'], receipt_sha256=receipt['sha256'],
+            if unbound:  # The receipt names the declared Task/Run but another Dispatch.
+                raw = read_json(receipt['path']); raw['result']['dispatch']['id'] = 'another-dispatch'
+                receipt = self.save(dict(raw, other_dispatch=a['dispatch_id']))
+            writes.append(dict(family=(claims or {}).get(family, family), files=names, receipt_path=receipt['path'], receipt_sha256=receipt['sha256'],
                 **{k: a[k] for k in ('run_id','task_id','dispatch_id')}))
         self.serial += 1
         path = self.workspace / ('package-' + str(self.serial) + '.diff')
