@@ -16,7 +16,11 @@ def migrate(args):
     out = artifact_path(args[2])
     require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists(), "migration output must be a new absolute file", 2)
     step = "plan" if old["step"] == "bootstrap" else old["step"]
-    plan = old["plan"] and dict(path=old["plan"]["path"], sha256=old["plan"]["sha256"], structure=plan_read(ref(old["plan"]))["shape"])
+    # The live plan may have moved by bookkeeping lines since the v1 state was saved: adopt its current bytes.
+    if old["plan"]:
+        live = Path(old["plan"]["path"]).read_bytes()
+        plan = dict(path=old["plan"]["path"], sha256=v.digest(live), structure=plan_read(live.decode("utf-8-sig").replace("\r\n", "\n"))["shape"])
+    else: plan = None
     if plan is None and old["mode"] == "plan": plan = dict(path=record(old["authorization"])["plan_path"], sha256=None, structure=None)
     s = dict(schema_version=2, mode=old["mode"], plan=plan, ledger_path=(old.get("ledger") or {}).get("path"), step=step, accepted=[],
              phase_commits=[], final_source=None, processed_messages=old["processed"]["messages"], used_fleet_ids=old.get("used_fleet_ids", []),

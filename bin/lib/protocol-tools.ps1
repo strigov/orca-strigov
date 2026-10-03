@@ -36,7 +36,8 @@ function P-Migrate($cli) {
   P-Require ($old.schema_version -eq 1) 'not a schema 1 state' 2
   $out=$cli[2];P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out)) 'migration output must be a new absolute file' 2
   $step=if ($old.step -ceq 'bootstrap') { 'plan' } else { $old.step }
-  $plan=if ($old.plan) { [ordered]@{path=$old.plan.path;sha256=$old.plan.sha256;structure=(P-PlanRead (P-Ref $old.plan)).shape} } elseif ($old.mode -ceq 'plan') { [ordered]@{path=(P-Record $old.authorization).plan_path;sha256=$null;structure=$null} } else { $null }
+  # The live plan may have moved by bookkeeping lines since the v1 state was saved: adopt its current bytes.
+  $plan=if ($old.plan) { $live=[IO.File]::ReadAllBytes($old.plan.path);[ordered]@{path=$old.plan.path;sha256=(V-Hash $live);structure=(P-PlanRead ($VUtf8.GetString($live).TrimStart([char]0xfeff).Replace("`r`n","`n"))).shape} } elseif ($old.mode -ceq 'plan') { [ordered]@{path=(P-Record $old.authorization).plan_path;sha256=$null;structure=$null} } else { $null }
   $s=[ordered]@{schema_version=2;mode=$old.mode;plan=$plan;ledger_path=(V-Get (V-Get $old 'ledger' @{}) 'path');step=$step;accepted=@();phase_commits=@();final_source=$null
     processed_messages=@($old.processed.messages);used_fleet_ids=(P-List $old 'used_fleet_ids');cap_extensions=(P-List $old 'cap_extensions');independence_waivers=(P-List $old 'independence_waivers');barrier=$null}
   foreach ($k in 'orca_run','plan_base','phase','base','worktree','worktree_id','workspace','active','rounds','provenance','write_ownership') { $s[$k]=$old[$k] }
