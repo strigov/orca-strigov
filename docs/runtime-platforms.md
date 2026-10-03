@@ -16,8 +16,8 @@ coordinator-core is always loaded: no token savings measurement is claimed.
 | macOS | Python 3.13+, real `/bin/bash`, Git 2.36+, libproc and host/boot identity | **NOT_RUN**, no native Mac host; CI scenario added |
 | Windows | PowerShell 5.1 or 7, Git 2.36+; no Python runtime dependency | Both native shells available; Python 3.11 only drives tests/packaging |
 
-C6 requires `git worktree list --porcelain -z` to parse literal worktree records.
-The NUL-delimited mode was added in [Git 2.36 release notes](https://raw.githubusercontent.com/git/git/v2.36.0/Documentation/RelNotes/2.36.0.txt).
+C6 v1 required `git worktree list --porcelain -z` (Git 2.36+, [release notes](https://raw.githubusercontent.com/git/git/v2.36.0/Documentation/RelNotes/2.36.0.txt))
+for child tracks; C6 v2 has no track records and reads the worktree top level only.
 
 The POSIX entry points (`bin/run-check`, `bin/verify-gate`, …) call `python3` from `PATH`. On macOS the Command Line Tools interpreter (3.9) must not shadow the 3.13 install: the suite then fails every runner test with `run-check: darwin requires Python 3.13+` although `python3.13 -m unittest` itself imports fine. Put the 3.13 `bin` first in `PATH` before running the suite.
 
@@ -178,3 +178,24 @@ The installed skill link already targets this checkout. Existing agent contexts
 must reread the updated skill/recipes; modifying these files does not inject a
 message into a running coordinator. Bureau's existing terminals were not closed
 or modified. No install, global environment edit, commit or push was performed.
+
+## C6 v2 transition checker — 2026-10-03
+
+Branch `feat/c6-transition-checker`. C6 checks the current transition against
+the current candidate (state schema 2, `migrate` for schema 1); see
+`skills/orca-dev/contracts/c6-protocol-validation.md`. Both backends changed:
+`bin/lib/protocol_state.py`, `protocol_facts.py`, `protocol_tools.py`,
+`coordinator_session.py`; `bin/protocol-state.ps1`, `bin/lib/protocol-facts.ps1`,
+`bin/lib/protocol-tools.ps1`, `bin/coordinator-session.ps1`.
+
+macOS (Darwin 25.5, Python 3.13.15, Git, `/bin/bash`), Python backend:
+`python3 -B -m unittest discover -s tests -p 'test_*.py'` — 185 tests OK.
+The shared scenario files (`test_transitions.py`, `test_rejections.py`,
+`test_protocol_state.py`, `test_maintenance.py`, `test_bootstrap_recovery.py`,
+`test_delivery.py`, `test_coordinator_session.py`) select the native port on
+Windows through `ProtocolFixture.argv`.
+
+Native Windows PowerShell 5.1/7: **NOT_RUN** — no PowerShell on this host; the
+port mirrors the Python functions one by one and is unexecuted. Linux: **NOT_RUN**.
+A Windows PASS must be recorded here before merge.
+

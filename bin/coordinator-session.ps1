@@ -30,24 +30,22 @@ function C-Load([string]$path,[string]$root,[string]$sid,[string]$client='codex'
   C-Require ($savedClient -ceq $client) 'coordinator host mismatch';return $b
 }
 function C-ActivePending($s) {
-  if (-not $s.active) {return $false}
-  if (-not $s.active.dispatch_id) {return $true}
-  $history=if ($s.Contains('report_history')) {$s.report_history} else {$s.accepted}
-  return -not @($history | Where-Object {$_.binding.dispatch_id -ceq $s.active.dispatch_id}).Count
+  # C6 clears `active` when it accepts that Dispatch's report.
+  return [bool]$s.active
 }
 function C-Proposal($b) {
   C-Require ($null -ne $b.proposal) 'no C6 checkpoint: bootstrap or restore the pending stage'
+  # C6 recomputes the barrier for every action, including heartbeats and duplicates.
   $proposal=P-Record $b.proposal;$validated=P-Validate $proposal;$s=$validated.state
-  if ($validated.decision -cne 'accepted') {$s.barrier=P-Barrier $s (P-Plan $s)}
   C-Require ($s.worktree -eq $b.worktree -and $s.workspace -eq $b.workspace) 'C6 workspace differs from binding'
   C-Require (-not $b.orca_run -or $s.orca_run -ceq $b.orca_run) 'C6 Run differs from binding'
-  $complete=($s.barrier -ceq 'complete' -and -not (C-ActivePending $s) -and -not $s.write_ownership.Count -and -not $s.open_ledger_ids.Count -and
+  $complete=($s.barrier -ceq 'complete' -and -not (C-ActivePending $s) -and -not @($s.write_ownership).Count -and
     (($s.mode -ceq 'quickfix' -and $proposal.action -ceq 'confirm-commit') -or ($s.mode -ceq 'plan' -and $proposal.action -ceq 'complete')))
   return @{state=$s;complete=$complete}
 }
 function C-Progress($s) {
   return @{run=$s.orca_run;phase=$s.phase;step=$s.step;barrier=$s.barrier;active=$s.active;
-    commit=$s.commit_barrier.confirmed_sha;accepted=@($s.accepted | ForEach-Object {$_.report.sha256});open_ledger_ids=$s.open_ledger_ids}
+    commit=$(if (@($s.phase_commits).Count) {@($s.phase_commits)[-1].sha} else {$null});accepted=@(@($s.accepted) | ForEach-Object {,@($_.role,$_.token,$_.round,$_.candidate)})}
 }
 function C-Operate([string]$action,$request) {
   $root=C-Root $request.worktree;C-Require ($root -eq (C-Safe $request.worktree)) 'bind the actual worktree root'
@@ -80,7 +78,7 @@ function C-Operate([string]$action,$request) {
         $candidate=P-Decode (V-Json $b);$candidate.proposal=$request.proposal;$s=(C-Proposal $candidate).state
         $mark=C-Progress $s;if (-not (P-Eq $mark $b.progress)) {$b.stop_attempts=0}
         $b.proposal=$request.proposal;$b.progress=$mark;$b.orca_run=$s.orca_run
-        $b['bookkeeping']=@(foreach ($key in 'plan','ledger') {if ($s[$key]) {C-Safe $s[$key].path}})
+        $b['bookkeeping']=@(foreach ($p in @((V-Get $s.plan 'path'),$s.ledger_path)) {if ($p) {C-Safe $p}})
       }
       'hold' {
         C-Require ($request.kind -cin @('user_pause','needs_authority','product_decision','blocked','status_only') -and $request.reason -is [string] -and $request.reason.Trim()) 'hold needs a typed reason'

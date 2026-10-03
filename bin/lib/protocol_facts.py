@@ -158,7 +158,7 @@ def plan_read(text):
         require(set(p["consumes"]) <= produced, "consume without an earlier producer")
         produced.update(p["produces"])
     return dict(shape=shape, orca_run=scalar("orca_run"), plan_base=scalar("plan_base"), phases=phases,
-                done=re.search(r"^status: done\s*$", front, re.M) is not None)
+                done=re.search(r"^status: done[ \t]*$", front, re.M) is not None)
 
 
 def plan_name(state):
