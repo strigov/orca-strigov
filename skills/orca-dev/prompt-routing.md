@@ -6,6 +6,18 @@ its PROMPT_PROFILES mapping. An unknown/unmapped profile uses the standard body;
 it does not authorize an unknown model or a new fallback. Compare effective launch
 to the intended route before accepting work, as required by C6.
 
+## Pre-dispatch checklist (every worker)
+
+1. Every Task spec is the exact mandatory worker-boundary prefix from `orca-recipes.md` §1, a blank line, then the filled role/follow-up body (`prompt-fill fill` builds it). Before Task creation AND dispatch/reuse check that the actual spec begins with that literal prefix and has no unresolved declared template fields; repair it before sending. This applies to retries, fix rounds, context answers and re-dispatches too.
+2. Absolute paths: repo root, plan, ledger, report file, review package. The user's request verbatim where the template asks for it. Self-contained: the worker sees nothing from your session.
+3. Role, agent, model and effort from `roles.md`; for every reviewer, including availability fallbacks, check independence from ALL actual author families of each reviewed unit. If no allowed independent route exists, stop with incomplete acceptance. Never `ultra`.
+4. Launch path per `orca-recipes.md` §2: every fresh launch is Path B; Path A only reuses an existing Claude terminal with its `origin_start` proof. Every Codex worker has an explicit model, the role's effort and proven effective `-c features.multi_agent=false`. Follow the readiness evidence rules before `dispatch --inject`; a timeout does not permit dispatch/retry.
+5. Round 2+: ledger path present and open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
+6. Review dispatches (4.1 / 4.2 / 5 / plan review): this round's fresh package as `[DIFF_FILE]`, the implementer's report as `[IMPL_REPORT_FILE]` (read-only), `[GLOBAL_CONSTRAINTS]` verbatim from the plan.
+7. Anti-coaching scan on every reviewer spec: delete any sentence containing "do not flag", "don't treat", "not a defect", "at most Minor", "Minor at most", "the plan chose", "ignore the". Referencing settled ledger ids (`REJECTED_BY_SCOPE` / `DEFER`) is the only allowed form.
+8. `[REPORT_FILE]` is the worker's OWN report in the plan workspace, a distinct path per Task/Dispatch. A fix report gets the previous report as read-only `[PREVIOUS_REPORT_FILE]` and adds its `## Fix round <N>` evidence; never overwrite bytes an accepted entry references.
+9. Templates are filled through `prompt-fill`, one role at a time; never read a template whole.
+
 ## Selection
 
 For profile `outcome-v1` use:
@@ -64,7 +76,7 @@ items, a NEW REPORT_FILE, PREVIOUS_REPORT_FILE, the current artifact and the cur
 budget. Reuse context, never reuse an accepted report path. A final-fix assignment
 uses the whole-plan scope and recorded plan_base, not a guessed phase base.
 
-Allocate an unused ATTEMPT nonce for every initial/fix/context/format/final-fix Task before launch. A retry in the same round still needs a new nonce and report. Supply it in the assignment envelope; never resolve a report by round alone. Standard bodies also receive the actual platform, absolute runtime-contract path, role/phase/round, scope and finite check budget in their filled assignment.
+Allocate an unused ATTEMPT nonce for every initial/fix/context/re-dispatch/final-fix Task before launch. A retry in the same round still needs a new nonce and report. Supply it in the assignment envelope; never resolve a report by round alone. Standard bodies also receive the actual platform, absolute runtime-contract path, role/phase/round, scope and finite check budget in their filled assignment.
 
 In every standard assignment, also include the `--files-modified` rule from
 runtime-contracts.md **Report binding**: changed deliverable files only,
@@ -74,13 +86,13 @@ The shared outcome worker contract already carries this rule.
 
 For every fix assignment, including an initial final-fix wave, set `proposed.fix:true` so same-round C6 acceptance requires full FIX_EVIDENCE.
 
-For each ordinary blocking item, supply its exact finding ID and original accepted
-report reference (`path` plus raw `sha256`) from `report_history` (or complete
-legacy `accepted`). Fill `[FIX_FINDING_REFERENCES]` with these `{id,report}` entries
-in standard fix/revision bodies and the outcome contract; fill `[]` for initial
-work or script-only gate items without an accepted finding report. Also supply
-the authorized per-item changes and reviewer context. The fixer copies only
-addressed entries into `FIX_EVIDENCE.findings`, alongside its role's other
-required evidence. Do not guess hashes, use a previous implementer report as the
-finding's source, or create references for a synthetic gate item. Context and
-format-correction follow-ups retain this mapping and get fresh ATTEMPT reports.
+For each blocking item a fixer addresses, fill `[FIX_FINDING_REFERENCES]` with
+`{id,report}` entries: the exact finding ID and the accepted review report that
+raised it (`path` plus raw `sha256`, as `protocol-state summary` and the resume's
+accepted entries record them); fill `[]` for initial work or a script-only gate
+item. Also supply the authorized per-item changes and reviewer context. The
+fixer may copy addressed entries into `FIX_EVIDENCE.findings` for the reviewer's
+benefit; C6 does not require it. A finding resolves when the next round's
+review of the new candidate no longer lists it (coordinator-results.md). Do not
+guess hashes or cite a previous implementer report as a finding's source.
+Context follow-ups and re-dispatches keep this mapping and get fresh ATTEMPT reports.

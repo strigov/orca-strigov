@@ -79,5 +79,5 @@ sender, dispatch capability, task and dispatch IDs, matching bare subject token,
 outcome and new report path. `orca orchestration send` is the shell command; use
 the live CLI instructions, not invented IDs. A transport-rejected send is not a
 settled completion: correct its missing identity as instructed by the coordinator.
-After accepted settlement end the turn. A format correction is a new authorized
-Task/Dispatch with a new report, not a second completion of a settled Dispatch.
+After accepted settlement end the turn. A re-dispatch after a rejected report is a
+new authorized Task/Dispatch with a new report, not a second completion of a settled Dispatch.

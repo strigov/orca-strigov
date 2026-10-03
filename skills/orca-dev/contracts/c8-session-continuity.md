@@ -55,9 +55,9 @@ native PowerShell on Windows, without a shell or execution-policy bypass.
   barrier `complete`, no pending assignment, no unresolved writes or findings.
   Saved fleet receipts are checkpoint evidence, not a fresh live Orca query;
   collect fresh C6 fleet evidence immediately before a completion checkpoint.
-- A historical `active` assignment already in accepted report history is
-  settled; an unaccepted active assignment requires reconciliation/wait, never
-  another launch. Heartbeat, stale and duplicate receipts cannot prove completion.
+- C6 clears `active` when it accepts that Dispatch's report; a non-null `active`
+  is an unaccepted assignment and requires reconciliation/wait, never another
+  launch. Heartbeat, stale and duplicate receipts cannot prove completion.
 - Premature Stop returns `decision:block` and the pending action. After three
   attempts without meaningful checkpoint progress, the fourth requests an
   explicit **incomplete** no-progress escalation. It does not loop forever or

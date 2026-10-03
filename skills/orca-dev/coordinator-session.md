@@ -1,13 +1,12 @@
 # Coordinator session continuity (C8)
 
-Read on entry and after resume/compaction. This is part of orca-dev, not a fourth
-skill. It applies to the main Codex or Claude Code coordinator; workers follow their live
-assignment. Hooks must be installed, enabled and explicitly trusted. Do not
-disable trust or pretend an uninstalled hook is enforcing this contract.
+Read on entry and after resume/compaction. It applies to the main Codex or Claude
+Code coordinator; workers follow their live assignment. Hooks must be installed,
+enabled and trusted; never pretend an uninstalled hook enforces this contract.
 
 ## Bind before work
 
-Resolve `bin/` from the actual loaded plugin as coordinator-core describes. Use
+Resolve `bin/` from the actual loaded plugin as orca-recipes.md §0 describes. Use
 `sdd-workspace --name <slug>` to create the usual self-ignored plan workspace.
 Codex uses `CODEX_THREAD_ID` (PowerShell: `$env:CODEX_THREAD_ID`), or the exact
 session ID reported by SessionStart. Claude Code uses only the exact ID reported
@@ -40,16 +39,18 @@ path in the workspace. Pass its raw SHA-256 to `coordinator-session checkpoint`:
 ```
 
 C8 invokes the real C6 validator again, binds the same workspace/Run and records
-its pending barrier. This does not dispatch or repeat a lifecycle mutation.
-The proposal is not a resume output: it has `schema_version`, `action`, `state`
-and the action's real evidence. Never reuse a mutable request path.
+its pending barrier; it never dispatches or repeats a lifecycle mutation. The
+proposal is not a resume output: it has `schema_version`, `action`, `state` (schema
+2) and the action's real evidence, including fresh `plan`/`ledger` references when
+those files changed. Never reuse a mutable request path.
 
-For finishing a plan, the checkpoint must be C6 `complete` with its separate
-completion commit; for quickfix it must be `confirm-commit`. A `resume` proposal
-or a manually written `barrier: complete` cannot authorize stopping. Stop checks
-the original proposal and current Git/artifact facts again. Source edits after
-the checkpoint restore the barrier. Settled historical `active` assignments
-are distinguished from an assignment still awaiting an accepted report.
+Finishing a plan needs a checkpoint of C6 `complete` with its separate completion
+commit; a quickfix needs `confirm-commit`. A `resume` proposal or a hand-written
+`barrier: complete` cannot authorize stopping. Stop re-validates the proposal
+against current Git and artifact facts, so source edits after the checkpoint
+restore the barrier. A non-null `active` is an assignment still awaiting an
+accepted report (C6 clears it on acceptance). The plan and ledger paths of the
+checkpoint are the only coordinator edits PreToolUse allows outside the workspace.
 
 ## A legitimate pause is explicit and incomplete
 
@@ -57,11 +58,9 @@ are distinguished from an assignment still awaiting an accepted report.
 (`user_pause`, `needs_authority`, `product_decision`, `blocked`, `status_only`),
 a concrete `reason`, and `evidence:{path,sha256}` naming the immutable actual
 user-request/blocker record. A next phase, empty inbox, live worker or ordinary
-technical fix is not a human blocker. Holds never mark the objective complete.
-Answering a status-only question permits one final status answer; it preserves
-the objective, and the next user prompt clears that temporary hold. If a
-persistent pause/blocker is already held, a status-only request preserves it
-unchanged; an incidental follow-up cannot authorize continuation.
+technical fix is not a human blocker, and no hold marks the objective complete.
+A status-only hold permits one status answer and clears at the next user prompt;
+it never replaces an existing persistent pause or blocker.
 
 After the user resolves a blocker or explicitly resumes, run
 `coordinator-session resume REQUEST` with the bound session_id/worktree, restore
@@ -80,20 +79,15 @@ exit can cause the same missing-Stop condition; do not infer their cause.
 ## Hook behavior and limits
 
 SessionStart/UserPromptSubmit restore the role. PreToolUse rejects direct
-source/test edits through apply_patch/Edit/Write and reminds other tools of the
-coordinator boundary; only bound plan/ledger and workspace bookkeeping are
-allowed. These hooks are a guardrail, not an OS sandbox: arbitrary shell/MCP
-paths and the semantic contents of allowed metadata still require instruction
-compliance. No security-boundary claim is made.
+source/test edits through apply_patch/Edit/Write. These hooks are a guardrail, not
+an OS sandbox: shell/MCP paths and the contents of allowed metadata still rely on
+instruction compliance.
 
-Stop blocks premature final answers and supplies the pending C6 action. It does
-not skip barriers or dispatch a duplicate. Three repeated stops without a
-meaningful checkpoint are followed by an explicit no-progress escalation, not
-success or an unlimited token loop. The guard distinguishes its own automatic
-continuation prompt from fresh user input. Worker sessions, native subagents
-and unrelated unbound sessions are not trapped. General orchestration outside
-orca-dev follows the shared role contract; the C6-backed guard applies to
-development objectives, not arbitrary non-Git tasks.
+Stop blocks premature final answers and supplies the pending C6 action; it never
+skips barriers or dispatches. Three stops without a meaningful checkpoint end in an
+explicit no-progress escalation, not success or an endless loop. The guard tells
+its own continuation prompt from user input. Worker sessions, native subagents and
+unbound sessions are not trapped; the guard applies to development objectives.
 
 The state is coordinator-owned operational evidence, not a signed authority
 store. As with C6, do not fabricate receipts, edit the binding by hand or create

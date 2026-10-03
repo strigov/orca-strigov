@@ -170,7 +170,7 @@ That's it. Do NOT commit — the coordinator handles git.
 
 ## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — retained author; first `pro` revision / lost context uses handoff)
 
-The coordinator dispatches Mode B under the Author retention rule above (including the first `pro` revision exception) after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+The coordinator dispatches Mode B under the Author retention rule above (including the first `pro` revision exception) after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/coordinator-results.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
 You are the plan-revision stage of orca-dev: revising an implementation plan after a plan review returned blocking findings. Read the authoritative plan on disk and apply only the changes authorized via the ledger below.

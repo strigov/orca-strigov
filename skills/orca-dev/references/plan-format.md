@@ -7,7 +7,6 @@ the supplied absolute [RUNTIME_CONTRACTS_PATH] (C4/C6).
 ## Frontmatter
 
 Use protocol_version: 2; actual coordinator-supplied orca_run and full plan_base;
-on first-plan bootstrap also copy the supplied request_sha256 exactly;
 slug, created date, status; one-line JSON contracts list; deterministic verify
 list; phases with unique IDs, scope, status, risk, consumes and produces.
 Allowed risk values: none, SECURITY, DATA_LOSS, REGRESSION.

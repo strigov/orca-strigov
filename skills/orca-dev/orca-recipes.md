@@ -6,9 +6,33 @@ How a role from `roles.md` becomes a running Orca worker, how the coordinator wa
 
 ```bash
 orca status --json                      # runtime must be "ready"
-orca orchestration run-create --objective "<plan slug or task>" --json   # once per plan; record the run id in the plan frontmatter (orca_run:)
+orca orchestration run-create --objective "<plan slug or task>" --json   # once per plan; the plan writer copies it into the frontmatter (orca_run:)
 # resuming an existing plan: orca orchestration run-use --id <run_id> --json
 ```
+
+Resolve the helpers once per session from the **actually loaded plugin**, not an
+old installed skill link: `PLUGIN_DIR` is the absolute directory two levels above
+the loaded `skills/orca-dev/` (it contains `plugin.json`, both host manifests,
+`skills/` and `bin/`). Codex hooks supply it as `PLUGIN_ROOT`, Claude hooks as
+`CLAUDE_PLUGIN_ROOT`; outside hooks use the observed skill path. A stale
+`ORCA_DEV_HOME` never overrides it. Keep the plugin and `bin/lib/` together; do not
+repair global environment or recreate an old link; missing runtime files leave
+setup incomplete.
+
+```bash
+PLUGIN_DIR="<absolute-loaded-plugin-root>"; BIN="$PLUGIN_DIR/bin"
+WS="$BIN/sdd-workspace"; RPKG="$BIN/review-package"; GATE="$BIN/verify-gate"
+RUN="$BIN/run-check"; STATE="$BIN/protocol-state"; SESSION="$BIN/coordinator-session"
+```
+
+Native Windows (PowerShell coordinator, see `recipes-windows.md`) uses the `.ps1`
+ports with the same arguments, exit codes and output: `$BIN = Join-Path $PluginDir 'bin'`,
+`$WS = "$BIN\sdd-workspace.ps1"`, likewise `$RPKG`, `$GATE`, `$RUN`, `$STATE`,
+`$SESSION`; invoke with `&` (`& $GATE docs\plans\x.md a1b2c3d`).
+
+- `"$WS" <plan-file>` prints the self-ignored plan workspace (`.superpowers/sdd/<plan-basename>/`) for prompts, reports, packages and proposals; run it inside a track's worktree for parallel tracks; `"$WS" --name quickfix-<slug>` for a plan-less quickfix.
+- `"$RPKG" BASE HEAD [OUTFILE]` (committed range) or `"$RPKG" BASE WORKTREE OUTFILE` writes the review package; only its `wrote <path>: N commit(s), M bytes` line enters your context.
+- `"$GATE" <plan-file> <base-sha> [repo-root]` runs the frontmatter's `verify:` commands and classifies failures against BASE; `--phase ID --checkpoint directed|integration|final` selects the scope. Read its lines 1–2; on `GATE_FAIL` pass its full output to the implementer.
 
 Nested worker depth is 1: every dispatch is issued by the coordinator. Every Task spec carries the mandatory no-delegation boundary below. Separately, every Codex worker launch/reuse must use an explicit model and the role's effort policy from `roles.md`, plus proven effective `-c features.multi_agent=false` (verified on codex-cli 0.154.0). The documented Path A cannot carry/prove this setting, so Codex uses custom Path B even when hooks are trusted. Do not rely on native defaults or edit user configuration.
 
@@ -20,7 +44,7 @@ One Orca Task per attempt of a role. The coordinator MUST physically prepend thi
 You are a dispatched worker. Do the assigned work yourself. Do not delegate any part of this task to native subagents or Orca workers, and do not create or launch them. Use the live Orca preamble to report to or ask the coordinator.
 ```
 
-This is the mandatory worker-boundary prefix. `prompt-fill fill` (prompt-routing.md) composes the scratch spec this way from the bundled template; if you ever assemble by hand, compose it as **that exact block + a blank line + the filled body**; role templates are bodies, not complete specs. This assembly rule governs every template's Dispatch introduction, including ones that call the filled template "the spec". Apply the same construction to quickfixes, all review roles, retries, retained-terminal follow-ups, fix rounds, context answers and format corrections. Before `task-create` and again before any dispatch/reuse, compare the actual outgoing spec's opening block to the literal above and confirm it is present and unchanged. If absent, rebuild the spec before sending; a path/reference to this document is not a substitute. Never strip the boundary when reusing a terminal.
+This is the mandatory worker-boundary prefix. `prompt-fill fill` (prompt-routing.md) composes the scratch spec this way from the bundled template; if you ever assemble by hand, compose it as **that exact block + a blank line + the filled body**; role templates are bodies, not complete specs. This assembly rule governs every template's Dispatch introduction, including ones that call the filled template "the spec". Apply the same construction to quickfixes, all review roles, retries, retained-terminal follow-ups, fix rounds, context answers and re-dispatches after a rejected report. Before `task-create` and again before any dispatch/reuse, compare the actual outgoing spec's opening block to the literal above and confirm it is present and unchanged. If absent, rebuild the spec before sending; a path/reference to this document is not a substitute. Never strip the boundary when reusing a terminal.
 
 ```bash
 # The scratch file is the complete spec, with the literal prefix checked as above.
@@ -194,7 +218,9 @@ Anything uncertain stays open. Never close the coordinator's own terminal, an ac
 - Start with current execution-host, worker and terminal evidence, Task/Dispatch settlement and the reported `nextAction` (`worker-show --dispatch <id> --json`, `worker-read --dispatch <id>` when a Dispatch exists, terminal evidence before one exists). `unverifiable`, readiness timeout, idle, missing heartbeat and failed Task bookkeeping alone do not prove that a process stopped. An alive retained terminal with a durably settled Task is not an active writer and may be reused.
 - Only positive current host exit/failure evidence (for example actual `failed`/`stopped`/`exited` liveness), or a durably settled Task with recovery evidence excluding an unresolved writer, can allow a fresh attempt. Follow only ownership-safe recovery supported by the real receipt/`nextAction`; never retry into a tree with an unresolved live or unverifiable write task. When permitted, use `worker-start --task <task> --retry-of <dispatch_id> ...` with explicit placement for Path A, or a fresh Path B terminal for roles requiring custom settings. Retry does not inherit placement; recheck the spec boundary and launch settings.
 - `outcome_unknown` keeps the write barrier unresolved. Inspect first; `worker-stop --dispatch <id>` is allowed only when current evidence and the recovery receipt support stopping an owned resource. Read the actual stop result before any retry. A stop request or `worker-abandon` is not proof of termination and cannot clear the barrier; never force close an external, retained or uncertain terminal.
-- An accepted, durably settled `worker_done --outcome failed` identifying quota / rate limit / auth / launch problems is an **availability** failure, subject to the evidence/recovery checks above → cascade per `roles.md`. Reviewer fallbacks must remain independent of every actual author family of their reviewed units, or acceptance stays incomplete. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`) → handle per coordinator-core.md Verdicts.
+- An accepted, durably settled `worker_done --outcome failed` identifying quota / rate limit / auth / launch problems is an **availability** failure, subject to the evidence/recovery checks above → cascade per `roles.md`. Reviewer fallbacks must remain independent of every actual author family of their reviewed units, or acceptance stays incomplete. Any other failed outcome is a protocol verdict (`BLOCKED`, `NEEDS_*`) → handle per coordinator-results.md.
+
+**Antigravity workers.** Its timer ("Schedule") is a quota sink, not a wait: a `Schedule(90s: …)` one-shot timer pings the model every 30 s and Flash answers each ping with a log read and a new timer (observed 2026-09-02: ~13 calls per minute for 40 minutes, the five-hour quota drained without output). The implementer prompts tell workers to block inside one shell call instead. If a worker's screen cycles `Schedule → Read(task log) → Waiting…`, steer it once with `orca terminal send`: "Stop using the timer; wait for the test with a single blocking shell command (`Start-Sleep 300` then check the process), then continue." Quota exhaustion mid-phase is an availability failure → cascade per `roles.md`. The login-menu race is described under §2.
 
 ## 7. Bridge preflight (Pro planner — opt-in only)
 
@@ -253,20 +279,22 @@ guessed process API. Settled retained terminals do not hold write ownership.
 
 After task creation, `dispatch` validates the proposed role/model/coverage with
 `dispatch_id:null`. Only after VALID use the existing launch recipe; immediately
-save `worker-show --dispatch <actual-id> --json` and `bind-dispatch`. An interrupted
-unbound intent stays locked until reconciled. Collect actual author observations
-for C5 provenance and plan revisions; model family comes from roles.md, including
-cross-family CLI launches. Do not invent missing facts or upgrade an old run.
+save `worker-show --dispatch <actual-id> --json` and `bind-dispatch`. An unbound
+writer intent stays locked until reconciled. Keep actual writer observations for
+C5 provenance; model family comes from roles.md, including cross-family CLI
+launches. Do not invent missing facts.
 
 ```sh
 "$BIN/protocol-state" validate "$dir/proposal.json" "$dir/resume.json"
 ```
 
-Native Windows uses `& "$BIN\protocol-state.ps1" validate ...`.
-Check exit 0 **and** the returned decision/barrier before the exact proposed
-effect. Stage only authorized paths before the gate/package freeze, then use
-`prepare-commit` on that accepted snapshot; after Git, `confirm-commit` with the full actual
-SHA and original artifact. Crash recovery confirms that existing commit before
-`advance`; skipped/failed commits stay pending. Final review, delivery and the
-separate verified completion commit are distinct barriers. The helper never
-runs any lifecycle or commit action itself.
+Native Windows uses `& "$BIN\protocol-state.ps1" validate ...`. Check exit 0
+**and** the returned decision/barrier before the exact proposed effect. Supply a
+fresh `plan` reference when the plan file changed and a fresh `ledger` reference
+when the ledger changed. Stage only authorized paths before the gate/package,
+then `prepare-commit` on the accepted artifact; after Git, `confirm-commit` with
+`commit:{sha,base}` (full SHAs) and the same artifact, then `advance`. Crash
+recovery confirms the existing commit. Final review, delivery and the separate
+completion commit are distinct barriers (`finish-checkpoint`, `complete`). The
+helper never runs a lifecycle or commit action itself. A schema 1 state from an
+older run is converted once with `protocol-state migrate STATE_V1_JSON OUT_JSON`.

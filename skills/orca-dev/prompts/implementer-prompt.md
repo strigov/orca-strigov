@@ -118,7 +118,7 @@ Do NOT run `git commit` / `git push` / history-modifying git commands. Leave all
 
 ## AUTHORIZED_BLOCKERS
 
-<paste open ACCEPTED / PARTIALLY_ACCEPTED ledger items inline; the coordinator pulls these from `<repo-root>/docs/plans/<slug>.ledger.json` — see orca-dev/SKILL.md "## Authorized Change Ledger">
+<paste open ACCEPTED / PARTIALLY_ACCEPTED ledger items inline; the coordinator pulls these from `<repo-root>/docs/plans/<slug>.ledger.json` — see orca-dev/coordinator-results.md "## Authorized Change Ledger">
 
 Format per item:
 

@@ -25,7 +25,7 @@ the request, without speculative extension points or unrequested compatibility.
 Use the canonical plan-format reference. Preserve protocol metadata, observable
 acceptance criteria, non-goals, global constraints, exact file responsibilities,
 producer/consumer contracts, risks and finite verification checkpoints. Copy the
-supplied Run, plan_base and bootstrap request_sha256 exactly; never invent future phase bases or evidence.
+supplied Run and plan_base exactly; never invent future phase bases or evidence.
 A small coherent change may have one phase. Split only for meaningful deliverables,
 risk or the existing separate backend/frontend routing. Parallel groups must meet
 the existing independent-file/contract conditions; do not enable an unvalidated

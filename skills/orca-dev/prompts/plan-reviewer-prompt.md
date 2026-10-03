@@ -106,7 +106,7 @@ If the frontmatter marks phases with a shared `parallel_group`, additionally ver
 - improved UX;
 - broader test coverage beyond acceptance criteria.
 
-If a suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the report is malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER.
+If a suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the report is malformed: the protocol rejects it and the coordinator re-dispatches the review; the item never silently becomes DEFER.
 
 ## Tooling
 
@@ -191,7 +191,7 @@ Re-read the whole plan for coherence, but your blocker authority is narrower tha
 For any NEW issue not tied to an open ledger item:
 
 - classify it as `DEFER` unless it clears the high-materiality bar — guaranteed implementation/test failure, data-loss/security risk, regression of an existing public contract, or direct contradiction of a stated user requirement / failure of a phase acceptance criterion.
-- For every new `MUST_FIX_NOW`, the BLOCKING line MUST include `new_blocker_materiality: <which high-materiality category and why>`. Without that field, the report is malformed: the coordinator requests one format correction; the item stays unresolved and never silently becomes DEFER.
+- For every new `MUST_FIX_NOW`, the BLOCKING line MUST include `new_blocker_materiality: <which high-materiality category and why>`. Without that field, the report is malformed: the protocol rejects it and the coordinator re-dispatches the review; the item never silently becomes DEFER.
 - If all prior ledger blockers are fixed and you found only new non-critical issues, return `APPROVED` on line 1 and emit any `DEFER` / `NIT` items in their respective sections (below the empty BLOCKING block).
 
 **Authorized delta first.** Inspect the authorized delta — the open ledger items plus the plan-file sections the writer reported as edited — before scanning the wider plan. You may inspect surrounding context to validate that delta, but only escalate older, unrelated issues to `MUST_FIX_NOW` if they clear the high-materiality bar above. Latent issues outside the delta default to `DEFER`.

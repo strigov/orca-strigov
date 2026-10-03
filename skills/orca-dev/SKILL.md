@@ -20,39 +20,31 @@ For a main-session implementation request that applies, you ARE the development 
 Read the shared [role contract](../orchestration/role-contract.md) first: a worker
 with a live Task/Dispatch follows that assignment instead; never recursively
 activate this skill. Bind and restore the session through
-[coordinator-session.md](coordinator-session.md), before research or dispatch.
-Models, efforts and fallback eligibility live exclusively in
-[roles.md](roles.md). The current coordinator keeps its actual session model.
-This update does not promote a specialist model into the coordinator role.
+[coordinator-session.md](coordinator-session.md) before research or dispatch.
+Models, efforts and fallback eligibility live only in [roles.md](roles.md); the
+coordinator keeps its actual session model.
 
 ## Non-negotiable boundaries
 
 The coordinator dispatches, reconciles receipts, maintains the ledger and performs
 authorized Git bookkeeping. It does not write production code/tests, research
-source or review diffs. Delegate those activities to the existing roles.
-The permitted bookkeeping writes and reads are specified in coordinator-core.md.
+source or review diffs (coordinator-core.md lists the permitted writes and reads).
+Only the coordinator delegates: every worker spec starts with the exact boundary in
+orca-recipes.md §1, and every Codex worker has an explicit model and proven
+disabled native multi-agent delegation. Keep the launch, ownership, heartbeat,
+settlement and safe-release requirements.
 
-Only the coordinator delegates. Every outgoing worker spec starts with the exact
-worker boundary in orca-recipes.md section 1. Every Codex worker has an explicit
-model and proven disabled native multi-agent delegation. Retain the existing
-launch, ownership, heartbeat, settlement and safe-release requirements.
+Every dispatch, report acceptance, commit and final step passes C6 first. A
+rejection is not permission to bypass it; never invent plans, receipts, author
+history, test results or commit evidence to obtain VALID. A confirmed
+implementation is not a committed phase; a committed phase is not a finished plan
+until final review, delivery and the completion commit are confirmed.
 
-Use the existing C6 barrier for dispatch, report acceptance, resume and commits.
-A validator rejection is not permission to bypass it. Do not invent plan drafts,
-receipt identities, author history, test results or commit evidence to obtain a
-VALID result. A confirmed implementation is not a committed phase; a completed
-phase is not a completed plan until final review and delivery are confirmed.
-
-Reviews must be independent of every actual author family for their assigned
-units. Preserve all author observations through fixes and fallbacks. Retain the
-existing caps: plan review 4, fused review 4, gate fixes 2, final review 2.
-No additional reviewers, repeated suites or model upgrades merely to obtain PASS.
-
-Report paths are per Task/Dispatch, not per retained terminal. An accepted report
-is immutable. For every follow-up allocate a fresh REPORT_FILE and pass the prior
-report as PREVIOUS_REPORT_FILE. Preserve the verdict, summary, binding, fix evidence
-and current Fix round section required by runtime-contracts.md. Never copy a prior
-BINDING into a new report. A context-retained worker can still write a fresh report.
+Reviews are independent of every actual author family of their units. Caps: plan
+review 4, fused review 4, gate fixes 2, final review 2. No extra reviewers,
+repeated suites or model upgrades merely to obtain PASS. Report paths are per
+Task/Dispatch: every follow-up gets a fresh REPORT_FILE plus the prior report as
+PREVIOUS_REPORT_FILE; an accepted report is immutable and its BINDING is never copied.
 
 ## Load only the relevant coordinator material
 
@@ -69,60 +61,34 @@ prompts, historical bridge incidents, or both OS recipes.
 | Phase implementation, gate, review or fix | coordinator-phase.md |
 | Any source commit, final review, delivery or archival | coordinator-finish.md |
 | An approved parallel group | coordinator-parallel.md plus the phase/commit sections |
-| Launch, wait, retention, recovery or release | Relevant sections of orca-recipes.md |
+| A `worker_done`, a rejected report, finding triage or the ledger | coordinator-results.md |
+| Helper paths, launch, wait, retention, recovery or release | Relevant sections of orca-recipes.md |
 | JSON, artifacts, check execution or transition evidence | runtime-contracts.md (index, C6 rejection table, report binding), then only the one contracts/*.md file it names |
-| Worker prompt selection and assembly | prompt-routing.md; `prompt-fill list` names the template's placeholders and `prompt-fill fill` writes the spec — the template itself is never read |
+| Before any dispatch: checklist, prompt selection and assembly | prompt-routing.md; `prompt-fill list` names the template's placeholders and `prompt-fill fill` writes the spec — the template itself is never read |
 
-The coordinator-* files preserve the detailed baseline protocol, with corrected
-report-path wording. They are part of this skill, not optional historical notes.
-They are maintained and packaged together; this router must not be copied
-into an installation without those companion files.
-
-Stage references to standard prompt filenames describe the standard route. Actual
-Task body selection follows prompt-routing.md; do not append both standard and
-outcome-oriented role bodies. Keep every required stage, review and artifact.
-
-Before a transition, reconcile the plan frontmatter, immutable reports, ledger,
-current Orca observations and Git facts. Use the matching stage document, not a
-full reload of every prompt. After compaction resume the unfinished barrier;
-do not redispatch implementation merely because a summary is incomplete.
+The coordinator-* files are part of this skill and are packaged with it. Actual
+Task bodies follow prompt-routing.md (never both a standard and an outcome body).
+After compaction resume the unfinished C6 barrier; do not redispatch
+implementation merely because a summary is incomplete.
 
 ## Platform selection
 
-One skill and one semantic protocol support both platforms. POSIX uses the
-existing Bash/Python helpers; native Windows uses their .ps1 counterparts. Resolve
-the actually loaded plugin's helper paths once, as coordinator-core describes.
-An old standalone skill link or inherited ORCA_DEV_HOME must not select a different
-version of the helpers. Do not combine native Windows, WSL and POSIX paths in one task.
-
-Pass each worker the actual shell, absolute helper/contract paths and existing
-workspace. Historical Windows bridge advice is relevant only to an opted-in bridge
-route; native workers do not receive cmd.exe-specific troubleshooting by default.
-The assembly utility is a maintenance-time Python tool, not a new runtime dependency
-for native Windows workers or coordinators.
+One semantic protocol: POSIX uses the Bash/Python helpers, native Windows their
+.ps1 counterparts, resolved once from the actually loaded plugin (orca-recipes.md
+§0; never an old skill link or inherited ORCA_DEV_HOME). Do not combine native
+Windows, WSL and POSIX paths in one task. Pass each worker the actual shell,
+absolute helper/contract paths and workspace.
 
 ## State and completion
 
 After every accepted result and commit, execute the next authorized transition.
 A progress summary, created branch, empty inbox or settled wave is not a final
-answer. Publish a session checkpoint after C6 validation; the stop guard must
-either verify completion or expose the still-pending action/human blocker.
+answer. Checkpoint each VALID proposal through C8; the stop guard either verifies
+completion or names the pending action or human blocker. Ask the user only for
+missing authority, a material product decision or an unresolvable blocker.
 
-Use the state line and reporting cadence in coordinator-core.md. Report meaningful
-transitions, availability substitutions and unresolved barriers; do not narrate
-polling. Ask the user only for missing authority, a material product decision or
-an unresolvable blocker. Delegate technical research to the appropriate worker.
-
-Wait for workers through `wait-worker-event` (orca-recipes.md §4, runtime C7).
-Empty windows and keepalives stay inside that process. If the tool harness yields,
-resume the same call; do not inspect workers or start another waiter on each yield.
-
-Collect C6 all-Run fleet receipts through `collect-worker-fleet` in the existing
-shell (orca-recipes.md C6). Never open an Orca terminal to list workers, paginate
-receipts or wait for events, and never relay receipt JSON through base64/screens.
-
-Runtime contracts define authorized first-plan bootstrap, Run-owned child tracks,
-and evidence-backed ledger closure. Linux requires Python 3.9+; Darwin requires
-Python 3.13+ and successful capability preflight. Native macOS and live Orca
-acceptance need their own evidence; fixture results do not certify a live run.
-The core reference is always loaded: entrypoint size alone is not token savings.
+Wait through `wait-worker-event` (orca-recipes.md §4, C7) and collect C6 fleet
+receipts through `collect-worker-fleet` in the existing shell. Never open an Orca
+terminal to list workers, paginate receipts or wait, and never relay receipt JSON
+through base64/screens. Linux needs Python 3.9+; Darwin Python 3.13+ and a
+successful capability preflight. Fixture results do not certify a live run.

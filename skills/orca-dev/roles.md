@@ -1,29 +1,20 @@
 # orca-dev — role matrix
 
-The single source of truth for **who does what, on which model, at which effort**. `SKILL.md` and every prompt template refer to roles by name; nothing else hardcodes a model. Launch mechanics (how a role becomes an Orca worker) live in `orca-recipes.md`.
+The single source of truth for **who does what, on which model, at which effort**. Everything else refers to roles by name. Launch mechanics live in `orca-recipes.md`.
 
-Model ids are provider-opaque strings passed through Orca (`--model` / `--effort`) or through custom argv. Effort values are provider-specific: Codex `low|medium|high|xhigh|max` (never `ultra` unless the user says the word); Claude `low|medium|high|xhigh|max` — **Fable is currently not assigned to any pipeline role; its former roles run on Opus (complex plan review and 4.1 risk/last-round review at `xhigh`, diagnosis at `high`). Opus code review (4.1 ordinary rounds, 4.2 substitution/fallback, 5 final) and diagnosis use `high`; plan review, the 4.1 risk/last-round escalation, the explicit `opus` planning profile and frontend implementation use `xhigh`. Codex Astra runs at `xhigh` in every role. `max` is billed at ×1.5 since the September 2026 pricing change — never use it unless the user asks for it by name**; Antigravity `low|medium|high`.
+Model ids pass through Orca (`--model` / `--effort`) or custom argv (`-c model_reasoning_effort=<effort>` for Codex). Never `ultra` unless the user says the word; `max` only where the table says so or the user asks by name (it bills ×1.5). Antigravity Flash carries its level in the id and takes no `--effort`; Pro ignores effort. Fable has no pipeline role.
 
 ## Families
 
-C6 validates actual launch model families and the minimum independent coverage
-against [C6](contracts/c6-protocol-validation.md).
-All author families for each changed unit survive fallback/fix waves; a reviewer
-must be outside every author family for its assigned files and both contract
-sides. Complementary final assignments share one capped round. Unknown origin
-cannot establish independence; agent CLI family does not override its actual model.
-
-The C6 validator reads the following exact model-to-family facts for saved launch
-receipts. Unknown model identities remain unverifiable; this record grants no
-new role assignment or fallback. Compare the actual model, including when an
-agent CLI can launch a model from another family.
+[C6](contracts/c6-protocol-validation.md) reads these exact model-to-family facts
+for actual launches; an unknown model stays unverifiable and grants no role or
+fallback. The actual model counts, not the agent CLI.
 
 FAMILY_MODELS: {"gpt-5.6-luna":"OpenAI","gpt-5.6-sol":"OpenAI","gpt-6-astra":"OpenAI","chatgpt-web/pro":"OpenAI","opus":"Anthropic","fable":"Anthropic","sonnet":"Anthropic","gemini-3.8-flash-high":"Google","gemini-3.7-flash-high":"Google"}
 
-A model id absent above gets a family only from one exact provider prefix
-(a full Claude id such as `claude-opus-5-5` read from a verified transcript);
-any other unknown id stays unverifiable. A Claude CLI alias in an assignment
-matches an actual full id that starts with its listed prefix.
+A model id absent above gets a family only from one exact provider prefix (a full
+Claude id such as `claude-opus-5-5` from a verified transcript). A Claude CLI alias
+in an assignment matches an actual full id starting with its listed prefix.
 
 FAMILY_PREFIXES: {"claude-":"Anthropic"}
 
@@ -37,15 +28,15 @@ MODEL_ALIASES: {"opus":"claude-opus-","sonnet":"claude-sonnet-","fable":"claude-
 
 `agy` can also run Anthropic models (`claude-opus-4-6-thinking`, `claude-sonnet-4-6`); for the family rule the **model's** actual family counts, not the CLI's.
 
-**Family rule.** A reviewer must be outside ALL actual author families of each reviewed unit, including contributors from earlier revisions/fixes. Check this before every reviewer dispatch, including every availability fallback, risk escalation, substitution and experiment below; a different CLI or a fresh terminal does not change the model family. Same-family across *different* artifacts is fine (Opus may write an explicitly selected legacy-profile plan revision and, as a separate fresh worker, review independently authored code). For a mixed branch, split assignments only where each unit can be fully covered by an independent reviewer; no unit may be left unreviewed. A fallback below is allowed only if independent for its assigned units; otherwise announce another already allowed independent route for that role, preserving its stated selection conditions, or stop with incomplete acceptance. A unit already authored by every known family has no independent reviewer: only the user may release it, in their own words, through C6 `waive-independence` for one named reviewer family and step. Do not add a model, invent a fallback, downgrade a planner, or exceed the existing caps to obtain approval.
+**Family rule.** A reviewer must be outside ALL actual author families of each reviewed unit (files and both contract sides), including contributors from earlier revisions, fixes and fallbacks. Check it before every reviewer dispatch, including every availability fallback, risk escalation, substitution and experiment below; a different CLI or fresh terminal does not change the family. Same family across *different* artifacts is fine. For a mixed branch, split assignments only where each unit is fully covered by an independent reviewer; complementary assignments share one capped round. A fallback is allowed only if independent for its units; otherwise use another already allowed independent route or stop with incomplete acceptance. A unit every known family authored has no independent reviewer: only the user may release it, in their own words, through C6 `waive-independence` for one named reviewer family and step. Never add a model, invent a fallback, downgrade a planner or exceed the caps to obtain approval.
 
-**No worker multi-agent fanout.** All modeling roles are dispatched by the coordinator via Orca. Every actual Task spec must carry the literal mandatory boundary from `orca-recipes.md` §1 and pass its pre-dispatch presence check; a reference to this file is insufficient. Dispatched workers must not delegate to native subagents or Orca workers. Independently, every Codex worker launch/reuse must prove native multi-agent delegation disabled (`-c features.multi_agent=false`, verified on codex-cli 0.154.0), with model/effort from this matrix. The documented `worker-start` path cannot carry/prove the setting, so use the supported custom Path B even with trusted hooks; do not edit user configuration or rely on defaults.
+Only the coordinator dispatches; workers never delegate (orca-recipes.md §0–§1). Every Codex worker has an explicit model, the effort below and proven `-c features.multi_agent=false`, so Codex always uses custom Path B.
 
 ## Roles
 
 | role | step | primary | fallback / escalation | write? | freshness |
 |---|---|---|---|---|---|
-| `coordinator` | all | The main Codex or Claude Code terminal running this skill; it keeps its actual existing session/model. For a new Codex coordinator, native Sol medium (`gpt-5.6-sol` `medium`) is recommended with explicit `-m` (never `chatgpt-web/pro`: the bridge is never for the coordinator). Claude Code support does not change worker roles or select a new coordinator model | — | bookkeeping only (Rule 1) | one session |
+| `coordinator` | all | the main Codex or Claude Code session running this skill, on its actual model; a new Codex coordinator is recommended as `gpt-5.6-sol` `medium` with explicit `-m` (never `chatgpt-web/pro`) | — | bookkeeping only (Rule 1) | one session |
 | `plan-writer` | 1 (all complexities) | **codex `gpt-6-astra` `xhigh`** | opt-in alternative: codex `chatgpt-web/pro` (explicit `--planner pro`); Astra availability failure: one retry in a fresh terminal, then stop and ask the user — no automatic downgrade; `--planner opus` is an explicit user override only | plan file only | fresh |
 | `plan-reviser` | 2 | **codex `gpt-6-astra` `xhigh`** (reuse the native author; after a `pro` initial plan the FIRST revision uses a fresh native terminal with announced full handoff, then reuses it) | native author context lost: codex `gpt-6-astra` `xhigh` fresh with announced full handoff, no downgrade; explicit `opus` profile: retain claude `opus` `xhigh`, or replace with that same profile and announced full handoff if lost | plan file only | retained reviser; first Pro revision or actual context loss → fresh full handoff |
 | `plan-reviewer` | 2 | claude `opus` `xhigh` (ordinary and complex plans) | writer on the explicit `opus` profile → codex `gpt-5.6-sol` `max`, only if independent of all authors of the reviewed unit; otherwise another already allowed independent route or incomplete acceptance | no | fresh every substantive round (cap 4) |
@@ -60,11 +51,9 @@ MODEL_ALIASES: {"opus":"claude-opus-","sonnet":"claude-sonnet-","fable":"claude-
 | `quickfix` | trivial path | antigravity `gemini-3.8-flash-high` `high` | codex `gpt-5.6-luna` `max` | yes | fresh |
 | `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.8-flash-high` `high` | — | no | fresh |
 
-Claude is used in judgment roles (plan review, reviews, diagnosis) and for frontend implementation. Mechanical work (gate, synthesis, quickfix) stays on Google/OpenAI so the Anthropic quota is spent on judgment.
-
 ## Family-rule substitutions
 
-The defaults above assume the code was written by Gemini. When the cascade or the frontend route puts an author in a reviewer's family, substitute — and say so in the state line. The rows are for units authored only by the named family; mixed units must satisfy the Family rule above. Availability fallbacks never override these exclusions: OpenAI-authored units cannot fall back to Sol/Astra review; Anthropic-authored units cannot fall back to Opus/Fable review. If all existing independent routes for the role are unavailable, stop with incomplete acceptance.
+The defaults assume Gemini-written code. When the cascade or the frontend route puts an author in a reviewer's family, substitute and say so in the state line. Rows cover units authored only by the named family; mixed units follow the Family rule. Fallbacks never override these exclusions (no Sol/Astra review of OpenAI-authored units, no Opus/Fable review of Anthropic-authored units).
 
 | code written by | 4.1 primary | 4.2 control | Step 5 final |
 |---|---|---|---|
@@ -74,71 +63,27 @@ The defaults above assume the code was written by Gemini. When the cascade or th
 
 ## Planning profiles
 
-- **`astra` (default for all task complexities):** Initial plan and every revision = Codex `gpt-6-astra` `xhigh`. Revisions reuse the author terminal/context; actual context loss uses the same profile with announced full handoff. Plan review = Claude `opus` `xhigh` for ordinary and complex plans.
-- **`pro` (explicit opt-in alternative only):** Selected only when user explicitly specifies `--planner pro` or "план на Pro". Round 1 = Pro (`chatgpt-web/pro`) writes → Claude `opus` `xhigh` reviews. Rounds 2+ = Codex `gpt-6-astra` `xhigh` revises (fresh terminal with announced full handoff, because Pro does not revise) → Claude `opus` `xhigh` reviews; subsequent revisions reuse that retained Astra terminal. Pro is used for the initial plan only — never for revisions. Regular startup/planning does not depend on bridge health.
-- **`opus` (legacy explicit user override):** Selected only if the user explicitly specifies `--planner opus`. Claude `opus` `xhigh` writes/revises → Codex `gpt-5.6-sol` `max` reviews, all rounds. This is an explicit override only, never an automatic availability fallback.
+- **`astra` (default):** Codex `gpt-6-astra` `xhigh` writes and revises (revisions reuse the author; context loss → same profile, announced full handoff); Claude `opus` `xhigh` reviews.
+- **`pro` (explicit `--planner pro` or "план на Pro" only):** Pro (`chatgpt-web/pro`) writes round 1 only; Codex `gpt-6-astra` `xhigh` revises from round 2 in a fresh terminal with announced full handoff, then that terminal is reused; Claude `opus` `xhigh` reviews. Normal planning never depends on bridge health.
+- **`opus` (explicit `--planner opus` only, never a fallback):** Claude `opus` `xhigh` writes/revises; Codex `gpt-5.6-sol` `max` reviews.
 
-Selecting: default is `astra`. The user may explicitly specify `--planner pro|opus` or "план на Pro" / "обычный план". State the profile in the Step 1 status line.
+State the profile in the Step 1 status line.
 
 ## Implementer cascade — transition rules
 
-```
-antigravity gemini-3.8-flash-high (high)
-  │  availability failure: positive current execution-host launch/exit/failure evidence,
-  │  or an accepted, durably settled worker_done --outcome failed identifying quota / rate
-  │  limit / auth / launch error. Follow the recovery receipt and nextAction per recipes §6.
-  │  Silence, timeout, idle or uncertain attachment never prove failure. Before retry,
-  │  confirm no unresolved live or unverifiable write task remains → tell the user, then:
-  ▼
-codex gpt-5.6-luna (max)          ← fresh terminal; fix rounds continue in THIS terminal
-  │  BLOCKED + diagnosis token NEEDS_MORE_REASONING →
-  ▼
-codex gpt-5.6-sol (max)           ← always a FRESH terminal (the model is fixed at launch —
-                                    `--model` cannot be combined with `--terminal`, and Path B
-                                    bakes it into argv); the fresh-fallback re-brief carries the
-                                    BLOCKED report and the diagnosis report by path
-```
+1. antigravity `gemini-3.8-flash-high`.
+2. On an availability failure — positive current host launch/exit/failure evidence, or an accepted, durably settled `worker_done --outcome failed` naming quota / rate limit / auth / launch (recipes §6; silence, timeout or idle never prove it), after confirming no unresolved writer and telling the user → codex `gpt-5.6-luna` `max` in a fresh terminal; its fix rounds continue in that terminal.
+3. On `BLOCKED` + diagnosis `NEEDS_MORE_REASONING` → codex `gpt-5.6-sol` `max`, always in a FRESH terminal (the model is fixed at launch), with the fresh-fallback re-brief carrying the BLOCKED and diagnosis reports by path.
 
-A retained terminal whose Task is durably settled is not an active writer; preserve it for legitimate context reuse. A failed Task status or an attempted stop alone is not proof that an unresolved execution host stopped. Read current host/worker/terminal evidence and `nextAction` before recovery.
+A justified hard route `codex gpt-6-astra xhigh` may be chosen explicitly for complex tasks, announced with rationale. No model change on other diagnoses, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `NEEDS_AUTHORIZATION`, `GATE_FAIL` or `REVIEW_BLOCKING`. After a fallback the ledger and reports carry the context (`prompts/implementer-prompt.md` fresh-fallback re-brief). A retained terminal whose Task is durably settled is not an active writer.
 
-Hard implementation route: an explicit justified choice of `codex gpt-6-astra xhigh` is permitted for complex tasks without requiring an extra mandatory cascade step, announced with rationale.
+## Provider notes
 
-What does **not** trigger a model change: `BLOCKED` with any other diagnosis, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `NEEDS_AUTHORIZATION`, a `GATE_FAIL`, or a `REVIEW_BLOCKING`. Those are handled by the protocol at the same model.
-
-Fix rounds after a fallback: the ledger plus the report file carry the context; a fresh terminal gets the fresh-fallback re-brief block from `prompts/implementer-prompt.md`.
-
-## Pro (`chatgpt-web/pro`) — operational notes
-
-- Every Codex launch in this protocol passes an explicit `--model`: the user's `~/.codex/config.toml` defaults to `chatgpt-web/pro`, and an unqualified `codex` would route the role through the bridge by accident.
-- Bridge mechanics, observed failure modes, their diagnosis and retry rule live in
-  [references/bridge-incidents.md](references/bridge-incidents.md); read it only when
-  the bridge is actually opted in (`--planner pro`).
-
-## Antigravity (`agy`) — operational notes
-
-- **Its timer ("Schedule") is a quota sink, not a wait.** A `Schedule(90s: …)` one-shot timer pings the model every 30 s ("Still waiting. Remaining time …"), and Flash answers each ping with a log read and a new timer. Observed 2026-09-02 on Windows: a worker waiting for `cargo test --workspace` made ~13 `streamGenerateContent` calls per minute for 40 minutes (360 timers in an hour) and drained the five-hour quota from full to 10 % without producing anything. The implementer prompts now tell workers to block inside one shell call (long timeout, or `Start-Sleep`/`sleep` inside the command) instead. If you see a worker's screen cycling `Schedule → Read(task log) → Waiting…`, steer it once with `orca terminal send`: "Stop using the timer; wait for the test with a single blocking shell command (`Start-Sleep 300` then check the process), then continue." A quota exhaustion mid-phase is an availability failure → Codex fallback per the cascade.
-- Login race: see `orca-recipes.md` ("Antigravity's login menu is a race, not a logout").
-
-## Effort cheat-sheet
-
-| role | flag |
-|---|---|
-| Claude Opus code review (4.1 ordinary rounds, 4.2, 5 final) and diagnosis | `--effort high` |
-| Claude Opus plan review, 4.1 risk/last-round escalation, `opus` planning profile, frontend implementation | `--effort xhigh` |
-| Claude Sonnet frontend tweak | `--effort medium` |
-| Codex Astra (plan writer/reviser, hard diagnosis/implementation route, experimental control review) | `--effort xhigh` (`-c model_reasoning_effort=xhigh` in custom argv) |
-| Codex Sol (plan fallback review, implementer reasoning escalation) | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
-| Codex Sol (control review, frontend substitution) | `--effort xhigh` (`-c model_reasoning_effort=xhigh` in custom argv) |
-| Codex Sol coordinator recommendation | `--effort medium` |
-| Codex Luna fallback | `--effort max` (`-c model_reasoning_effort=max` in custom argv) |
-| Codex Luna as synthesizer fallback | `--effort medium` |
-| Antigravity Flash | none — `gemini-3.8-flash-high` carries the level; agy rejects `--effort` for it |
-| Pro | none — the bridge fixes the ChatGPT mode; Codex-side effort flags are ignored |
+Every Codex launch passes an explicit `--model`: the user's `~/.codex/config.toml` defaults to `chatgpt-web/pro`, and an unqualified `codex` would route through the bridge. Bridge mechanics and incidents: [references/bridge-incidents.md](references/bridge-incidents.md), only when `--planner pro` is opted in. Antigravity's timer and login-race behaviour: orca-recipes.md §2 and §6.
 
 ## Prompt profile selection
 
-Prompt profiles change only instruction shape, not the roles, efforts, families,
-experimental opt-ins or fallback eligibility above. Selection and assembly live
-in prompt-routing.md. The coordinator recommendation remains unchanged.
+Prompt profiles change only instruction shape, never roles, efforts, families or
+fallback eligibility. Selection and assembly live in prompt-routing.md.
 
 PROMPT_PROFILES: {"gpt-6-astra":"outcome-v1"}
