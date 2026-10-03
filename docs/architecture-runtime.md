@@ -111,8 +111,11 @@ diagnosis, synthesizer) are closed after their report is accepted.
 
 ## C6 shape
 
-`protocol_state.py` stays one file per backend (the PowerShell port is one file
-and a module split would double the parity surface), organised as:
+Superseded on 2026-10-03 by `docs/plans/2026-10-03-c6-transition-checker.md`: the
+validator is three files per backend — `protocol_state` (every decision, ≤ 450
+lines), `protocol_facts` (input readers, model sources, evidence) and
+`protocol_tools` (`summary`, `migrate`) — with the same split on both sides so
+parity is checked file by file. The organisation below described the v1 file:
 
 1. constants and roles facts (preamble block, caps, tokens);
 2. model sources (the table above, one function per row) and `family`;
