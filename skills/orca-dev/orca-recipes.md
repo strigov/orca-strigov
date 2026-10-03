@@ -199,7 +199,7 @@ Decide the terminal's fate **before** acknowledging the Delivery:
 
 - **Explicit retention:** To preserve a terminal across review/fix rounds or handoffs, tell Orca to retain it: `orca orchestration worker-retain --dispatch <id> --json` (record the expected next action).
 - **Retention rules:**
-  - **Plan author retention:** Keep the plan writer's terminal open until the plan is approved and committed; normally Mode B reuses the actual author. Exception: the first revision of a `pro` initial plan goes to a fresh native `plan-reviser` per `roles.md`, with announced full handoff (plan, ledger, latest author/review reports); retain and reuse that reviser thereafter. The settled initial author stays available for context until commit and receives no revision task. Actual context loss uses the authorized revision profile with a fresh announced full handoff.
+  - **Plan author retention:** Keep the plan writer's terminal open until the plan is approved and committed; Mode B reuses the actual author. Actual context loss uses the authorized revision profile with a fresh announced full handoff.
   - **Implementer retention:** Keep the implementer's terminal open across fix rounds until the phase is approved and committed; fix rounds re-inject into this terminal (`dispatch --inject`). Open a new implementer terminal only for a model change or a proven unusable one, and record why.
 - **Reuse:** After durable Task settlement, follow up on the same agent (subject to the author exception above): Path A → `worker-start --task <next> --terminal <handle>`; Path B → `dispatch --task <next> --to <handle> --inject`. C6 model proof for the follow-up: Path A carries `start` + `origin_start` (§2); a Claude Path B follow-up gets a new `claude-model-evidence` snapshot for the new Dispatch. Recheck the actual spec prefix and effective launch requirements; an alive retained terminal with a settled Task is not an active writer.
 - **Release:** After accepted settlement and the reason for retention ends (plan committed / phase committed), or for fresh-round reviewers, request `orca orchestration worker-release --dispatch <id> --json` and inspect the real result for either path. A requested release is not actual release; operator-created terminals may have no owned resource to release.
@@ -222,19 +222,18 @@ Anything uncertain stays open. Never close the coordinator's own terminal, an ac
 
 **Antigravity workers.** Its timer ("Schedule") is a quota sink, not a wait: a `Schedule(90s: …)` one-shot timer pings the model every 30 s and Flash answers each ping with a log read and a new timer (observed 2026-09-02: ~13 calls per minute for 40 minutes, the five-hour quota drained without output). The implementer prompts tell workers to block inside one shell call instead. If a worker's screen cycles `Schedule → Read(task log) → Waiting…`, steer it once with `orca terminal send`: "Stop using the timer; wait for the test with a single blocking shell command (`Start-Sleep 300` then check the process), then continue." Quota exhaustion mid-phase is an availability failure → cascade per `roles.md`. The login-menu race is described under §2.
 
-## 7. Bridge preflight (Pro planner — opt-in only)
+## 7. Bridge preflight (retired)
 
-Only when the user explicitly chooses `--planner pro`: run the preflight in
-[references/bridge-incidents.md](references/bridge-incidents.md) (macOS and Windows
-commands). Bridge down or doctor not `ready` → fall back to the default `astra` profile.
+The Pro planner is retired (`roles.md`, Planning profiles): refuse `--planner pro`
+and explain why. The preflight and incident notes stay in
+[references/bridge-incidents.md](references/bridge-incidents.md) for history.
 
 ## 8. Cheat-sheet: role → recipe
 
 | role | path | agent / argv |
 |---|---|---|
 | plan-writer / plan-reviser | B for every profile (Claude included: model proof via `claude-model-evidence`) | role agent/model/effort per `roles.md`; every Codex argv includes `-m <model> -c features.multi_agent=false` and native effort per §2 |
-| plan-writer (Pro — opt-in) | B | `codex ... -m <pro-model per roles.md> -c features.multi_agent=false` |
-| plan-reviewer / review-primary / review-final / diagnosis / frontend-implementer | B for Claude (fresh launch; model proof via `claude-model-evidence`) and for permitted Codex routes; A only to reuse an existing Claude terminal (`origin_start`) | role agent/model/effort per `roles.md`; every Codex argv carries explicit model/effort and `-c features.multi_agent=false` per §2 |
+| plan-reviewer (Codex) / review-primary / review-final / diagnosis / frontend-implementer | B for Claude (fresh launch; model proof via `claude-model-evidence`) and for permitted Codex routes; A only to reuse an existing Claude terminal (`origin_start`) | role agent/model/effort per `roles.md`; every Codex argv carries explicit model/effort and `-c features.multi_agent=false` per §2 |
 | review-control | B for Codex and for an independent Claude substitution | model/effort per `roles.md`; Codex argv includes `-m <model> -c model_reasoning_effort=<effort> -c features.multi_agent=false` |
 | implementer / gate / synthesizer / quickfix | B | `agy --model <model> --dangerously-skip-permissions` (model id carries the level) |
 | implementer fallback / escalation | B for Codex | `codex ... -m <model> -c model_reasoning_effort=<effort> -c features.multi_agent=false` (per `roles.md`) |

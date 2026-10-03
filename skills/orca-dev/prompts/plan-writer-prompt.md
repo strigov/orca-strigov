@@ -6,7 +6,7 @@ Use when the coordinator needs a plan written (Step 1) or revised after plan rev
 
 Role: `plan-writer` (Mode A) / `plan-reviser` (Mode B) — launch recipe, model, and effort come from `../roles.md` (never hardcode a model here). The coordinator writes the exact mandatory worker-boundary prefix from `../orca-recipes.md` §1, a blank line, and the filled template body to the scratch spec; checks that actual prefix before Task creation and dispatch; then attaches a worker per `../orca-recipes.md` (`worker-start`, or `terminal create` + `dispatch --inject` for agents that need custom argv). Orca prepends its own lifecycle preamble (coordinator handle, task id, dispatch id, CLI commands) — the template below must not repeat it.
 
-**Author retention**: Mode B normally reuses the actual retained author until the plan is approved and committed. The `pro` profile is the narrow exception: the FIRST revision must use a fresh native `plan-reviser` per `../roles.md`, with an announced full handoff (full plan, ledger, latest author/review reports); subsequent revisions reuse that retained native reviser. Keep the settled initial author available for context until commit, without giving it revision tasks. If the authorized reviser's context is actually lost or unrecoverable, launch a fresh replacement of the same authorized revision profile with the same full handoff, announce the replacement and record the context loss.
+**Author retention**: Mode B reuses the actual retained author until the plan is approved and committed, at the `plan-reviser` effort from `../roles.md`. If the authorized reviser's context is actually lost or unrecoverable, launch a fresh replacement of the same authorized revision profile with the same full handoff, announce the replacement and record the context loss.
 
 The worker writes the plan file itself and may read anything in the repository — research inside the worker is exactly what it is for. It must NOT touch source files and must NOT run state-changing git commands.
 
@@ -170,7 +170,7 @@ That's it. Do NOT commit — the coordinator handles git.
 
 ## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — retained author; first `pro` revision / lost context uses handoff)
 
-The coordinator dispatches Mode B under the Author retention rule above (including the first `pro` revision exception) after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/coordinator-results.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+The coordinator dispatches Mode B under the Author retention rule above (same author, reviser effort) after the plan reviewer returned `CHANGES_REQUESTED` and the coordinator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `orca-dev/coordinator-results.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
 You are the plan-revision stage of orca-dev: revising an implementation plan after a plan review returned blocking findings. Read the authoritative plan on disk and apply only the changes authorized via the ledger below.
