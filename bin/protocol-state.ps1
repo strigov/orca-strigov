@@ -298,6 +298,18 @@ function P-Validate($data) {
       foreach ($name in $auth.files) { P-Require (P-Subset (P-KnownFamilies) @($writers[$name])) ('independence waiver needs every family as author: '+$name) }
       $s.independence_waivers=@(@($s.independence_waivers)+,([ordered]@{step=$auth.step;phase=$auth.phase;files=$auth.files;reviewer_family=$auth.reviewer_family;authorization=$data.authorization}))
     }
+    'record-author' {
+      # A settled writer whose report was rejected still authored bytes: register its observation (with its model
+      # proof) so C5 provenance resolves. More author families only make reviews stricter, never weaker.
+      $raw=P-Record $data.observation;P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2
+      $result=$raw.result;P-Need $result @('dispatch','projection');$d=$result.dispatch
+      $ws=V-Get $result.projection 'workspace'
+      P-Require ($d.runId -ceq $s.orca_run -and $ws -is [Collections.IDictionary] -and (V-Get $ws 'id') -ceq $s.worktree_id) 'author observation outside this Run and worktree'
+      P-Require ($d.status -cin @('completed','failed') -and (V-Get (V-Get $result.projection 'evidence') 'durable') -eq $true) 'author Dispatch is not durably settled' 2
+      [void](P-Model $result $data.observation)
+      P-Require (-not @($s.provenance | Where-Object { $_.path -ceq $data.observation.path }).Count) 'author already recorded'
+      $s.provenance=@(@($s.provenance)+,$data.observation)
+    }
     'record-gate' {
       # A green verify-gate needs no worker; its sealed C4 results are the gate evidence.
       P-Require ($s.step -cin @('phase','delivery') -and -not @($s.write_ownership).Count) 'script gate outside an unowned phase or delivery candidate'

@@ -79,7 +79,8 @@ only the ledger path.
   `advance` and `finish-checkpoint` clear it.
 - `phase_commits`: `{phase,step,sha,base,candidate}` per confirmed commit (plan,
   phase, final-fix, quickfix and completion commits).
-- `provenance`: observation references of every accepted writer (plan authors
+- `provenance`: observation references of every accepted writer and of every
+  settled writer registered by `record-author` (plan authors
   for plan-review independence; Path A start receipts for C5 write receipts).
 - `final_source`: the candidate the final review accepted (set by
   `finish-checkpoint`); delivery and the completion commit must match it.
@@ -130,6 +131,7 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 | `bind-dispatch` | `observation` of the pending fresh Task (not a `--retry-of`); the actual model must match the proposal (a roles.md `MODEL_ALIASES` alias matches its full-id prefix). A writer then owns the worktree. |
 | `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). See Accepting a report. Clears `active`. |
 | `record-gate` | Current `artifact` and `evidence` (sealed C4 `result.json` references of a green verify-gate run) in the phase or delivery step with no writer; recorded as an accepted `gate` GATE_OK entry. |
+| `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported: its bytes still carry its family. Appends the reference to `provenance`; more author families only make reviews stricter. |
 | `prepare-commit` | `fleet`, current `artifact`; the candidate is ready and nothing is unstaged. Records nothing. |
 | `confirm-commit` | `fleet`, the accepted `artifact`, `commit:{sha,base}`. Readiness plus the commit check; records the commit once (a repeat confirms the same commit idempotently). Steps `plan`, `phase`, `quickfix`, `final-review` (final-fix commit). |
 | `advance` | After a confirmed commit of this step/phase: next phase with `base` = that commit, or `final-review` after the last phase. Clears `accepted`, `active`, fused-review and gate-fix rounds. |

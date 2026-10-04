@@ -387,6 +387,16 @@ def validate(data):
             require(writers.get(name, set()) >= known_families(), "independence waiver needs every family as author: " + name)
         state["independence_waivers"].append(dict(step=auth["step"], phase=auth["phase"], files=auth["files"],
                                                   reviewer_family=auth["reviewer_family"], authorization=data["authorization"]))
+    elif action == "record-author":
+        # A settled writer whose report was rejected still authored bytes: register its observation (with its model
+        # proof) so C5 provenance resolves. More author families only make reviews stricter, never weaker.
+        raw = record(data.get("observation")); require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
+        result = raw["result"]; need(result, ("dispatch", "projection")); d = result["dispatch"]
+        require(d.get("runId") == state["orca_run"] and (result["projection"].get("workspace") or {}).get("id") == state["worktree_id"], "author observation outside this Run and worktree")
+        require(d.get("status") in ("completed", "failed") and result["projection"].get("evidence", {}).get("durable") is True, "author Dispatch is not durably settled", 2)
+        actual_model(result, data["observation"])
+        require(not any(r["path"] == data["observation"]["path"] for r in state["provenance"]), "author already recorded")
+        state["provenance"].append(data["observation"])
     elif action == "record-gate":
         # A green verify-gate needs no worker; its sealed C4 results are the gate evidence.
         require(state["step"] in ("phase", "delivery") and not state["write_ownership"], "script gate outside an unowned phase or delivery candidate")

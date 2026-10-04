@@ -80,6 +80,26 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(rc, 0, result)
         return [self.f.reference(Path(result['run_dir']) / 'result.json')]
 
+    def test_record_author_registers_a_rejected_writer_for_c5_provenance(self):
+        f = self.f
+        # A writer whose report C6 rejected still authored the bytes; its receipt reports no model (Antigravity/Path A).
+        art, coverage = f.package_ref({'OpenAI': ['tracked.txt', 'plan.md'], 'Anthropic': ['tracked.txt']}, start_families=['Anthropic'])
+        author = f.state['provenance'].pop()  # the acceptance that would have recorded it never happened
+        self.assertEqual(f.state['provenance'], [])
+        proposed = f.assignment('review-primary', 'Google'); proposed.update(dispatch_id=None, coverage=coverage)
+        self.no(2, 'unknown actual model family', action='dispatch', proposed=proposed, artifact=art, fleet=f.fleet())
+        foreign = dict(author, path=f.save(dict(read_json(author['path']), result=dict(read_json(author['path'])['result'], dispatch=dict(read_json(author['path'])['result']['dispatch'], runId='other-run'))))['path'])
+        foreign['sha256'] = f.reference(foreign['path'])['sha256']
+        self.no(1, 'outside this Run', action='record-author', observation=foreign)
+        self.ok(action='record-author', observation=author)
+        self.assertEqual(f.state['provenance'], [author])
+        self.no(1, 'author already recorded', action='record-author', observation=author)
+        # With the author registered, the Google reviewer is independent of OpenAI and Anthropic and may be dispatched.
+        self.ok(action='dispatch', proposed=proposed, artifact=art, fleet=f.fleet())
+        anthropic = f.assignment('review-primary', 'Anthropic'); anthropic.update(dispatch_id=None, coverage=coverage)
+        f.state['active'] = None
+        self.no(1, 'same-family review: tracked.txt', action='dispatch', proposed=anthropic, artifact=art, fleet=f.fleet())
+
     def failing_result(self):
         rc, result = self.f.verified_run(code='raise SystemExit(3)')
         self.assertEqual(rc, 3, result)
