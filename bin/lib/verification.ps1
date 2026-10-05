@@ -42,7 +42,8 @@ function V-JsonNumber($value) {
     $d = [double]$value; if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw 'non-finite JSON number' }
     if ($d -eq 0 -and (1 / $d) -lt 0) { return '-0.0' }  # Python repr keeps the sign of negative zero
     # Python float repr: integral values below 1e16 keep ".0"; otherwise the shortest round trip with a 2-digit exponent.
-    if ($d -eq [Math]::Floor($d) -and [Math]::Abs($d) -lt 1e16) { return ([decimal]$d).ToString($culture) + '.0' }
+    # [long] is exact below 1e16 (a [decimal] conversion keeps only 15 significant digits: 1000000000000001.0 would lose one).
+    if ($d -eq [Math]::Floor($d) -and [Math]::Abs($d) -lt 1e16) { return ([long]$d).ToString($culture) + '.0' }
     $r = $d.ToString('R', $culture)
     if ($r -match '^(-?[0-9.]+)E([+-])([0-9]+)$') { $r = $Matches[1] + 'e' + $Matches[2] + ([int]$Matches[3]).ToString('00') }
     return $r

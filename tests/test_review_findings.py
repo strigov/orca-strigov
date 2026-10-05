@@ -629,10 +629,10 @@ class ReviewFindingTests(unittest.TestCase):
     def test_r2_13_canonical_json_vectors(self):
         """Golden canonical bytes both backends must emit: code-point key order (U+10000 after U+E000), -0.0, escapes."""
         f = self.f; src = f.workspace / 'canonical-in.json'; out = f.workspace / 'canonical-out.json'
-        src.write_text('{"\\ue000":1,"\\ud800\\udc00":2,"a":-0.0,"b":[0.1,2.0,1e-05,1e+16],"c":"d\'Artagnan <x> \\u0437"}', encoding='utf-8')
+        src.write_text('{"\\ue000":1,"\\ud800\\udc00":2,"a":-0.0,"b":[0.1,2.0,1e-05,1e+16,1000000000000001.0],"c":"d\'Artagnan <x> \\u0437"}', encoding='utf-8')
         rc, stdout, stderr = f.helper('canonical', src, out)
         self.assertEqual(rc, 0, (stdout, stderr))
-        self.assertEqual(out.read_bytes(), b'{"a":-0.0,"b":[0.1,2.0,1e-05,1e+16],"c":"d\'Artagnan <x> \\u0437","\\ue000":1,"\\ud800\\udc00":2}')
+        self.assertEqual(out.read_bytes(), b'{"a":-0.0,"b":[0.1,2.0,1e-05,1e+16,1000000000000001.0],"c":"d\'Artagnan <x> \\u0437","\\ue000":1,"\\ud800\\udc00":2}')
 
 
 if __name__ == '__main__': unittest.main()
