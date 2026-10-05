@@ -11,7 +11,7 @@ import sys
 
 import verification as v
 from posix_runtime import artifact_path
-from protocol_facts import (Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
+from protocol_facts import (ran, Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
                             plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
                             actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
                             checked, entry, manifest_files, step_base, values, candidate, synthesis)
@@ -347,8 +347,8 @@ def omitted(state, review, finding, cand):
 
 def unresolved(state, cand, decisions):
     """Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering
-    the finding's unit and omitting it (for blocking findings, and for cannot_verify items whose CHECK reproduced the
-    suspected defect and that the ledger accepted to fix, once the candidate changed). A gate failure is identity only: a positive gate on cand supersedes it."""
+    the finding's unit and omitting it (for blocking findings, and for cannot_verify items whose CHECK ran and that the
+    ledger accepted as a defect to fix, once the candidate changed). A gate failure is identity only: a positive gate on cand supersedes it."""
     # Plan-review findings belong to the plan: outside the plan step they resolve against the latest approved plan.
     approved = [r["candidate"] for r in state["accepted"] if (r["role"], r["token"]) == ("plan-reviewer", "APPROVED")]
     plan_cand = approved[-1] if approved and state["step"] != "plan" else cand
@@ -358,13 +358,13 @@ def unresolved(state, cand, decisions):
         for f in r["findings"]:
             item = decisions.get(f["id"], {})
             if item.get("decision") in DECISIONS or (f["kind"] == "cannot_verify" and checked(item, f)): continue
-            # A cannot_verify item whose CHECK asserted a suspected defect and actually reproduced it (the sealed result of
-            # the literal CHECK, matching its EXPECT, recorded as the ledger's `execution_evidence`) and that the ledger
-            # accepted as a defect to fix can never pass its CHECK again. It becomes a fix item: like a blocking finding it
-            # closes when a later round covers its unit without it, on a candidate other than the one it was raised on.
+            # A cannot_verify item whose literal CHECK actually ran (sealed result in the ledger's execution_evidence) and
+            # that the ledger accepted as a defect to fix becomes a fix item: like a blocking finding it closes when a later
+            # round covers its unit without it, on a candidate other than the one it was raised on. Whether the run showed
+            # the defect is the coordinator's and the later independent reviewer's judgement, not parsed from EXPECT prose.
             target = plan_cand if r["role"] == "plan-reviewer" else cand
             confirmed = (f["kind"] == "cannot_verify" and item.get("decision") in ("ACCEPTED", "PARTIALLY_ACCEPTED") and
-                         checked(item, f, "execution_evidence", anywhere=True) and target != r["candidate"])
+                         ran(item, f) and target != r["candidate"])
             if (f["kind"] == "blocking" or confirmed) and omitted(state, r, f, target): continue
             out.append(f["id"])
     return out

@@ -209,7 +209,18 @@ function P-FailureRecords($records,$art,$s) {
   # GATE_FAIL evidence: at least one failure of the candidate that BASE does not explain.
   P-Require ((P-GateRecords $records $art $s).failed -gt 0) 'zero failing checks';return ,$records
 }
-function P-Checked($item,$finding,[string]$key='check',[bool]$anywhere=$false) {
+function P-Ran($item,$finding,[string]$key='execution_evidence') {
+  # The finding's literal CHECK actually ran: the ledger field holds an intact sealed run-check result (absolute path, or
+  # {path, sha256} whose hash must match) of exactly that command. Its outcome is not interpreted here.
+  $ref=V-Get $item $key;$path=if ($ref -is [Collections.IDictionary]) { V-Get $ref 'path' } else { $ref }
+  try {
+    if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false }
+    if ($ref -is [Collections.IDictionary] -and (V-Hash ([IO.File]::ReadAllBytes($path))) -cne (V-Get $ref 'sha256')) { return $false }
+    $result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff))
+  } catch { return $false }
+  return ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result) -and $result.evidence.key.check.command -ceq (V-Get $finding 'check'))
+}
+function P-Checked($item,$finding,[string]$key='check') {
   # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command that exited with the code
   # its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against the
   # sealed stdout; other text after the exit code is the human-checked part (existing `exit 0; stdout — …` reports).
@@ -221,12 +232,7 @@ function P-Checked($item,$finding,[string]$key='check',[bool]$anywhere=$false) {
     $result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff))
   } catch { return $false }
   if (-not ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result))) { return $false }
-  # $anywhere takes the first `exit <n>` in a prose EXPECT (reproduction evidence of a suspected defect).
-  # Reproduction evidence reads only an affirmative statement: `exit <n> …` or `On <context>, exit <n> …`, with no
-  # negation in the prefix or right after the code ("must not exit 0" is never a confirmed reproduction).
-  $pattern=if ($anywhere) { '\A(?:On (?![^,;.]*\b(?:not|never|no)\b)[^,;.]{1,80}, )?exit ([0-9]+)(?![0-9])(?!\s*(?:is|must|should|does|will|may)?\s*(?:not|never)\b)(.*)\z' } else { '\Aexit ([0-9]+)(?![0-9])(.*)\z' }
-  $options=if ($anywhere) { [Text.RegularExpressions.RegexOptions]'Singleline, IgnoreCase' } else { [Text.RegularExpressions.RegexOptions]'Singleline' }
-  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),$pattern,$options)
+  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),'\Aexit ([0-9]+)(?![0-9])(.*)\z','Singleline')
   $code=$result['exit_code']
   if (-not $want.Success -or $result.evidence.key.check.command -cne (V-Get $finding 'check') -or -not ($code -is [int] -or $code -is [long]) -or $code -ne [long]$want.Groups[1].Value) { return $false }
   $stdout=[regex]::Match($want.Groups[2].Value,'\A; stdout (exactly|contains): (.*)\z','Singleline');if (-not $stdout.Success) { return $true }

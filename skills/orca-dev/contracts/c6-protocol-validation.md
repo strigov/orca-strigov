@@ -329,14 +329,14 @@ A finding of an accepted entry is **resolved** when:
   coordinator confirmed when it recorded the result. An `expect` that states no
   exit code cannot be closed by a check. The original candidate's bytes are not
   compared; or
-- it is `blocking`, or it is a `cannot_verify` item whose CHECK asserted a
-  suspected defect and reproduced it — the ledger entry has `decision`
-  `ACCEPTED`/`PARTIALLY_ACCEPTED` and `execution_evidence`: the sealed result of
-  the literal CHECK whose exit code is the one its `expect` affirmatively states
-  (`exit <n> …` or `On <context>, exit <n> …`; a negated statement such as
-  "must not exit 0" never counts) (absolute path or `{path,sha256}`),
-  and the current candidate differs from the one the finding was raised on —
-  and some later round of the same role on the current candidate covers the
+- it is `blocking`, or it is a `cannot_verify` item whose literal CHECK actually
+  ran and that the ledger accepted as a defect to fix — the ledger entry has
+  `decision` `ACCEPTED`/`PARTIALLY_ACCEPTED` and `execution_evidence`: an intact
+  sealed result of exactly the finding's `check` command (absolute path or
+  `{path,sha256}`); C6 does not interpret its outcome or parse `expect` prose,
+  that judgement belongs to the coordinator and the later independent reviewer —
+  and the current candidate differs from the one the finding was raised on, and
+  some later round of the same role on the current candidate covers the
   finding's unit — the file named before `:` in its
   `location` when the original review covered it as a file or in a contract
   side, else the original review's whole coverage — through the files and

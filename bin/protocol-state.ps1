@@ -298,12 +298,12 @@ function P-Unresolved($s,$cand,$decisions) {
     foreach ($f in @($r.findings)) {
       $item=if ($decisions.ContainsKey($f.id)) { $decisions[$f.id] } else { @{} }
       if ((V-Get $item 'decision') -cin $PDecisions -or ($f.kind -ceq 'cannot_verify' -and (P-Checked $item $f))) { continue }
-      # A cannot_verify item whose CHECK asserted a suspected defect and actually reproduced it (the sealed result of the
-      # literal CHECK, matching its EXPECT, recorded as the ledger's execution_evidence) and that the ledger accepted as a
-      # defect to fix can never pass its CHECK again. It becomes a fix item: like a blocking finding it closes when a later
-      # round covers its unit without it, on a candidate other than the one it was raised on.
+      # A cannot_verify item whose literal CHECK actually ran (sealed result in the ledger's execution_evidence) and that
+      # the ledger accepted as a defect to fix becomes a fix item: like a blocking finding it closes when a later round
+      # covers its unit without it, on a candidate other than the one it was raised on. Whether the run showed the defect
+      # is the coordinator's and the later independent reviewer's judgement, not parsed from EXPECT prose.
       $target=if ($r.role -ceq 'plan-reviewer') { $planCand } else { $cand }
-      $confirmed=($f.kind -ceq 'cannot_verify') -and ((V-Get $item 'decision') -cin @('ACCEPTED','PARTIALLY_ACCEPTED')) -and (P-Checked $item $f 'execution_evidence' $true) -and ($target -cne $r.candidate)
+      $confirmed=($f.kind -ceq 'cannot_verify') -and ((V-Get $item 'decision') -cin @('ACCEPTED','PARTIALLY_ACCEPTED')) -and (P-Ran $item $f) -and ($target -cne $r.candidate)
       if ((($f.kind -ceq 'blocking') -or $confirmed) -and (P-Omitted $s $r $f $target)) { continue }
       $out+=$f.id
     }

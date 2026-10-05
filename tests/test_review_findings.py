@@ -505,7 +505,7 @@ class ReviewFindingTests(unittest.TestCase):
         self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
         path, spec = f.verified_spec(code="print('REPRODUCED')")
         cv = dict(id='RC-CV1', kind='cannot_verify', issue='suspected merge defect', location='tracked.txt',
-                  check=spec['command'], expect='On the frozen candidate, exit 0 and final stdout REPRODUCED confirms the suspected defect')
+                  check=spec['command'], expect='exit 0 means the defect was not reproduced; exit 1 confirms reproduction')
         self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
         self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, findings=[cv]), barrier='awaiting_resolution')
         rc, out, err = f.start(path).finish(); self.assertEqual(rc, 0, (out, err))
@@ -534,12 +534,12 @@ class ReviewFindingTests(unittest.TestCase):
         self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(),
                 ledger=decide(decision='ACCEPTED', status='open', execution_evidence=dict(reproduced, sha256='0' * 64)))
         self.ok(action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=confirmed())
-        # Review r9: a negated expectation never reads as a confirmed reproduction (the sealed CHECK exited 0).
-        for prose in ('If the defect reproduces, must not exit 0; exit 1 confirms reproduction.', 'exit 0 must not occur',
-                      'On a candidate that is not fixed, exit 0'):
-            f.state['accepted'] = [dict(r, findings=[dict(x, expect=prose) if x['id'] == 'RC-CV1' else x for x in r['findings']])
-                                   for r in f.state['accepted']]
-            self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=confirmed())
+        # Reviews r9/r10: C6 does not parse EXPECT prose; a sealed result of a DIFFERENT command never counts as the run.
+        other_path, other_spec = f.verified_spec(code="print('something else')")
+        rc, out, err = f.start(other_path).finish(); self.assertEqual(rc, 0, (out, err))
+        other = f.reference(Path(other_spec['run_dir']) / 'result.json')
+        self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(),
+                ledger=decide(decision='ACCEPTED', status='open', execution_evidence=other))
 
     def test_r2_11_legacy_state_rebuilds_plan_authors_without_code_writers(self):
         """An astra-profile Run without plan_authors: an Anthropic frontend contribution does not bar Opus from the plan."""
