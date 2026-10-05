@@ -606,6 +606,8 @@ def main(args):
             raise
     if args[0] == "snapshot":
         s = load(args[1]); save(args[2], snapshot(s["root"], s.get("inputs", []), s.get("exclusions", []))); return 0
+    if args[0] == "canonical":  # the identity bytes of a JSON value (backend parity fixture)
+        Path(args[2]).write_bytes(encoded(load(args[1]))); return 0
     if args[0] == "validate-evidence": return 0 if evidence_valid(load(args[1])) else 1
     if args[0] == "validate-package": return 0 if package_valid(args[1]) else 1
     raise ValueError("unknown verification operation")

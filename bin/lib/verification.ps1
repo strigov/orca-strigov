@@ -36,8 +36,11 @@ function V-JsonString([string]$text) {
 }
 function V-JsonNumber($value) {
   $culture = [Globalization.CultureInfo]::InvariantCulture
+  # Windows PowerShell 5.1 parses JSON fractions as [decimal]; Python sees floats, so serialize them as doubles.
+  if ($value -is [decimal] -and $value.ToString($culture).Contains('.')) { $value = [double]$value }
   if ($value -is [double] -or $value -is [single]) {
     $d = [double]$value; if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw 'non-finite JSON number' }
+    if ($d -eq 0 -and (1 / $d) -lt 0) { return '-0.0' }  # Python repr keeps the sign of negative zero
     # Python float repr: integral values below 1e16 keep ".0"; otherwise the shortest round trip with a 2-digit exponent.
     if ($d -eq [Math]::Floor($d) -and [Math]::Abs($d) -lt 1e16) { return ([decimal]$d).ToString($culture) + '.0' }
     $r = $d.ToString('R', $culture)
@@ -53,7 +56,13 @@ function V-JsonWrite($value, [Text.StringBuilder]$out) {
   if ($value -is [datetime] -or $value -is [datetimeoffset]) { [void]$out.Append((V-JsonString $value.ToString('o', [Globalization.CultureInfo]::InvariantCulture))); return }
   if ($value -is [ValueType]) { [void]$out.Append((V-JsonNumber $value)); return }
   if ($value -is [Collections.IDictionary]) {
-    $keys = [string[]]@($value.Keys); [Array]::Sort($keys, [StringComparer]::Ordinal); [void]$out.Append('{'); $first = $true
+    $keys = [string[]]@($value.Keys); [Array]::Sort($keys, [StringComparer]::Ordinal)
+    if (@($keys | Where-Object { $_ -match '[\uD800-\uDFFF]' }).Count) {
+      # Python sorts by code point; UTF-16 ordinal order differs once a key leaves the BMP. UTF-8 byte order is code-point order.
+      $byCodePoint = [string[]]@($keys | ForEach-Object { -join @($VUtf8.GetBytes($_) | ForEach-Object { $_.ToString('x2') }) })
+      [Array]::Sort($byCodePoint, $keys, [StringComparer]::Ordinal)
+    }
+    [void]$out.Append('{'); $first = $true
     foreach ($key in $keys) { if (-not $first) { [void]$out.Append(',') }; $first = $false; [void]$out.Append((V-JsonString $key)).Append(':'); V-JsonWrite $value[$key] $out }
     [void]$out.Append('}'); return
   }
@@ -599,6 +608,7 @@ if ($MyInvocation.InvocationName -ne '.') {
   try {
     switch ($args[0]) {
       'snapshot' { $s=V-Load $args[1]; V-Save $args[2] (V-Snapshot $s.root (V-Get $s 'inputs' @()) (V-Get $s 'exclusions' @())); exit 0 }
+      'canonical' { [IO.File]::WriteAllBytes($args[2], $VUtf8.GetBytes((V-Json (V-Load $args[1])))); exit 0 }  # identity bytes (parity fixture)
       'validate-evidence' { if (V-EvidenceValid (V-Load $args[1])) { exit 0 }; exit 1 }
       'validate-package' { if (V-PackageValid $args[1]) { exit 0 }; exit 1 }
       'parse' { V-Save $args[2] @(V-Parse $args[1] $args[3] $args[4]); exit 0 }
