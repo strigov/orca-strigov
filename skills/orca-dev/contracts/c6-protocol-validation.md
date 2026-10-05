@@ -52,7 +52,7 @@ accepted report under the pre-upgrade runtime, its package dropped at `advance`)
 is missing from the superset. Only states written before this upgrade can have
 that gap; new states record authorship cumulatively. The two Runs upgraded in
 practice were audited on 2026-10-05 against every package saved in their
-workspaces (p3a-core: 12 packages, p3b-docsvc: 56): every recorded writer family
+workspaces (p3a-core: 6 packages, p3b-docsvc: 28; 12 and 56 package JSON files): every recorded writer family
 of their source files (Google; OpenAI only for the plan file) is inside the
 superset C6 computes for them.
 
