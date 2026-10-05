@@ -125,6 +125,20 @@ def approved_structure(state):
     return None
 
 
+def source_candidate(state):
+    """The repository candidate of the worktree right now (plan file and synthesis excluded)."""
+    now = v.snapshot(state["worktree"], [], [state["workspace"]])
+    require(now["valid"], "unverifiable source capture: " + str(now.get("reason")), 2)
+    return candidate(now["manifest"]["files"], state)
+
+
+def plan_lane(state, assignment):
+    """A plan author edits the plan file only: the source candidate is still the one captured at its dispatch."""
+    if assignment.get("source") is not None:
+        require(source_candidate(state) == assignment["source"],
+                "plan author changed source outside the plan: revert it or re-dispatch the change to an implementer")
+
+
 def plan_reviewed(state):
     """No substantive plan revision awaits its independent plan review (the plan step has its own approval barrier)."""
     return state["plan"] is None or state["step"] == "plan" or state["plan"]["structure"] == state["plan_approved"]
@@ -291,13 +305,16 @@ def omitted(state, review, finding, cand):
 def unresolved(state, cand, decisions):
     """Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering
     the finding's unit and omitting it. A gate failure is identity only: a positive gate on cand supersedes it."""
+    # Plan-review findings belong to the plan: outside the plan step they resolve against the latest approved plan.
+    approved = [r["candidate"] for r in state["accepted"] if (r["role"], r["token"]) == ("plan-reviewer", "APPROVED")]
+    plan_cand = approved[-1] if approved and state["step"] != "plan" else cand
     out = []
     for r in state["accepted"]:
-        if r["role"] == "gate": continue
+        if r["role"] in ("gate", "reopen"): continue
         for f in r["findings"]:
             item = decisions.get(f["id"], {})
             if item.get("decision") in DECISIONS or (f["kind"] == "cannot_verify" and checked(item, f)): continue
-            if f["kind"] == "blocking" and omitted(state, r, f, cand): continue
+            if f["kind"] == "blocking" and omitted(state, r, f, plan_cand if r["role"] == "plan-reviewer" else cand): continue
             out.append(f["id"])
     return out
 
@@ -450,6 +467,7 @@ def accept_report(data, state):
     role = active["role"]
     if role not in WRITE: require(active.get("artifact_id") == art["id"] and active.get("snapshot_id") == art["snapshot_id"], "assigned artifact changed")
     token, findings, coverage = report_fields(text, active, art, payload.get("outcome"), payload.get("filesModified", []))
+    if role in PLAN_AUTHORS: plan_lane(state, active)
     if role in PLAN_AUTHORS and token in WRITTEN:
         require(art["kind"] == "plan" and art["id"] == state["plan"]["sha256"], "plan author must deliver the current plan")
     actual = family(observed)
@@ -512,6 +530,7 @@ def dispatch(data, state):
     if proposed["role"] in REVIEW and proposed["role"] != "plan-reviewer": independent(art, proposed.get("coverage", {}), reviewer, state)
     # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
     proposed.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"], artifact=data.get("artifact"), candidate=art["candidate"])
+    if proposed["role"] in PLAN_AUTHORS: proposed["source"] = source_candidate(state)  # its lane is the plan file
     state["active"] = proposed
     if proposed["role"] in WRITE: state["write_ownership"] = ["pending:" + proposed["task_id"]]
 
@@ -632,6 +651,7 @@ def validate(data):
         # another model and wrote): its dispatch-time capture bounds the attribution, and the intent is resolved by it.
         own = active if active.get("dispatch_id") == d.get("id") or (active.get("dispatch_id") is None and active.get("task_id") == d.get("taskId")) else {}
         planned = own.get("role") in PLAN_AUTHORS or (data.get("artifact") or {}).get("kind") == "plan"
+        if own.get("role") in PLAN_AUTHORS: plan_lane(state, own)
         art = artifact(data.get("artifact"), state, None if planned and data.get("artifact") is None else True)
         state["provenance"].append(data["observation"])
         if planned: state["plan_authors"].append(data["observation"])  # a plan author wrote the plan file
@@ -672,6 +692,14 @@ def validate(data):
         require(state["step"] in ("delivery", "completion") and not any(c["step"] == "completion" for c in state["phase_commits"]),
                 "reopen-final outside delivery or completion")
         fleet_clear(data, state)
+        # The reopening is a bound recovery item R<round>-REOPEN, citing the current capture, so that at the final-review cap
+        # the user's extend-cap can name it (a completion-hook reformat leaves no failing gate to name).
+        art = artifact(data.get("artifact"), state, True); moved = art["candidate"] != state["final_source"]
+        item = dict(id="R%d-REOPEN" % state["rounds"]["final_review"], kind="blocking", location="final-review",
+                    issue="final review reopened" + ("; the source changed after the final checkpoint" if moved else ""))
+        state["accepted"].append(dict(role="reopen", token="REOPENED", round=state["rounds"]["final_review"], phase=state["phase"], step="final-review",
+                                      candidate=art["candidate"], artifact=data["artifact"], findings=[item], coverage={}, family=None,
+                                      report=None, dispatch_id=None, evidence=[]))
         state.update(step="final-review", final_source=None, active=None)
     else: require(action == "resume", "unknown action")
     state["barrier"] = barrier(state, phases, decisions)

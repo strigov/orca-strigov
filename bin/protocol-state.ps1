@@ -56,6 +56,16 @@ function P-ApprovedStructure($s) {
   } catch { }
   return $null
 }
+function P-SourceCandidate($s) {
+  # The repository candidate of the worktree right now (plan file and synthesis excluded).
+  $now=V-Snapshot $s.worktree @() @($s.workspace);P-Require $now.valid ('unverifiable source capture: '+$now.reason) 2
+  return P-Candidate $now.manifest.files $s
+}
+function P-PlanLane($s,$assignment) {
+  # A plan author edits the plan file only: the source candidate is still the one captured at its dispatch.
+  $source=V-Get $assignment 'source'
+  if ($null -ne $source) { P-Require ((P-SourceCandidate $s) -ceq $source) 'plan author changed source outside the plan: revert it or re-dispatch the change to an implementer' }
+}
 function P-Upgrade($s) {
   # A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write receipts
   # of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its accepted plan
@@ -240,13 +250,16 @@ function P-Omitted($s,$review,$finding,$cand) {
 function P-Unresolved($s,$cand,$decisions) {
   # Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering the
   # finding's unit and omitting it. A gate failure is identity only: a positive gate on cand supersedes it.
+  # Plan-review findings belong to the plan: outside the plan step they resolve against the latest approved plan.
+  $approved=@(@($s.accepted) | Where-Object { $_.role -ceq 'plan-reviewer' -and $_.token -ceq 'APPROVED' } | ForEach-Object { $_.candidate })
+  $planCand=if ($approved.Count -and $s.step -cne 'plan') { $approved[$approved.Count-1] } else { $cand }
   $out=@()
   foreach ($r in @($s.accepted)) {
-    if ($r.role -ceq 'gate') { continue }
+    if ($r.role -cin @('gate','reopen')) { continue }
     foreach ($f in @($r.findings)) {
       $item=if ($decisions.ContainsKey($f.id)) { $decisions[$f.id] } else { @{} }
       if ((V-Get $item 'decision') -cin $PDecisions -or ($f.kind -ceq 'cannot_verify' -and (P-Checked $item $f))) { continue }
-      if ($f.kind -ceq 'blocking' -and (P-Omitted $s $r $f $cand)) { continue }
+      if ($f.kind -ceq 'blocking' -and (P-Omitted $s $r $f $(if ($r.role -ceq 'plan-reviewer') { $planCand } else { $cand }))) { continue }
       $out+=$f.id
     }
   };return ,$out
@@ -364,6 +377,7 @@ function P-AcceptReport($data,$s) {
   $art=P-Artifact (V-Get $data 'artifact') $s $current;$role=$a.role
   if ($role -cnotin $PWrite) { P-Require ($a.artifact_id -ceq $art.id -and (P-Eq $a.snapshot_id $art.snapshot_id)) 'assigned artifact changed' }
   $fields=P-Report $text $a $art (V-Get $payload 'outcome') (P-List $payload 'filesModified')
+  if ($role -cin $PPlanAuthors) { P-PlanLane $s $a }
   if ($role -cin $PPlanAuthors -and $fields.token -cin $PWritten) { P-Require ($art.kind -ceq 'plan' -and $art.id -ceq $s.plan.sha256) 'plan author must deliver the current plan' }
   $family=P-Family $o
   if ($role -cin $PReview -and $role -cne 'plan-reviewer') { P-Independent $art $fields.coverage $family $s }
@@ -417,7 +431,9 @@ function P-Dispatch($data,$s) {
   }
   if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art (V-Get $p 'coverage' @{}) $family $s }
   # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
-  $p['artifact_id']=$art.id;$p['snapshot_id']=$art.snapshot_id;$p['artifact']=V-Get $data 'artifact';$p['candidate']=$art.candidate;$s.active=$p
+  $p['artifact_id']=$art.id;$p['snapshot_id']=$art.snapshot_id;$p['artifact']=V-Get $data 'artifact';$p['candidate']=$art.candidate
+  if ($p.role -cin $PPlanAuthors) { $p['source']=P-SourceCandidate $s }  # its lane is the plan file
+  $s.active=$p
   if ($p.role -cin $PWrite) { $s.write_ownership=@('pending:'+$p.task_id) }
 }
 function P-UserRecord($data,$s,[string[]]$keys,[string[]]$where,[string]$label) {
@@ -524,6 +540,7 @@ function P-Validate($data) {
       $a=$s.active;$own=@{}
       if ($null -ne $a -and ((V-Get $a 'dispatch_id') -ceq $d.id -or ($null -eq (V-Get $a 'dispatch_id') -and (V-Get $a 'task_id') -ceq $d.taskId))) { $own=$a }
       $planned=(V-Get $own 'role') -cin $PPlanAuthors -or (V-Get (V-Get $data 'artifact' @{}) 'kind') -ceq 'plan'
+      if ((V-Get $own 'role') -cin $PPlanAuthors) { P-PlanLane $s $own }
       $art=P-Artifact (V-Get $data 'artifact') $s $(if ($planned -and $null -eq (V-Get $data 'artifact')) { $null } else { $true })
       $s.provenance=@(@($s.provenance)+,$data.observation)
       if ($planned) { $s.plan_authors=@(@($s.plan_authors)+,$data.observation) }  # a plan author wrote the plan file
@@ -563,7 +580,14 @@ function P-Validate($data) {
       # A defect found in delivery or by the completion hook goes back to the final review: delivery acceptance is
       # dropped; findings, authorship, commits and the final-review round count stay.
       P-Require ($s.step -cin @('delivery','completion') -and -not @(@($s.phase_commits) | Where-Object { $_.step -ceq 'completion' }).Count) 'reopen-final outside delivery or completion'
-      [void](P-Fleet $data $s);$s.step='final-review';$s.final_source=$null;$s.active=$null
+      [void](P-Fleet $data $s)
+      # The reopening is a bound recovery item R<round>-REOPEN, citing the current capture, so that at the final-review cap
+      # the user's extend-cap can name it (a completion-hook reformat leaves no failing gate to name).
+      $art=P-Artifact (V-Get $data 'artifact') $s $true;$moved=$art.candidate -cne $s.final_source;$n=$s.rounds.final_review
+      $item=[ordered]@{id=('R'+$n+'-REOPEN');kind='blocking';location='final-review';issue=('final review reopened'+$(if ($moved) { '; the source changed after the final checkpoint' } else { '' }))}
+      $s.accepted=@(@($s.accepted)+,([ordered]@{role='reopen';token='REOPENED';round=$n;phase=$s.phase;step='final-review';candidate=$art.candidate;artifact=$data.artifact
+        findings=@($item);coverage=@{};family=$null;report=$null;dispatch_id=$null;evidence=@()}))
+      $s.step='final-review';$s.final_source=$null;$s.active=$null
     }
     default { P-Require ($action -ceq 'resume') 'unknown action' }
   }

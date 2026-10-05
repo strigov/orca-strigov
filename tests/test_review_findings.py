@@ -403,7 +403,7 @@ class ReviewFindingTests(unittest.TestCase):
         self.no(1, 'reopen-final outside delivery or completion', action='reopen-final', fleet=f.fleet())
         self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
         self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
-        self.ok(action='reopen-final', fleet=f.fleet(), barrier='awaiting_final_review')
+        self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref(), barrier='awaiting_final_review')
         self.assertEqual((f.state['step'], f.state['final_source'], f.state['rounds']['final_review']), ('final-review', None, 1))
         self.stage('delivery repair\n')
         repaired, coverage = f.package_ref()
@@ -619,7 +619,7 @@ class ReviewFindingTests(unittest.TestCase):
         for n in (1, 2): self.worker('review-final', 'Google', assigned=final, coverage=coverage, round=n)
         self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
         self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
-        self.ok(action='reopen-final', fleet=f.fleet(), barrier='awaiting_final_review')
+        self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref(), barrier='awaiting_final_review')
         again = lambda n: dict(self.assignment('review-final', 'Google', round=n), coverage=coverage)
         self.no(1, 'substantive review needs a new round', action='dispatch', proposed=again(2), artifact=final, fleet=f.fleet())
         self.no(1, 'round cap/sequence: final_review', action='dispatch', proposed=again(3), artifact=final, fleet=f.fleet())
@@ -642,6 +642,18 @@ class ReviewFindingTests(unittest.TestCase):
         data = f.report_input('plan-reviser', family, token='REVISED', artifact=f.plan_artifact(), round=round)
         data['plan'] = f.plan_ref()
         return data
+
+    def test_r3_1_a_plan_author_editing_source_is_rejected(self):
+        f = self.f; reviser = self.assignment('plan-reviser', 'Anthropic')
+        self.ok(action='dispatch', proposed=reviser, artifact=f.plan_artifact(), fleet=f.fleet())
+        self.ok(action='bind-dispatch', observation=f.observation(dict(reviser, dispatch_id='D-reviser'), 'running'))
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan with an example.'), encoding='utf-8')
+        self.write('tracked.txt', 'the reviser also fixed the example source\n')
+        data = f.report_input('plan-reviser', 'Anthropic', token='REVISED', artifact=f.plan_artifact(), assignment=f.state['active'])
+        data['plan'] = f.plan_ref()
+        self.no(1, 'plan author changed source outside the plan: revert it or re-dispatch the change to an implementer', data)
+        self.write('tracked.txt', 'candidate\n')
+        self.ok(data, barrier='awaiting_plan_review')
 
     def test_r3_2_partial_legacy_history_keeps_a_file_unknown(self):
         """OpenAI writes the producer in F1; Google changes it in F2; only F2's package survives the upgrade."""
@@ -679,6 +691,33 @@ class ReviewFindingTests(unittest.TestCase):
         self.ok(f.report_input('plan-reviewer', 'Google', artifact=f.plan_artifact()))
         self.legacy()
         self.ok(barrier='awaiting_commit')
+
+    def test_r3_4_a_mid_phase_plan_finding_closes_on_the_approved_revision(self):
+        f = self.f; art, _ = self.phase_ready()
+        self.ok(self.revise('Anthropic', 'Fixture plan A'))
+        p1 = dict(blocking('P1-B1', location='plan.md'), criterion='scope')
+        self.ok(f.report_input('plan-reviewer', 'OpenAI', token='CHANGES_REQUESTED', artifact=f.plan_artifact(), findings=[p1]))
+        self.ok(self.revise('Anthropic', 'Fixture plan B', round=2))
+        self.ok(f.report_input('plan-reviewer', 'OpenAI', artifact=f.plan_artifact(), round=2), barrier='awaiting_commit')
+        f.git.git('add', 'plan.md')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+
+    def test_r3_5_completion_hook_change_at_the_cap_is_extendable(self):
+        f = self.f; phase = self.to_final_review()
+        final, coverage = f.package_ref()
+        for n in (1, 2): self.worker('review-final', 'Google', assigned=final, coverage=coverage, round=n)
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.ok(action='record-gate', artifact=f.snapshot_ref(), evidence=self.passing_evidence())
+        self.ok(action='finish-checkpoint', artifact=f.snapshot_ref(), fleet=f.fleet(), barrier='awaiting_completion_commit')
+        self.stage('reformatted by the completion hook\n')  # the hook succeeded; nothing failed
+        self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref(), barrier='awaiting_final_review')
+        self.assertEqual([x['id'] for x in f.state['accepted'][-1]['findings']], ['R2-REOPEN'])
+        hooked, coverage = f.package_ref()
+        again = dict(self.assignment('review-final', 'Google', round=3), coverage=coverage)
+        self.no(1, 'round cap/sequence: final_review', action='dispatch', proposed=again, artifact=hooked, fleet=f.fleet())
+        self.ok(action='extend-cap', authorization=f.save(dict(schema_version=1, run_id='fixture-run', phase='F1', group='final_review',
+                extra_rounds=1, findings=['R2-REOPEN'], user_decision='Review the hook reformat once more.')))
+        self.ok(action='dispatch', proposed=again, artifact=hooked, fleet=f.fleet())
 
     def test_r3_6_legacy_checkpoint_keeps_its_consumed_rounds(self):
         f = self.f; self.to_final_review()
