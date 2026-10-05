@@ -31,35 +31,18 @@ function P-Plan($s) {
   if ($null -ne $s.phase) { $p=@($facts.phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and $p[0].base -ceq $s.base) 'phase/base mismatch' }
   return ,$facts.phases
 }
-function P-ReceiptTime($path,$sha) {
-  # When Orca created a write receipt's Dispatch (UTC seconds), or $null when the receipt does not say.
-  try { return P-UtcSeconds (P-Record @{path=$path;sha256=$sha}).result.dispatch.createdAt } catch { return $null }
-}
-function P-Within($t,$window) {
-  return ($null -ne $t -and ($null -eq $window[0] -or $t -gt $window[0]) -and ($null -eq $window[1] -or $t -le $window[1]))
-}
-function P-ChangeWindows($s) {
-  # This Run's change sets in order: each confirmed phase/final-fix/quickfix commit and the uncommitted change, with the
-  # window its writers were dispatched in, (previous commit time, this commit time] (the plan commit opens it).
-  $out=New-Object Collections.ArrayList;$start=$null
-  foreach ($c in @($s.phase_commits)) {
-    $t=[long](V-GitText $s.worktree @('log','-1','--format=%ct',$c.sha))
-    if ($c.step -cin @('phase','final-review','quickfix')) { [void]$out.Add(@{rev=@($c.base,$c.sha);window=@($start,$t)}) }
-    $start=$t
+function P-LegacySuperset($s) {
+  # Every model family an older state can name as a writer of this Run: its writer observations in provenance and the
+  # write rows of every package it still references. An observation whose family cannot be read counts as every family.
+  $families=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+  foreach ($ref in @($s.provenance)) {
+    try { [void]$families.Add((P-Family (P-Record $ref).result $ref)) } catch { foreach ($f in (P-KnownFamilies)) { [void]$families.Add($f) } }
   }
-  [void]$out.Add(@{rev=@('HEAD');window=@($start,$null)});return ,@($out)
-}
-function P-MissingPhases($s,$rows) {
-  # For every rebuilt path, the change windows that changed it and that no surviving write row was dispatched in:
-  # several receipts of one phase never stand in for another phase.
-  $out=V-Map;if (-not @($rows.Keys).Count) { return ,$out }
-  foreach ($cs in (P-ChangeWindows $s)) {
-    foreach ($x in @(V-Nul (V-Git $s.worktree (@('diff','--no-ext-diff','--name-only','-z')+$cs.rev+@('--')+@(@($rows.Keys) | Sort-Object -CaseSensitive))))) {
-      $covered=@(foreach ($r in @($rows[$x])) { if (P-Within (P-ReceiptTime $r[0] $r[1]) $cs.window) { $true } })
-      if (-not $covered.Count) { $out[$x]=@(@($out[$x] | Where-Object { $null -ne $_ })+,@($cs.window)) }
-    }
+  foreach ($r in @($s.accepted)) {
+    if ((V-Get (V-Get $r 'artifact' @{}) 'kind') -cne 'package') { continue }
+    try { $writers=P-Authors @{manifest=(P-Record $r.artifact)} @($s.provenance);foreach ($k in @($writers.Keys)) { foreach ($f in @($writers[$k])) { [void]$families.Add($f) } } } catch { continue }
   }
-  return ,$out
+  return ,@($families)
 }
 function P-ApprovedStructure($s) {
   # The plan structure an older state can prove approved: its latest accepted plan-reviewer APPROVED (unless a plan
@@ -78,11 +61,16 @@ function P-ApprovedStructure($s) {
   } catch { }
   return $null
 }
-function P-SourceCandidate($s) {
-  # The repository candidate of the worktree right now (plan file and synthesis excluded).
+function P-SourceCapture($s) {
+  # The repository entries of the worktree right now (plan file and synthesis excluded) and their candidate digest.
   $now=V-Snapshot $s.worktree @() @($s.workspace);P-Require $now.valid ('unverifiable source capture: '+$now.reason) 2
-  return P-Candidate $now.manifest.files $s
+  $skip=@(P-PlanName $s)+@((P-Synthesis $s).Keys);$entries=V-Map
+  foreach ($k in @($now.manifest.files.Keys)) {
+    $x=$now.manifest.files[$k];if ($k.StartsWith('repo:',[StringComparison]::Ordinal) -and $x.type -cne 'missing' -and $k.Substring(5) -cnotin $skip) { $entries[$k.Substring(5)]=P-Entry $x }
+  }
+  return @{candidate=(P-Candidate $now.manifest.files $s);entries=$entries}
 }
+function P-SourceCandidate($s) { return (P-SourceCapture $s).candidate }
 function P-PlanLane($s,$assignment) {
   # A plan author edits the plan file only: the source candidate is still the one captured at its dispatch.
   $source=V-Get $assignment 'source'
@@ -91,11 +79,12 @@ function P-PlanLane($s,$assignment) {
 function P-Upgrade($s) {
   # A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write receipts
   # of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its accepted plan
-  # writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer independent. A rebuilt
-  # file whose distinct write receipts are fewer than the phases that changed it stays in authors_incomplete. Consumed
-  # final-review rounds and the approved plan structure are rebuilt only from evidence the state holds.
+  # writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer independent.
+  # Legacy rule: a file committed in an earlier phase (plan_base..the current phase's base; every phase in the final steps)
+  # gets the superset of every writer family the state can name (P-LegacySuperset): it only makes independence stricter.
+  # Consumed final-review rounds and the approved plan structure are rebuilt only from evidence the state holds.
   if (-not $s.Contains('authors') -or $null -eq (V-Get $s 'plan_authors')) {
-    $name=P-PlanName $s;$rebuilt=V-Map;$rows=V-Map;$planRefs=New-Object Collections.ArrayList;$observed=V-Map
+    $name=P-PlanName $s;$rebuilt=V-Map;$planRefs=New-Object Collections.ArrayList;$observed=V-Map
     foreach ($ref in @($s.provenance)) { try { $observed[(P-Record $ref).result.dispatch.id]=$ref } catch { } }
     $addPlan={ param($ref) if ($ref.path -cnotin @($planRefs | ForEach-Object { $_.path })) { [void]$planRefs.Add($ref) } }
     foreach ($r in @($s.accepted)) {
@@ -104,7 +93,6 @@ function P-Upgrade($s) {
       try { $m=P-Record $r.artifact;$writers=P-Authors @{manifest=$m} @($s.provenance) } catch { continue }
       foreach ($path in @($writers.Keys)) { if ($path -cne $name) { $rebuilt[$path]=@(@(@($rebuilt[$path] | Where-Object { $null -ne $_ })+@($writers[$path])) | Sort-Object -Unique -CaseSensitive) } }
       foreach ($w in (P-List $m.provenance 'writes')) {
-        foreach ($x in @($w.files)) { if (-not $rows.Contains($x)) { $rows[$x]=@() };if (-not @($rows[$x] | Where-Object { $_[0] -ceq $w.receipt_path }).Count) { $rows[$x]=@($rows[$x])+,@($w.receipt_path,$w.receipt_sha256) } }
         if ($name -cin @($w.files)) {
           $known=@(@($s.provenance) | Where-Object { $_.path -ceq $w.receipt_path -and $_.sha256 -ceq $w.receipt_sha256 })
           & $addPlan $(if ($known.Count) { $known[0] } else { [ordered]@{path=$w.receipt_path;sha256=$w.receipt_sha256} })
@@ -112,13 +100,17 @@ function P-Upgrade($s) {
       }
     }
     if (-not $s.Contains('authors')) {
+      $end=if ($s.step -cin @('plan','phase','quickfix')) { $s.base } else { 'HEAD' }
+      $earlier=@(V-Nul (V-Git $s.worktree @('diff','--no-ext-diff','--name-only','-z',$s.plan_base,$end,'--')) | Where-Object { $_ -cne $name })
+      if ($earlier.Count) {
+        $superset=P-LegacySuperset $s
+        foreach ($x in $earlier) { $rebuilt[$x]=@(@(@($rebuilt[$x] | Where-Object { $null -ne $_ })+@($superset)) | Sort-Object -Unique -CaseSensitive) }
+      }
       $sorted=V-Map;foreach ($k in @($rebuilt.Keys | Sort-Object -CaseSensitive)) { $sorted[$k]=$rebuilt[$k] };$s['authors']=$sorted
-      $keep=V-Map;foreach ($k in @($rebuilt.Keys)) { $keep[$k]=if ($rows.Contains($k)) { ,$rows[$k] } else { ,@() } }  # keep pairs nested
-      $s['authors_incomplete']=P-MissingPhases $s $keep
     }
     if ($null -eq (V-Get $s 'plan_authors')) { $s['plan_authors']=@($planRefs) }
   }
-  if (-not $s.Contains('authors_incomplete')) { $s['authors_incomplete']=V-Map }
+  if ($s.Contains('authors_incomplete')) { $s.Remove('authors_incomplete') }  # a round-4/5 development field; no installed version wrote it
   if (-not $s.Contains('attempts')) {
     # The final-review rounds counted so far are consumed: after a checkpoint, and conservatively in final-review too (an
     # older runtime may have reopened it). There the rebuilt R<round>-REOPEN identity lets the user extend the cap.
@@ -230,13 +222,6 @@ function P-Independent($art,$coverage,$family,$s) {
   $sides=@(foreach ($c in (P-List $coverage 'contracts')) { foreach ($side in 'producer','consumer') { foreach ($p in (P-List $c $side)) { if ($p -cnotin $changed -and $p -cne $plan) { $p } } } })
   $sides=@($sides | Select-Object -Unique)
   $earlier=if ($sides.Count) { @(V-Nul (V-Git $s.worktree (@('diff','--no-ext-diff','--name-only','-z',$s.plan_base,'--')+$sides))) } else { @() }
-  $declared=V-Map
-  foreach ($w in (P-List $m.provenance 'writes')) { $t=P-ReceiptTime $w.receipt_path $w.receipt_sha256;foreach ($x in @($w.files)) { $declared[$x]=@(@($declared[$x] | Where-Object { $null -ne $_ })+@($t)) } }
-  foreach ($name in @(@($files)+@($sides) | Select-Object -Unique)) {
-    # An older state's rebuilt author set misses these phases: the package declares a writer dispatched in each.
-    $windows=@(if ($s.authors_incomplete.Contains($name)) { $s.authors_incomplete[$name] })  # one [start,end] per element
-    foreach ($window in $windows) { P-Require (@(foreach ($t in @($declared[$name])) { if (P-Within $t $window) { $true } }).Count) ('unknown actual author: '+$name) 2 }
-  }
   foreach ($c in (P-List $coverage 'contracts')) {
     $match=@($m.coverage.contracts | Where-Object { $_.id -ceq (V-Get $c 'id') });P-Require ($match.Count -eq 1) 'unknown coverage contract'
     foreach ($side in 'producer','consumer') {

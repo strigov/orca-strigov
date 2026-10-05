@@ -479,7 +479,7 @@ class ProtocolFixture(VerificationFixture):
         plan = None if self.quickfix else self.plan_ref()
         # A Run that reached a phase had its plan approved in the plan step: the approved structure is the current one.
         return dict(schema_version=2, mode='quickfix' if self.quickfix else 'plan', plan=plan,
-                    plan_approved=plan and plan['structure'], attempts=[], authors_incomplete={},
+                    plan_approved=plan and plan['structure'], attempts=[],
                     ledger_path=None, orca_run='fixture-run', plan_base=self.git.base, phase=None if self.quickfix else 'F1',
                     base=self.git.base, step='quickfix' if self.quickfix else 'phase', worktree=str(self.git.root),
                     worktree_id='fixture-worktree', workspace=str(self.workspace), active=None,

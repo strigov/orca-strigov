@@ -517,7 +517,7 @@ class TransitionTests(unittest.TestCase):
         rc, text, err = command(f.argv('protocol-state', 'migrate', source['path'], out), f.git.root)
         self.assertEqual(rc, 0, (text, err))
         migrated = read_json(out)
-        rebuilt = ('plan_authors', 'authors', 'authors_incomplete', 'attempts', 'plan_approved')  # the first validate rebuilds them
+        rebuilt = ('plan_authors', 'authors', 'attempts', 'plan_approved')  # the first validate rebuilds them
         skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier') + rebuilt
         self.assertEqual({k: migrated[k] for k in state if k not in skip}, {k: state[k] for k in state if k not in skip})
         self.assertFalse(set(rebuilt) & set(migrated))

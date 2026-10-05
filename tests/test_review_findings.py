@@ -470,7 +470,7 @@ class ReviewFindingTests(unittest.TestCase):
 
     def legacy(self, *keys):
         """The state shape of the live Runs, written before authors/plan_authors/attempts/plan_approved existed."""
-        for key in keys or ('authors', 'plan_authors', 'authors_incomplete', 'attempts', 'plan_approved'): self.f.state.pop(key, None)
+        for key in keys or ('authors', 'plan_authors', 'attempts', 'plan_approved'): self.f.state.pop(key, None)
 
     def test_r2_10_free_text_expect_is_checked_by_its_exit_code(self):
         """p3b F3R2-CV1: `exit 0; stdout — <prose>` with a sealed result already recorded as verified-by-controller."""
@@ -655,34 +655,6 @@ class ReviewFindingTests(unittest.TestCase):
         self.write('tracked.txt', 'candidate\n')
         self.ok(data, barrier='awaiting_plan_review')
 
-    def test_r3_2_partial_legacy_history_keeps_a_file_unknown(self):
-        """OpenAI writes the producer in F1; Google changes it in F2; only F2's package survives the upgrade."""
-        f = self.f; base = f.git.base; self.baseline_tracked()
-        f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md')
-        f.state['plan'] = f.plan_ref(); f.state['plan_approved'] = f.state['plan']['structure']
-        self.worker('implementer', 'OpenAI', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 1\n'), barrier='awaiting_gate')
-        art, coverage = f.package_ref(families={'OpenAI': ['producer.ts', 'plan.md']})
-        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
-        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
-        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
-        f1 = f.git_commit('feat(F1): producer')
-        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=f1, base=base), fleet=f.fleet())
-        self.ok(action='advance')
-        f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
-        self.ok(plan=f.plan_ref())
-        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 2\n'), barrier='awaiting_gate')
-        art, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], '2100-01-01 00:00:00')])
-        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
-        self.legacy('authors', 'plan_authors', 'authors_incomplete')
-        self.ok()
-        self.assertEqual(f.state['authors'], {'producer.ts': ['Google']})
-        self.assertEqual([(k, len(v)) for k, v in f.state['authors_incomplete'].items()], [('producer.ts', 1)])  # F1's window
-        astra = lambda a, c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
-        self.no(2, 'unknown actual author: producer.ts', action='dispatch', proposed=astra(art, coverage), artifact=art, fleet=f.fleet())
-        # Declaring the earlier phase's writer too makes the history complete, and then OpenAI is its author.
-        full, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], '2100-01-01 00:00:00'), ('OpenAI', ['producer.ts'], '2000-01-01 00:00:00')])
-        self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(full, coverage), artifact=full, fleet=f.fleet())
-
     def test_r3_3_upgrade_keeps_an_unreviewed_revision_pending(self):
         f = self.f; self.phase_ready()
         self.ok(self.revise('Anthropic', 'Fixture plan, split'))
@@ -732,39 +704,6 @@ class ReviewFindingTests(unittest.TestCase):
                 proposed=dict(self.assignment('review-final', 'Google', round=2), coverage=coverage))
 
     # == Round-4 review (Astra xhigh) =============================================================================
-    def two_phase_producer(self, f2_rows):
-        """OpenAI writes producer.ts in F1 (committed); in F2 Google changes it; F2's package is reviewed, then the state
-        is written back in the live Runs' older shape. f2_rows: the F2 package's write rows."""
-        f = self.f; base = f.git.base; self.baseline_tracked()
-        f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md')
-        f.state['plan'] = f.plan_ref(); f.state['plan_approved'] = f.state['plan']['structure']
-        self.worker('implementer', 'OpenAI', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 1\n'), barrier='awaiting_gate')
-        art, coverage = f.package_ref(families={'OpenAI': ['producer.ts', 'plan.md']})
-        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
-        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
-        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
-        f1 = f.git_commit('feat(F1): producer')
-        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=f1, base=base), fleet=f.fleet())
-        self.ok(action='advance')
-        f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
-        self.ok(plan=f.plan_ref())
-        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 2\n'), barrier='awaiting_gate')
-        art, coverage = f.package_ref(rows=f2_rows)
-        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
-        self.legacy('authors', 'plan_authors', 'authors_incomplete')
-        self.ok()
-        return art, coverage
-
-    def test_r4_1_receipts_of_one_phase_never_stand_in_for_another(self):
-        """Google changed the producer twice in F2 (two receipts); F1's OpenAI writer left no surviving package row."""
-        f = self.f; later = ('2100-01-01 00:00:00', '2100-01-02 00:00:00')
-        art, coverage = self.two_phase_producer([('Google', ['producer.ts', 'plan.md'], later[0]), ('Google', ['producer.ts'], later[1])])
-        astra = lambda c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
-        self.no(2, 'unknown actual author: producer.ts', action='dispatch', proposed=astra(coverage), artifact=art, fleet=f.fleet())
-        # A row dispatched in F1's window accounts for that phase: OpenAI is then a known author.
-        full, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], later[0]), ('OpenAI', ['producer.ts'], '2000-01-01 00:00:00')])
-        self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(coverage), artifact=full, fleet=f.fleet())
-
     def test_r4_2_reconcile_keeps_a_plan_author_intent_that_edited_source(self):
         f = self.f; reviser = self.assignment('plan-reviser', 'Anthropic')
         self.ok(action='dispatch', proposed=reviser, artifact=f.plan_artifact(), fleet=f.fleet(), barrier='awaiting_writer')
@@ -816,6 +755,62 @@ class ReviewFindingTests(unittest.TestCase):
         f.plan.write_text(f.plan.read_text().replace('split.', 'split again.'), encoding='utf-8')
         f.state['plan'] = f.plan_ref()
         self.no(1, 'prior plan approval does not apply', prior_plan_approval_state=prior)
+
+    # == Round-5 review: the legacy superset rule ===================================================================
+    def legacy_producer(self, f1_writers, f2_rows):
+        """F1: f1_writers change producer.ts in turn (committed). F2: Google changes it again; F2's package (rows) is
+        reviewed, then the state is written back in the live Runs' older shape (no cumulative authors)."""
+        f = self.f; base = f.git.base; self.baseline_tracked()
+        f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md')
+        f.state['plan'] = f.plan_ref(); f.state['plan_approved'] = f.state['plan']['structure']
+        for n, family in enumerate(f1_writers):
+            self.worker('implementer', family, assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = %d\n' % n))
+        art, coverage = f.package_ref(families={w: ['producer.ts', 'plan.md'] for w in f1_writers})
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.ok(f.report_input('review-control', 'Anthropic', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
+        f1 = f.git_commit('feat(F1): producer')
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=f1, base=base), fleet=f.fleet())
+        self.ok(action='advance')
+        f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
+        self.ok(plan=f.plan_ref())
+        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=lambda: (self.write('producer.ts', 'export const p = 9\n'),
+                    self.writer('fresh.ts', 'export const fresh = 1\n')())[1], barrier='awaiting_gate')
+        art, coverage = f.package_ref(rows=f2_rows)
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.legacy('authors', 'plan_authors')
+        self.ok()
+        return art, coverage
+
+    def test_r5_1_legacy_earlier_files_get_every_named_family(self):
+        """Review r5 finding 1: OpenAI and Google change the producer in F1, Google again in F2; the surviving package
+        lists a Google receipt from each phase and omits OpenAI. The OpenAI reviewer must be rejected."""
+        f = self.f
+        art, coverage = self.legacy_producer(['OpenAI', 'Google'], [('Google', ['producer.ts', 'fresh.ts', 'plan.md'], '2100-01-01 00:00:00'),
+                                                                   ('Google', ['producer.ts'], '2000-01-01 00:00:00')])
+        self.assertEqual(f.state['authors']['producer.ts'], ['Google', 'OpenAI'])  # every writer family the state names
+        self.assertEqual(f.state['authors']['fresh.ts'], ['Google'])  # touched only in the current phase: the package rule
+        self.assertNotIn('authors_incomplete', f.state)
+        astra = lambda c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
+        self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(coverage), artifact=art, fleet=f.fleet())
+        self.ok(action='dispatch', proposed=astra(dict(files=['fresh.ts'], parts=coverage['parts'], contracts=[])), artifact=art, fleet=f.fleet())
+
+    def test_r5_2_legacy_rule_does_not_read_timestamps(self):
+        """Review r5 finding 2: receipt times skewed against the commit times decide nothing any more."""
+        f = self.f
+        art, coverage = self.legacy_producer(['OpenAI'], [('Google', ['producer.ts', 'fresh.ts', 'plan.md'], '2000-01-01 00:00:00'),
+                                                         ('Google', ['producer.ts'], '2000-01-02 00:00:00')])
+        self.no(1, 'same-family review: producer.ts', action='dispatch', artifact=art, fleet=f.fleet(),
+                proposed=dict(self.assignment('review-control', 'OpenAI'), coverage=coverage))
+
+    def test_r5_4_a_stray_authors_incomplete_value_is_dropped(self):
+        """Review r5 finding 4: a development build saved {'tracked.txt': 2}; the upgrade drops it, reviews still work."""
+        f = self.f
+        self.ok(f.report_input('implementer'))
+        f.state['authors_incomplete'] = {'tracked.txt': 2}
+        art, coverage = f.package_ref()
+        self.ok(action='dispatch', proposed=dict(self.assignment('review-primary', 'Anthropic'), coverage=coverage), artifact=art, fleet=f.fleet())
+        self.assertNotIn('authors_incomplete', f.state)
 
 
 if __name__ == '__main__': unittest.main()

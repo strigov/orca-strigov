@@ -14,7 +14,7 @@ from posix_runtime import artifact_path
 from protocol_facts import (Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
                             plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
                             actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
-                            checked, entry, manifest_files, step_base, values, candidate, utc_seconds)
+                            checked, entry, manifest_files, step_base, values, candidate, synthesis)
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["REVIEW_OK"], "review-control": ["REVIEW_OK"],
@@ -30,7 +30,7 @@ KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base"
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")
 # Added after the first schema 2 states; a state without them is upgraded once by upgrade().
-DEFAULTS = {"plan_authors": [], "authors": {}, "authors_incomplete": {}, "attempts": [], "plan_approved": None}
+DEFAULTS = {"plan_authors": [], "authors": {}, "attempts": [], "plan_approved": None}
 PLAN_ROLES = PLAN_AUTHORS + ("plan-reviewer", "diagnosis")  # may run while a plan revision awaits its review
 
 
@@ -52,49 +52,33 @@ def plan_facts(state):
     return facts["phases"]
 
 
-def receipt_time(path, sha256):
-    """When Orca created a write receipt's Dispatch (UTC seconds), or None when the receipt does not say."""
-    try: return utc_seconds(record(dict(path=path, sha256=sha256))["result"]["dispatch"].get("createdAt"))
-    except (Rejected, OSError, ValueError, KeyError, TypeError): return None
-
-
-def within(t, window):
-    return t is not None and (window[0] is None or t > window[0]) and (window[1] is None or t <= window[1])
-
-
-def change_windows(state):
-    """This Run's change sets in order: each confirmed phase/final-fix/quickfix commit and the uncommitted change, with
-    the window its writers were dispatched in, (previous commit time, this commit time] (the plan commit opens it)."""
-    out = []; start = None
-    for c in state["phase_commits"]:
-        t = int(v.text_git(state["worktree"], "log", "-1", "--format=%ct", c["sha"]))
-        if c["step"] in ("phase", "final-review", "quickfix"): out.append(((c["base"], c["sha"]), [start, t]))
-        start = t
-    return out + [(("HEAD",), [start, None])]
-
-
-def missing_phases(state, rows):
-    """For every rebuilt path, the change windows that changed it and that no surviving write row was dispatched in:
-    several receipts of one phase never stand in for another phase."""
-    if not rows: return {}
-    out = {}
-    for rev, window in change_windows(state):
-        diff = v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", *rev, "--", *sorted(rows)).decode("utf-8")
-        for x in (y for y in diff.split("\0") if y):
-            if not any(within(receipt_time(*r), window) for r in rows[x]): out.setdefault(x, []).append(window)
-    return {x: out[x] for x in sorted(out)}
+def legacy_superset(state):
+    """Every model family an older state can name as a writer of this Run: its writer observations in provenance and the
+    write rows of every package it still references. An observation whose family cannot be read counts as every family."""
+    families = set()
+    for ref in state["provenance"]:
+        try: families.add(family(record(ref)["result"], ref))
+        except (Rejected, OSError, ValueError, KeyError, TypeError): families |= known_families()
+    for r in state["accepted"]:
+        if (r.get("artifact") or {}).get("kind") != "package": continue
+        try:
+            for fams in authors(dict(manifest=record(r["artifact"])), state["provenance"]).values(): families |= fams
+        except (Rejected, OSError, ValueError, KeyError, TypeError): continue
+    return families
 
 
 def upgrade(state):
     """A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write
     receipts of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its
     accepted plan writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer
-    independent (see independent and plan_independent). A rebuilt file needs, for every phase that changed it, a
-    surviving write row dispatched in that phase's window; authors_incomplete keeps each missing window until a
-    reviewed package declares a writer from it. Consumed final-review rounds and the approved plan structure are
-    rebuilt only from evidence the state holds."""
+    independent (see independent and plan_independent).
+    Legacy rule: a file committed in an earlier phase of the Run (plan_base..the current phase's base; every phase in
+    the final steps) gets the conservative superset of every writer family the state can name (legacy_superset). It
+    only over-approximates, so independence only gets stricter; a file no family may review goes through
+    waive-independence. Files touched only in the current phase follow the package and record-author rules. Consumed
+    final-review rounds and the approved plan structure are rebuilt only from evidence the state holds."""
     if "authors" not in state or state.get("plan_authors") is None:
-        name = plan_name(state); rebuilt = {}; rows = {}; plan_refs = []; observed = {}
+        name = plan_name(state); rebuilt = {}; plan_refs = []; observed = {}
         for ref in state["provenance"]:
             try: observed[record(ref)["result"]["dispatch"]["id"]] = ref
             except (Rejected, OSError, ValueError, KeyError, TypeError): pass
@@ -109,15 +93,18 @@ def upgrade(state):
             for path, families in writers.items():
                 if path != name: rebuilt.setdefault(path, set()).update(families)
             for w in m["provenance"].get("writes", []):
-                for path in w["files"]: rows.setdefault(path, set()).add((w["receipt_path"], w["receipt_sha256"]))
                 if name in w["files"]:
                     plan_author(next((x for x in state["provenance"] if x["path"] == w["receipt_path"] and x["sha256"] == w["receipt_sha256"]),
                                      dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
         if "authors" not in state:
+            end = state["base"] if state["step"] in ("plan", "phase", "quickfix") else "HEAD"
+            earlier = [x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], end, "--").decode("utf-8").split("\0")
+                       if x and x != name]
+            superset = legacy_superset(state) if earlier else set()
+            for x in earlier: rebuilt.setdefault(x, set()).update(superset)
             state["authors"] = {path: sorted(f) for path, f in sorted(rebuilt.items())}
-            state["authors_incomplete"] = missing_phases(state, {x: rows.get(x, set()) for x in rebuilt})
         if state.get("plan_authors") is None: state["plan_authors"] = plan_refs
-    state.setdefault("authors_incomplete", {})
+    state.pop("authors_incomplete", None)  # a round-4/5 development field; no installed version wrote it
     if "attempts" not in state:
         # The final-review rounds counted so far are consumed: after a checkpoint, and conservatively in final-review too
         # (an older runtime may have reopened it). There the rebuilt R<round>-REOPEN identity lets the user extend the cap.
@@ -150,11 +137,17 @@ def approved_structure(state):
     return None
 
 
-def source_candidate(state):
-    """The repository candidate of the worktree right now (plan file and synthesis excluded)."""
+def source_capture(state):
+    """The repository entries of the worktree right now (plan file and synthesis excluded) and their candidate digest."""
     now = v.snapshot(state["worktree"], [], [state["workspace"]])
     require(now["valid"], "unverifiable source capture: " + str(now.get("reason")), 2)
-    return candidate(now["manifest"]["files"], state)
+    skip = {plan_name(state)} | set(synthesis(state))
+    entries = {k[5:]: entry(x) for k, x in now["manifest"]["files"].items() if k.startswith("repo:") and x["type"] != "missing" and k[5:] not in skip}
+    return candidate(now["manifest"]["files"], state), entries
+
+
+def source_candidate(state):
+    return source_capture(state)[0]
 
 
 def plan_lane(state, assignment):
@@ -286,14 +279,6 @@ def independent(art, coverage, reviewer, state):
     contracts = {c["id"]: c for c in m["coverage"]["contracts"]}
     sides = sorted({p for c in coverage.get("contracts", []) for side in ("producer", "consumer") for p in c.get(side, [])} - changed - {plan_name(state)})
     earlier = set(x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], "--", *sides).decode("utf-8").split("\0") if x) if sides else set()
-    declared = {}
-    for w in m["provenance"].get("writes", []):
-        t = receipt_time(w["receipt_path"], w["receipt_sha256"])
-        for x in w["files"]: declared.setdefault(x, []).append(t)
-    for name in set(coverage.get("files", [])) | set(sides):
-        # An older state's rebuilt author set misses these phases: the package declares a writer dispatched in each.
-        for window in state["authors_incomplete"].get(name, []):
-            require(any(within(t, window) for t in declared.get(name, [])), "unknown actual author: " + name, 2)
     for c in coverage.get("contracts", []):
         require(c.get("id") in contracts, "unknown coverage contract")
         for side in ("producer", "consumer"):
