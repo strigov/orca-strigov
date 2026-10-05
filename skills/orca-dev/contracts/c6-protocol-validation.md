@@ -95,7 +95,7 @@ only the ledger path.
 {"schema_version":2,"mode":"plan|quickfix","plan":{"path","sha256","structure"}|null,"ledger_path":null,
  "orca_run","plan_base","phase","base","step","worktree","worktree_id","workspace",
  "active":null,"rounds":{"plan_review":0,"fused_review":0,"final_review":0,"gate_fix":0},
- "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"attempts":[],
+ "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"authors_incomplete":{},"attempts":[],
  "plan_approved":null,"accepted":[],"write_ownership":[],"phase_commits":[],"final_source":null,
  "processed_messages":[],"used_fleet_ids":[],"barrier":"..."}
 ```
@@ -126,13 +126,23 @@ only the ledger path.
 - `plan_approved`: the plan structure digest of the latest independent plan
   approval. When `plan.structure` differs (a substantive revision after the plan
   step) the plan review is pending (see Plan reference).
+- `authors_incomplete`: `{path: phases}` for an upgraded older state: files
+  whose rebuilt author set came from fewer distinct write receipts than the
+  phases that changed them (its phase commits since `plan_base` plus the
+  uncommitted change). Such a file is `unknown actual author` for any review
+  whose package declares fewer distinct write receipts for it than that count.
 - **Older states.** A state written before these fields existed is upgraded on
-  its first validate, from what it holds: `authors` from the validated write
-  receipts of the C5 packages its accepted reviews used; `plan_authors` from its
-  accepted plan-writer/plan-reviser entries (their `provenance` observations)
-  and from those package writes that touched the plan file; `attempts` empty;
-  `plan_approved` = the current structure once past the plan step. Nothing
-  rebuilt stays unknown, never independent.
+  its first validate, only from evidence it holds: `authors` from the validated
+  write receipts of the C5 packages its accepted reviews used (with
+  `authors_incomplete` as above); `plan_authors` from its accepted
+  plan-writer/plan-reviser entries (their `provenance` observations) and from
+  those package writes that touched the plan file; `attempts` = one consumed
+  final-review attempt per counted round when it is in `delivery` or
+  `completion`, else empty; `plan_approved` = the structure of its latest
+  accepted plan-reviewer APPROVED artifact when no plan author's entry came
+  later, else the plan-only commit's plan when no plan author's entry remains,
+  else none (the revision awaits its plan review). Nothing rebuilt stays unknown,
+  never independent or approved.
 - `active` also keeps the dispatch-time `artifact` reference and `candidate`:
   they bound what that writer authored and prove an unbound launch wrote nothing.
 - `final_source`: the candidate the final review accepted (set by
@@ -155,6 +165,12 @@ author do not require the live file to equal `state.plan`, and the fresh author
 is assigned the accepted bytes (a workspace copy, `artifact kind:plan`). Every
 other transition still requires the accepted bytes: after a failed or abandoned
 attempt, either accept a fresh author's report or restore the accepted copy.
+
+**Plan author's lane.** A plan writer or reviser edits the plan file only: its
+dispatch captures the repository candidate (`active.source`), and its
+`accept-report` (or `record-author`) rejects any change to it with `plan author
+changed source outside the plan: revert it or re-dispatch the change to an
+implementer`; nothing is attributed silently.
 
 **Pending plan review.** An accepted plan-writer/plan-reviser report that
 changes the plan structure after the plan step (a mid-phase revision) sets the
@@ -193,7 +209,8 @@ review. A Git executable-bit change after acceptance is a new candidate.
 Canonical JSON is `json.dumps(value, ensure_ascii=True, sort_keys=True,
 separators=(",", ":"))` on both backends (PowerShell writes the same bytes:
 non-ASCII and DEL as lowercase `\uXXXX`, keys in Unicode code-point order also
-beyond the BMP, Python float repr including `-0.0`); JSON object keys and model
+beyond the BMP, Python float repr including `-0.0` and exact integral values
+below 1e16 such as `1000000000000001.0`); JSON object keys and model
 ids are compared case-sensitively on both. `verification canonical IN OUT`
 writes those bytes (parity fixture).
 
@@ -221,7 +238,7 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 | `record-gate` | Current `artifact`, `evidence` (sealed C4 `result.json` references of one verify-gate run) and optional `verdict` (`GATE_OK` default, or `GATE_FAIL`) in the phase, final-review or delivery step with no writer. GATE_OK: at least one pass, every failure a proven BASE inheritance; it resets the consecutive gate-fix count. GATE_FAIL: at least one failure BASE does not explain; the entry carries the finding `G<r>-B1` (r = `rounds.gate_fix + 1`) that a gate-fix cap extension can name. |
 | `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported, and the current `artifact` (a plan author may omit it before the plan exists): its bytes still carry its family. Required before anything replaces a bound writer that settled without an accepted report. Appends the reference to `provenance`; a plan author (the active plan-writer/reviser, or any author given with a `kind:plan` artifact) goes to `plan_authors`, any other writer's family is recorded in `authors` for the paths it changed (its own window when it is the active assignment or the Dispatch of its still unbound Task, else everything changed since the step base). The Dispatch of the active unbound Task (a launch that started with another model and wrote) also clears that intent. More author families only make reviews stricter; approvals that lose independence stop counting at readiness. |
 | `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed without writing: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate. A launch that wrote is registered with `record-author` instead, which clears the intent without reverting its changes. |
-| `reopen-final` | `fleet`, in `delivery` or `completion` before the completion commit: a defect found in delivery or a completion-hook source repair returns to `final-review`. Clears `final_source`; keeps `accepted` findings (so a delivery gate failure stays nameable), commits, authorship, the final-review round count and the consumed final-review `attempts`: the next final review needs a new round, and at the cap the user's `extend-cap` naming the recorded failure (`G<r>-B1`). |
+| `reopen-final` | `fleet`, in `delivery` or `completion` before the completion commit: a defect found in delivery or a completion-hook source repair returns to `final-review`. Clears `final_source`; keeps `accepted` findings (so a delivery gate failure stays nameable), commits, authorship, the final-review round count and the consumed final-review `attempts`: the next final review needs a new round. Takes the current `artifact` and registers the bound recovery item `R<round>-REOPEN` (an entry of role `reopen` citing that capture; its issue says whether the source changed after the final checkpoint), which the user's `extend-cap` can name at the cap — also when a completion hook reformatted source and nothing failed. |
 | `prepare-commit` | `fleet`, current `artifact`; the candidate is ready and nothing is unstaged. Records nothing. |
 | `confirm-commit` | `fleet`, the accepted `artifact`, `commit:{sha,base}`. Readiness plus the commit check; records the commit once (a repeat confirms the same commit idempotently). Steps `plan`, `phase`, `quickfix`, `final-review` (final-fix commit: a gate on the fixed bytes plus the final review). |
 | `advance` | After a confirmed commit of this step/phase: next phase with `base` = that commit, or `final-review` after the last phase. Clears `accepted`, `active`, fused-review and gate-fix rounds. |
@@ -287,10 +304,14 @@ A finding of an accepted entry is **resolved** when:
   `location` when the original review covered it as a file or in a contract
   side, else the original review's whole coverage — through the files and
   contract sides of its non-BLOCKED reports, none of which lists the id. A later
-  partial reviewer that did not cover the unit resolves nothing.
+  partial reviewer that did not cover the unit resolves nothing. A plan-review
+  finding belongs to the plan: outside the plan step it is matched against the
+  latest accepted plan-reviewer APPROVED plan, not the source candidate (a
+  mid-phase revision blocked on A, revised to B and approved closes normally).
 
-A gate entry's finding (`G<r>-B1`) is an identity for cap extensions only: a
-positive gate on the current candidate supersedes it.
+A gate entry's finding (`G<r>-B1`) and a reopening's `R<round>-REOPEN` are
+identities for cap extensions only: a positive gate, and the next final review,
+supersede them.
 
 The ledger is a JSON array of objects with unique string `id`; C6 reads nothing
 else from it. A candidate is **ready** for the step's commit or checkpoint when
