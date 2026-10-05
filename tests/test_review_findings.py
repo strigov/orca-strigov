@@ -794,6 +794,28 @@ class ReviewFindingTests(unittest.TestCase):
                 extra_rounds=1, findings=['R2-REOPEN'], user_decision='One more final review after the reopening.')))
         self.ok(action='dispatch', proposed=again(3), artifact=final, fleet=f.fleet())
 
+    def test_r4_4_prior_plan_approval_state_restores_only_the_approval(self):
+        f = self.f; art, _ = self.phase_ready()
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan, split.'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'OpenAI', token='REVISED', artifact=f.plan_artifact())
+        revised['plan'] = f.plan_ref()
+        self.ok(revised, barrier='awaiting_plan_review')
+        self.ok(f.report_input('plan-reviewer', 'Anthropic', artifact=f.plan_artifact()), barrier='awaiting_commit')
+        prior = f.save(copy.deepcopy(f.state))
+        # The approval left the state (an advance cleared it under the older runtime); the upgrade cannot prove it.
+        f.state['accepted'] = [r for r in f.state['accepted'] if not r['role'].startswith('plan')]
+        self.legacy('plan_approved')
+        rounds = copy.deepcopy(f.state['rounds'])
+        self.ok(barrier='awaiting_plan_review')
+        other = f.save(dict(read_json(prior['path']), orca_run='another-run'))
+        self.no(1, 'prior plan approval does not apply', prior_plan_approval_state=other)
+        self.ok(prior_plan_approval_state=prior, barrier='awaiting_commit')
+        self.assertEqual((f.state['rounds'], f.state['plan_approval_evidence']), (rounds, prior))
+        # An approval of another structure, or by a plan author's family, never transfers.
+        f.state['plan_approved'] = None
+        f.plan.write_text(f.plan.read_text().replace('split.', 'split again.'), encoding='utf-8')
+        f.state['plan'] = f.plan_ref()
+        self.no(1, 'prior plan approval does not apply', prior_plan_approval_state=prior)
 
 
 if __name__ == '__main__': unittest.main()

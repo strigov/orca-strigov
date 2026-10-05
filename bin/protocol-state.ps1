@@ -132,6 +132,28 @@ function P-Upgrade($s) {
   }
   if (-not $s.Contains('plan_approved')) { $s['plan_approved']=P-ApprovedStructure $s }
 }
+function P-ImportPlanApproval($data,$s) {
+  # resume with prior_plan_approval_state: an earlier saved state of this Run whose accepted, independent plan approval
+  # is of the current plan structure restores plan_approved (and its evidence reference) only.
+  $refspec=V-Get $data 'prior_plan_approval_state';if ($null -eq $refspec) { return }
+  $check={ param($ok,$why) if (-not $ok) { P-Require $false ('prior plan approval does not apply: '+$why) } }
+  & $check ($data.action -ceq 'resume' -and $null -ne $s.plan) 'only resume of a plan Run imports a prior approval'
+  $obj=P-Record $refspec;$prior=if ($obj -is [Collections.IDictionary] -and $obj.Contains('action')) { $obj.state } else { $obj }
+  & $check ($prior -is [Collections.IDictionary] -and (V-Get $prior 'schema_version') -eq 2 -and (V-Get $prior 'accepted') -is [Array]) 'not a schema 2 state'
+  & $check ((V-Get $prior 'orca_run') -ceq $s.orca_run -and (V-Get $prior 'worktree') -ceq $s.worktree -and (V-Get $prior 'plan_base') -ceq $s.plan_base -and
+    (V-Get (V-Get $prior 'plan' @{}) 'path') -ceq $s.plan.path) 'another Run, worktree, plan path or plan_base'
+  & $check (P-Subset @(V-Get $prior 'processed_messages' @()) @($s.processed_messages)) 'not an earlier state of this Run'
+  $rows=@($prior.accepted);$last=-1;for ($i=0;$i -lt $rows.Count;$i++) { if ($rows[$i].role -ceq 'plan-reviewer' -and $rows[$i].token -ceq 'APPROVED') { $last=$i } }
+  & $check ($last -ge 0) 'it holds no accepted plan-reviewer APPROVED'
+  $e=$rows[$last];& $check (-not @($rows | Select-Object -Skip ($last+1) | Where-Object { $_.role -cin $PPlanAuthors }).Count) "a plan author's entry follows the approval"
+  $art=V-Get $e 'artifact' @{};& $check ((V-Get $art 'kind') -ceq 'plan' -and $e.candidate -ceq (V-Get $art 'sha256')) 'the approval is not of a plan artifact'
+  $text=P-Ref $e.report;$b=P-Line $text 'BINDING'
+  & $check (($text -split '\n')[0] -ceq 'APPROVED' -and $b.run_id -ceq $s.orca_run -and $b.role -ceq 'plan-reviewer' -and $b.dispatch_id -ceq $e.dispatch_id -and
+    $b.round -eq $e.round -and $b.artifact_id -ceq $art.sha256) 'its report binding differs from the entry'
+  & $check ((P-PlanRead (P-Ref $art)).shape -ceq $s.plan.structure) 'the approved structure is not the current plan'
+  try { P-PlanIndependent $s $e.family } catch { if (-not $_.Exception.Data.Contains('code')) { throw };$x=New-Object InvalidOperationException(('prior plan approval does not apply: '+$_.Exception.Message));$x.Data['code']=$_.Exception.Data['code'];throw $x }
+  $s['plan_approved']=$s.plan.structure;$s['plan_approval_evidence']=$refspec
+}
 function P-PlanReviewed($s) {
   # No substantive plan revision awaits its independent plan review (the plan step has its own approval barrier).
   return ($null -eq $s.plan -or $s.step -ceq 'plan' -or $s.plan.structure -ceq $s.plan_approved)
@@ -492,6 +514,7 @@ function P-Validate($data) {
   # Only the live file may be a draft: an accepted plan reference that fails its own checks is never tolerated.
   $phases=if ($draft -and (P-Drafted $s)) { @() } else { P-Plan $s }
   foreach ($key in $PCaps.Keys) { $n=$s.rounds[$key];P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le (P-Cap $s $key)) ('round cap: '+$key) }
+  P-ImportPlanApproval $data $s
   if ($action -cin @('prepare-commit','confirm-commit','advance','finish-checkpoint','complete')) { P-Require (P-PlanReviewed $s) 'plan revision awaits an independent plan review' }
   switch -CaseSensitive ($action) {
     'accept-report' { $decision=P-AcceptReport $data $s }

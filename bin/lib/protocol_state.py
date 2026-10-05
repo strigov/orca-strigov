@@ -164,6 +164,34 @@ def plan_lane(state, assignment):
                 "plan author changed source outside the plan: revert it or attribute it with record-author (route further source work to an implementer)")
 
 
+def import_plan_approval(data, state):
+    """resume with prior_plan_approval_state: an earlier saved state of this Run whose accepted, independent plan
+    approval is of the current plan structure restores plan_approved (and its evidence reference) only."""
+    refspec = data.get("prior_plan_approval_state")
+    if refspec is None: return
+    def check(ok, why):
+        if not ok: raise Rejected("prior plan approval does not apply: " + why)
+    check(data["action"] == "resume" and state["plan"] is not None, "only resume of a plan Run imports a prior approval")
+    obj = record(refspec); prior = obj.get("state") if isinstance(obj, dict) and "action" in obj else obj
+    check(isinstance(prior, dict) and prior.get("schema_version") == 2 and isinstance(prior.get("accepted"), list), "not a schema 2 state")
+    check(all(prior.get(k) == state[k] for k in ("orca_run", "worktree", "plan_base")) and (prior.get("plan") or {}).get("path") == state["plan"]["path"],
+          "another Run, worktree, plan path or plan_base")
+    check(set(prior.get("processed_messages") or []) <= set(state["processed_messages"]), "not an earlier state of this Run")
+    rows = prior["accepted"]; approvals = [i for i, r in enumerate(rows) if (r.get("role"), r.get("token")) == ("plan-reviewer", "APPROVED")]
+    check(approvals, "it holds no accepted plan-reviewer APPROVED")
+    e = rows[approvals[-1]]
+    check(not any(r.get("role") in PLAN_AUTHORS for r in rows[approvals[-1] + 1:]), "a plan author's entry follows the approval")
+    art = e.get("artifact") or {}
+    check(art.get("kind") == "plan" and e.get("candidate") == art.get("sha256"), "the approval is not of a plan artifact")
+    text = ref(e["report"]); b = line_json(text, "BINDING")
+    check(text.splitlines()[0] == "APPROVED" and (b.get("run_id"), b.get("role"), b.get("dispatch_id"), b.get("round"), b.get("artifact_id")) ==
+          (state["orca_run"], "plan-reviewer", e.get("dispatch_id"), e.get("round"), art["sha256"]), "its report binding differs from the entry")
+    check(plan_read(ref(art))["shape"] == state["plan"]["structure"], "the approved structure is not the current plan")
+    try: plan_independent(state, e.get("family"))
+    except Rejected as x: raise Rejected("prior plan approval does not apply: " + str(x), x.code)
+    state.update(plan_approved=state["plan"]["structure"], plan_approval_evidence=refspec)
+
+
 def plan_reviewed(state):
     """No substantive plan revision awaits its independent plan review (the plan step has its own approval barrier)."""
     return state["plan"] is None or state["step"] == "plan" or state["plan"]["structure"] == state["plan_approved"]
@@ -596,6 +624,7 @@ def validate(data):
     phases = [] if draft and drafted(state) else plan_facts(state)
     for key in CAPS:
         require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap(state, key), "round cap: " + key)
+    import_plan_approval(data, state)
     if action in ("prepare-commit", "confirm-commit", "advance", "finish-checkpoint", "complete"):
         require(plan_reviewed(state), "plan revision awaits an independent plan review")
     if action == "accept-report": decision = accept_report(data, state)
