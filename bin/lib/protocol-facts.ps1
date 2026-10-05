@@ -137,6 +137,8 @@ function P-Candidate($files,$s) {
 function P-Fresh($s,$art) {
   $now=V-Snapshot $s.worktree @() @($art.exclusions)
   P-Require ($now.valid -and (P-Candidate $now.manifest.files $s) -ceq $art.candidate) 'stale artifact: the working tree is no longer this candidate'
+  # A synthesizer assignment replaces the frozen synthesis: its own dispatch and acceptance do not re-check the old bytes.
+  if ((V-Get $s.active 'role') -ceq 'synthesizer') { return $now }
   $synthesis=P-Synthesis $s
   foreach ($path in @($synthesis.Keys)) { $x=V-Get $now.manifest.files ('repo:'+$path);P-Require ($null -ne $x -and (P-Entry $x) -ceq $synthesis[$path]) ('stale synthesis: '+$path) }
   return $now

@@ -95,6 +95,10 @@ class ReviewFindingTests(unittest.TestCase):
                    projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=False), liveness=dict(verdict='live')))
         self.no(2, 'live or unverifiable prior writer', action='dispatch', proposed=fallback, artifact=f.snapshot_ref(), fleet=f.fleet([row]))
         settled = dict(row, dispatchStatus='failed', projection=dict(row['projection'], evidence=dict(durable=True)))
+        # Settled without an accepted report: its family is recorded before anything replaces it (round-2 finding 2).
+        self.no(2, 'writer D-live settled without an accepted report: record-author it first', action='dispatch', proposed=fallback,
+                artifact=f.snapshot_ref(), fleet=f.fleet([settled]))
+        self.ok(action='record-author', observation=f.observation(dict(first, dispatch_id='D-live'), 'failed'), artifact=f.snapshot_ref())
         self.ok(action='dispatch', proposed=fallback, artifact=f.snapshot_ref(), fleet=f.fleet([settled]), barrier='awaiting_writer')
 
     # -- 2: a range package reviews the committed tree, from the step base ------------------
@@ -241,7 +245,8 @@ class ReviewFindingTests(unittest.TestCase):
         bad = f.report_input('plan-reviser', 'Anthropic', token='DONE', artifact=f.plan_artifact(), round=2, assignment=f.state['active'])
         bad['plan'] = f.plan_ref()
         self.no(1, 'format: role verdict', bad)
-        # Recovery: a fresh reviser Task on the accepted plan; the draft is the author's working copy.
+        # Recovery: register the settled reviser, then a fresh reviser Task on the accepted plan; the draft is its working copy.
+        self.ok(action='record-author', observation=f.observation(dict(first, dispatch_id='D-reviser-1')))
         second = self.assignment('plan-reviser', 'Anthropic', round=2)
         self.ok(action='dispatch', proposed=second, artifact=accepted, fleet=f.fleet([dict(
             dispatchId='D-reviser-1', taskId=first['task_id'], dispatchStatus='completed', terminalState='retained', resource=None,
@@ -451,7 +456,7 @@ class ReviewFindingTests(unittest.TestCase):
         self.ok(action='record-author', observation=f.observation(a), artifact=f.snapshot_ref())
 
 
-    # == Round-2 review (Astra xhigh) ==
+    # == Round-2 review (Astra xhigh) =============================================================================
     def rebase_on(self, name, text):
         """Commit one file as an earlier phase of this Run (after plan_base) and make that commit the phase base."""
         f = self.f; self.write(name, text)
@@ -519,6 +524,108 @@ class ReviewFindingTests(unittest.TestCase):
         art, coverage = f.package_ref(families={'Google': ['tracked.txt', 'plan.md', 'lib/earlier.ts']}, contracts=sides)
         self.ok(action='dispatch', proposed=review('Anthropic', coverage), artifact=art, fleet=f.fleet())
 
+    def test_r2_02_settled_writer_is_attributed_before_its_replacement(self):
+        f = self.f; self.baseline_tracked()
+        claude = self.assignment('frontend-implementer', 'Anthropic')
+        self.ok(action='dispatch', proposed=claude, artifact=f.snapshot_ref(), fleet=f.fleet())
+        self.ok(action='bind-dispatch', observation=f.observation(dict(claude, dispatch_id='D-claude'), 'running'))
+        self.write('ui.tsx', 'export const ui = 1\n')
+        self.no(1, 'format: role verdict', f.report_input('frontend-implementer', 'Anthropic', token='WRONG', artifact=f.snapshot_ref(),
+                                                          assignment=f.state['active']))
+        done = dict(dispatchId='D-claude', taskId=claude['task_id'], dispatchStatus='completed', terminalState='retained', resource=None,
+                    projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='live')))
+        gemini = self.assignment('implementer', 'Google')
+        self.no(2, 'record-author it first', action='dispatch', proposed=gemini, artifact=f.snapshot_ref(), fleet=f.fleet([done]))
+        self.ok(action='record-author', observation=f.observation(dict(claude, dispatch_id='D-claude')), artifact=f.snapshot_ref())
+        self.assertEqual(f.state['authors'], {'ui.tsx': ['Anthropic']})  # exactly its own window
+        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('api.py', 'API = 1\n'), barrier='awaiting_gate')
+        art, coverage = f.package_ref(families={'Google': ['api.py', 'plan.md']})
+        self.no(1, 'same-family review: ui.tsx', action='dispatch', proposed=dict(self.assignment('review-primary', 'Anthropic'), coverage=coverage),
+                artifact=art, fleet=f.fleet())
+
+    def test_r2_02b_record_author_with_a_plan_artifact_records_a_plan_author(self):
+        f = self.f
+        reviser = f.observation(f.assignment('plan-reviser', 'OpenAI'))
+        self.ok(action='record-author', observation=reviser, artifact=f.plan_artifact())
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'OpenAI', artifact=f.plan_artifact()))
+
+    def test_r2_09_a_launch_with_another_model_that_wrote_is_recovered_by_record_author(self):
+        f = self.f; gemini = self.assignment('implementer', 'Google')
+        self.ok(action='dispatch', proposed=gemini, artifact=f.snapshot_ref(), fleet=f.fleet(), barrier='awaiting_writer')
+        # The terminal actually started Luna; it wrote and settled before the coordinator could bind.
+        actual = f.observation(dict(gemini, dispatch_id='D-actual', model=f.model('OpenAI')))
+        self.no(1, 'actual launch differs from proposal', action='bind-dispatch', observation=actual)
+        self.write('tracked.txt', 'written by the actual launch\n')
+        row = dict(dispatchId='D-actual', taskId=gemini['task_id'], dispatchStatus='completed', terminalState='retained', resource=None,
+                   projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='live')))
+        self.no(1, 'the failed launch changed the candidate', action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref())
+        self.ok(action='record-author', observation=actual, artifact=f.snapshot_ref(), barrier='awaiting_implementation')
+        self.assertEqual((f.state['active'], f.state['write_ownership'], f.state['authors']), (None, [], {'tracked.txt': ['OpenAI']}))
+        self.ok(action='dispatch', proposed=self.assignment('implementer', 'Google'), artifact=f.snapshot_ref(), fleet=f.fleet([row]))
+
+    def test_r2_06_mid_phase_plan_revision_awaits_an_independent_plan_review(self):
+        f = self.f; art, _ = self.phase_ready()
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan, split after review.'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'Anthropic', token='REVISED', artifact=f.plan_artifact())
+        revised['plan'] = f.plan_ref()
+        self.ok(revised, barrier='awaiting_plan_review')
+        self.no(1, 'plan revision awaits an independent plan review', action='prepare-commit', artifact=art, fleet=f.fleet())
+        self.no(1, 'plan revision awaits an independent plan review', action='dispatch', proposed=self.assignment('implementer'),
+                artifact=f.snapshot_ref(), fleet=f.fleet())
+        self.ok(f.report_input('plan-reviewer', 'OpenAI', artifact=f.plan_artifact()), barrier='awaiting_commit')
+        f.git.git('add', 'plan.md')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+
+    def test_r2_08_a_contract_side_finding_needs_a_review_of_that_side(self):
+        f = self.f
+        self.rebase_on('producer.py', 'def produce(): return 1\n')
+        self.ok(f.report_input('implementer', 'OpenAI', artifact=self.writer('consumer.py', 'from producer import produce\n')()))
+        sides = [dict(id='C1', producer=['producer.py'], consumer=['consumer.py'])]
+        art, coverage = f.package_ref(families={'OpenAI': ['consumer.py', 'tracked.txt', 'plan.md'], 'Google': ['producer.py']}, contracts=sides)
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        full = dict(coverage, contracts=sides)
+        self.ok(f.report_input('review-primary', 'Anthropic', token='REVIEW_BLOCKING', artifact=art, coverage=full,
+                               findings=[blocking('F1-B1', location='producer.py:9')]))
+        consumer_only = dict(coverage, contracts=[dict(id='C1', producer=[], consumer=['consumer.py'])])
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=consumer_only, round=2))
+        self.ok(f.report_input('review-control', 'Anthropic', artifact=art, coverage=full), barrier='awaiting_resolution')
+        self.no(1, 'unresolved findings: F1-B1', action='prepare-commit', artifact=art, fleet=f.fleet())
+        producer_side = dict(files=[], parts=coverage['parts'], contracts=[dict(id='C1', producer=['producer.py'], consumer=[])])
+        self.ok(f.report_input('review-primary', 'OpenAI', artifact=art, coverage=producer_side, round=2), barrier='awaiting_commit')
+
+    def test_r2_04_synthesis_exception_is_one_markdown_document_only(self):
+        f = self.f; art, coverage = self.phase_ready()
+        synth = lambda name, text, extra=None: self.worker(
+            'synthesizer', 'Google', assigned=f.snapshot_ref(), token='SYNTHESIS_DONE', synthesis=name,
+            deliver=(lambda: (self.write(extra, 'x = 1\n') if extra else None, self.writer(name, text)())[1]))
+        synth('docs/reviews/test_unreviewed.py', 'assert True\n')
+        self.no(1, 'stale artifact', action='prepare-commit', artifact=art, fleet=f.fleet())
+        f.git.git('rm', '-q', '-f', 'docs/reviews/test_unreviewed.py')
+        synth('docs/reviews/fixture-F1.md', '# synthesis\n', extra='docs/reviews/helper.py')
+        self.no(1, 'stale artifact', action='prepare-commit', artifact=art, fleet=f.fleet())
+        f.git.git('rm', '-q', '-f', 'docs/reviews/helper.py', 'docs/reviews/fixture-F1.md')
+        synth('docs/reviews/fixture-F1.md', '# synthesis\n')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+        # A hook rewrote it: the documented recovery is a new synthesis, accepted on the unchanged reviewed candidate.
+        self.write('docs/reviews/fixture-F1.md', '# rewritten by a hook\n')
+        self.no(1, 'stale synthesis', action='prepare-commit', artifact=art, fleet=f.fleet())
+        synth('docs/reviews/fixture-F1.md', '# synthesis, regenerated\n')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+
+    def test_r2_12_reopen_final_at_the_cap_needs_a_new_round(self):
+        f = self.f; self.to_final_review()
+        final, coverage = f.package_ref()
+        for n in (1, 2): self.worker('review-final', 'Google', assigned=final, coverage=coverage, round=n)
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
+        self.ok(action='reopen-final', fleet=f.fleet(), barrier='awaiting_final_review')
+        again = lambda n: dict(self.assignment('review-final', 'Google', round=n), coverage=coverage)
+        self.no(1, 'substantive review needs a new round', action='dispatch', proposed=again(2), artifact=final, fleet=f.fleet())
+        self.no(1, 'round cap/sequence: final_review', action='dispatch', proposed=again(3), artifact=final, fleet=f.fleet())
+        self.ok(action='extend-cap', authorization=f.save(dict(schema_version=1, run_id='fixture-run', phase='F1', group='final_review',
+                extra_rounds=1, findings=['G1-B1'], user_decision='One more final review after the delivery failure.')))
+        self.ok(action='dispatch', proposed=again(3), artifact=final, fleet=f.fleet())
+
     def test_r2_13_canonical_json_vectors(self):
         """Golden canonical bytes both backends must emit: code-point key order (U+10000 after U+E000), -0.0, escapes."""
         f = self.f; src = f.workspace / 'canonical-in.json'; out = f.workspace / 'canonical-out.json'
@@ -526,7 +633,6 @@ class ReviewFindingTests(unittest.TestCase):
         rc, stdout, stderr = f.helper('canonical', src, out)
         self.assertEqual(rc, 0, (stdout, stderr))
         self.assertEqual(out.read_bytes(), b'{"a":-0.0,"b":[0.1,2.0,1e-05,1e+16],"c":"d\'Artagnan <x> \\u0437","\\ue000":1,"\\ud800\\udc00":2}')
-
 
 
 if __name__ == '__main__': unittest.main()

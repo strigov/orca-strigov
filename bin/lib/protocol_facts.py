@@ -190,6 +190,8 @@ def candidate(files, state):
 def fresh(state, art):
     now = v.snapshot(state["worktree"], [], art["exclusions"])
     require(now["valid"] and candidate(now["manifest"]["files"], state) == art["candidate"], "stale artifact: the working tree is no longer this candidate")
+    # A synthesizer assignment replaces the frozen synthesis: its own dispatch and acceptance do not re-check the old bytes.
+    if (state.get("active") or {}).get("role") == "synthesizer": return now
     for path, value in synthesis(state).items():
         x = now["manifest"]["files"].get("repo:" + path)
         require(x is not None and entry(x) == value, "stale synthesis: " + path)

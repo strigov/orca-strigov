@@ -30,7 +30,8 @@ KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base"
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")
 # Added after the first schema 2 states; a state without them is upgraded once by upgrade().
-DEFAULTS = {"plan_authors": [], "authors": {}}
+DEFAULTS = {"plan_authors": [], "authors": {}, "attempts": [], "plan_approved": None}
+PLAN_ROLES = PLAN_AUTHORS + ("plan-reviewer", "diagnosis")  # may run while a plan revision awaits its review
 
 
 def cap(state, group):
@@ -77,6 +78,14 @@ def upgrade(state):
                                      dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
         state.setdefault("authors", {path: sorted(f) for path, f in sorted(rebuilt.items())})
         if state.get("plan_authors") is None: state["plan_authors"] = plan_refs
+    state.setdefault("attempts", [])
+    # A Run past its plan step had its plan structure approved; a revision after that awaits a new plan review.
+    state.setdefault("plan_approved", state["plan"]["structure"] if state["plan"] and state["step"] != "plan" else None)
+
+
+def plan_reviewed(state):
+    """No substantive plan revision awaits its independent plan review (the plan step has its own approval barrier)."""
+    return state["plan"] is None or state["step"] == "plan" or state["plan"]["structure"] == state["plan_approved"]
 
 
 def drafted(state):
@@ -124,8 +133,11 @@ def fleet_clear(data, state):
     must be in it: absence from an inventory taken before that writer started proves nothing."""
     require(not any(x.startswith("pending:") for x in state["write_ownership"]), "unbound writer intent", 2)
     workers, receipt_ids = fleet_workers(data, state["used_fleet_ids"])
-    listed = {w.get("dispatchId") for w in workers}
-    for owner in state["write_ownership"]: require(owner in listed, "recorded writer missing from fleet: " + owner, 2)
+    rows = {w.get("dispatchId"): w for w in workers}
+    for owner in state["write_ownership"]:
+        require(owner in rows, "recorded writer missing from fleet: " + owner, 2)
+        # A bound writer that settled without an accepted report still wrote bytes: its family must be recorded first.
+        require(not settled(rows[owner]), "writer " + owner + " settled without an accepted report: record-author it first", 2)
     ownership = []
     for worker in workers:
         p = worker.get("projection") or {}; workspace = p.get("workspace") or {}
@@ -204,11 +216,17 @@ def attribute(state, paths, author_family):
     for path in sorted(paths): state["authors"][path] = sorted(set(state["authors"].get(path, [])) | {author_family})
 
 
+def covered(review):
+    """Every file a review covered: its file coverage and the files named in its contract sides."""
+    c = review["coverage"]
+    return set(c.get("files", [])) | {p for x in c.get("contracts", []) for side in ("producer", "consumer") for p in x.get(side, [])}
+
+
 def units(finding, review):
-    """The reviewed unit a finding is about: its location's file when that file was covered, else the whole coverage."""
-    files = set(review["coverage"].get("files", []))
+    """The reviewed unit a finding is about: its location's file when that review covered it (as a file or a contract
+    side), else the review's whole coverage."""
     path = str(finding.get("location", "")).split(":")[0].strip()
-    return {path} if path in files else files
+    return {path} if path in covered(review) else covered(review)
 
 
 def omitted(state, review, finding, cand):
@@ -219,7 +237,7 @@ def omitted(state, review, finding, cand):
             later.setdefault(r["round"], []).append(r)
     need_units = units(finding, review)
     return any(all(finding["id"] not in [f["id"] for f in r["findings"]] for r in rows) and
-               need_units <= {p for r in rows for p in r["coverage"].get("files", [])} for rows in later.values())
+               need_units <= {p for r in rows for p in covered(r)} for rows in later.values())
 
 
 def unresolved(state, cand, decisions):
@@ -287,7 +305,8 @@ def gate_finding(state):
 
 def current(state):
     if state["step"] == "plan": return state["plan"]["sha256"]
-    rows = [r for r in state["accepted"] if r["role"] not in ("diagnosis", "synthesizer")]
+    # A mid-phase plan revision and its review are not the source candidate.
+    rows = [r for r in state["accepted"] if r["role"] not in ("diagnosis", "synthesizer") + PLAN_ROLES]
     if not rows or (rows[-1]["role"] in WRITE and rows[-1]["token"] not in WRITTEN): return None
     return rows[-1]["candidate"]
 
@@ -299,6 +318,7 @@ def committed(state):
 def barrier(state, phases, decisions):
     step = state["step"]
     if state["write_ownership"]: return "awaiting_writer"
+    if not plan_reviewed(state): return "awaiting_plan_review"
     if committed(state):
         if step in ("quickfix", "completion"): return "complete"
         return "ready_next_phase" if state["phase"] != (phases[-1]["id"] if phases else None) else "awaiting_final_review"
@@ -391,10 +411,14 @@ def accept_report(data, state):
     if role == "gate" and token == "GATE_FAIL": findings = [gate_finding(state)]
     extra = {}
     if role == "synthesizer" and token == "SYNTHESIS_DONE":
-        # The synthesis summarises the acceptance; its bytes are frozen here and leave the candidate identity.
+        # The synthesis summarises the acceptance: when it is the synthesizer's only change, one Markdown document under
+        # docs/reviews/, its bytes are frozen here and leave the candidate identity. Anything else it wrote stays in the
+        # candidate and needs the gate and reviews like any change.
         path = text.splitlines()[1].strip(); item = (art["files"] or {}).get("repo:" + path)
         require(item is not None and item["type"] == "file", "synthesis path is not in the delivered artifact")
-        extra["synthesis"] = dict(path=path, entry=entry(item))
+        if re.fullmatch(r"docs/reviews/[^/]+\.md", path) and written(state, manifest_files(active.get("artifact")), art) == {path}:
+            extra["synthesis"] = dict(path=path, entry=entry(item))
+    if role == "plan-reviewer" and token == "APPROVED": state["plan_approved"] = state["plan"]["structure"]
     if role in WRITE:
         state["provenance"].append(data["observation"])
         if role in PLAN_AUTHORS:
@@ -419,7 +443,10 @@ def dispatch(data, state):
     require(proposed["task_id"] and proposed["dispatch_id"] is None, "dispatch proposal needs a fresh Task and null not-yet-created Dispatch")
     unplanned = state["plan"] is not None and state["plan"]["sha256"] is None
     require(not unplanned or proposed["role"] == "plan-writer", "only a plan-writer may start before the plan exists")
-    art = artifact(data.get("artifact"), state, None if unplanned and data.get("artifact") is None else True)
+    require(plan_reviewed(state) or proposed["role"] in PLAN_ROLES, "plan revision awaits an independent plan review")
+    # A new synthesizer may replace a synthesis whose frozen bytes changed (its own dispatch does not re-check them).
+    view = dict(state, active=proposed) if proposed["role"] == "synthesizer" else state
+    art = artifact(data.get("artifact"), view, None if unplanned and data.get("artifact") is None else True)
     reviewer = family({"projection": {"provider": {"model": proposed["model"]}}})
     group = {"plan-reviewer": "plan_review", "review-primary": "fused_review", "review-control": "fused_review", "review-final": "final_review"}.get(proposed["role"])
     if proposed.get("gate_fix"): group = "gate_fix"
@@ -431,6 +458,9 @@ def dispatch(data, state):
         # A BLOCKED attempt reviewed nothing: its fresh retry keeps the round.
         require(not any(r["role"] == proposed["role"] and r["round"] == proposed["round"] and r["family"] == reviewer and r["token"] != "BLOCKED"
                         for r in state["accepted"]), "substantive review needs a new round")
+        # After a final checkpoint the consumed final-review rounds stay consumed (reopen-final starts a new round).
+        require(not any(x["role"] == proposed["role"] and x["round"] >= proposed["round"] for x in state["attempts"]),
+                "substantive review needs a new round")
     if proposed["role"] in REVIEW and proposed["role"] != "plan-reviewer": independent(art, proposed.get("coverage", {}), reviewer, state)
     # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
     proposed.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"], artifact=data.get("artifact"), candidate=art["candidate"])
@@ -472,6 +502,8 @@ def validate(data):
     phases = [] if draft and drafted(state) else plan_facts(state)
     for key in CAPS:
         require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap(state, key), "round cap: " + key)
+    if action in ("prepare-commit", "confirm-commit", "advance", "finish-checkpoint", "complete"):
+        require(plan_reviewed(state), "plan revision awaits an independent plan review")
     if action == "accept-report": decision = accept_report(data, state)
     elif action == "dispatch": dispatch(data, state)
     elif action == "bind-dispatch":
@@ -507,6 +539,9 @@ def validate(data):
         art = artifact(data.get("artifact"), state, True)
         if state["step"] == "delivery": require(art["candidate"] == state["final_source"], "delivery covers a different source than the final review")
         ready(state, art["candidate"], decisions)
+        if state["step"] == "final-review":  # the consumed final-review attempts outlive the cleared entries
+            state["attempts"] += [dict(role=r["role"], round=r["round"], family=r["family"]) for r in state["accepted"]
+                                  if r["role"] == "review-final" and r["token"] != "BLOCKED"]
         state.update(final_source=art["candidate"], step="delivery" if state["step"] == "final-review" else "completion", accepted=[], active=None)
     elif action == "complete":
         fleet_clear(data, state)
@@ -544,13 +579,17 @@ def validate(data):
         require(d.get("status") in ("completed", "failed") and result["projection"].get("evidence", {}).get("durable") is True, "author Dispatch is not durably settled", 2)
         author_family = family(result, data["observation"])
         require(not any(r["path"] == data["observation"]["path"] for r in state["provenance"]), "author already recorded")
-        art = artifact(data.get("artifact"), state, True)
+        active = state["active"] or {}
+        # The active assignment's own Dispatch, or the Dispatch of its still unbound Task (a launch that started with
+        # another model and wrote): its dispatch-time capture bounds the attribution, and the intent is resolved by it.
+        own = active if active.get("dispatch_id") == d.get("id") or (active.get("dispatch_id") is None and active.get("task_id") == d.get("taskId")) else {}
+        planned = own.get("role") in PLAN_AUTHORS or (data.get("artifact") or {}).get("kind") == "plan"
+        art = artifact(data.get("artifact"), state, None if planned and data.get("artifact") is None else True)
         state["provenance"].append(data["observation"])
-        own = state["active"] if (state["active"] or {}).get("dispatch_id") == d.get("id") else {}
-        if own.get("role") in PLAN_AUTHORS:
-            if state["plan_authors"] is not None: state["plan_authors"].append(data["observation"])
+        if planned: state["plan_authors"].append(data["observation"])  # a plan author wrote the plan file
         else: attribute(state, written(state, manifest_files(own.get("artifact")), art), author_family)
-        state["write_ownership"] = [x for x in state["write_ownership"] if x != d.get("id")]
+        state["write_ownership"] = [x for x in state["write_ownership"] if x not in (d.get("id"), "pending:" + str(d.get("taskId")))]
+        if own and own.get("dispatch_id") is None: state["active"] = None
     elif action == "record-gate":
         # A verify-gate run needs no worker: its sealed C4 results are the gate evidence. A failing run is recorded too,
         # so its identity G<r>-B1 exists for the user's gate-fix cap extension.
