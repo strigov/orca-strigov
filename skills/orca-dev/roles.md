@@ -64,7 +64,7 @@ The defaults assume Gemini-written code. When the cascade or the frontend route 
 ## Planning profiles
 
 - **`opus` (the only profile, 2026-10-04):** Claude `opus` `xhigh` writes; Claude `opus` `high` revises in the author's terminal (context loss → fresh Opus `high`, announced full handoff); Codex `gpt-6-astra` `xhigh` reviews.
-- **Runs started before 2026-10-04 keep their `astra` profile to the end:** Codex `gpt-6-astra` `xhigh` writes and revises (retained author), Claude `opus` `xhigh` reviews. Switching an Astra-written plan to an Opus reviser would make it authored by both families, leaving no independent plan reviewer. Identify the profile from the accepted plan-writer's actual model in the Run's state (`protocol-state summary`), not from this date.
+- **Runs started before 2026-10-04 keep their `astra` profile to the end:** Codex `gpt-6-astra` `xhigh` writes and revises (retained author), Claude `opus` `xhigh` reviews. Switching an Astra-written plan to an Opus reviser would make it authored by both families, leaving no independent plan reviewer. Identify the profile from the accepted plan-writer's actual model in the Run's state (`protocol-state summary`), not from this date. Plan authorship is the plan writers and revisers only (C6 `plan_authors`): Claude- or OpenAI-written code elsewhere in the Run does not bar a plan reviewer of that family.
 - The `pro` profile is retired: with Opus as the author, an OpenAI plan written by Pro would leave no independent reviewer. `--planner pro` is refused with that explanation; the bridge notes stay in `references/bridge-incidents.md` for history.
 
 State the profile in the Step 1 status line.

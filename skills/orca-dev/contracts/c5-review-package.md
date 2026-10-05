@@ -35,7 +35,12 @@ Unknown authorship does not establish independence. Declared ignored/external
 review inputs enter the snapshot and `declared_inputs` manifest with raw hashes
 and required source inspection; they are not silently lost because Git ignores
 them. Range packages also record both immutable reviewed Git tree identities;
-the working snapshot guards the local frozen review context.
+the working snapshot guards the local frozen review context. The diff of a range
+package shows only the committed `BASE..HEAD`, so C6 accepts it as a candidate
+only when that is all there is: the requested head is the captured and current
+HEAD and the worktree/index carry nothing else (plan bookkeeping aside); dirty
+or newer source needs a `WORKTREE` package. C6 also requires a package to start
+at the step base (the phase base, or `plan_base` for the final review).
 
 Freeze the package for review. Before dispatch and acceptance check the manifest
 identity, all part hashes/ranges and current snapshot using the shared helper's

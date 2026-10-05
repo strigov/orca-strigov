@@ -43,6 +43,6 @@ with human-readable findings. Do not add primary-only SPEC/QUALITY fields as a
 substitute for the control-review contract. Include FINDINGS (including []), COVERAGE, and the human-readable
 BLOCKING/CANNOT_VERIFY/DEFER/NITS sections as applicable. Each control blocker has
 its authorization_relation, why_now, minimal_fix and risk; every cannot_verify
-entry has an executable check and literal expected result. Report package/artifact
+entry has an executable check and literal expected result (`exit <n>`, optionally `; stdout exactly|contains: <text>`). Report package/artifact
 identity and actual coverage, not a claim of blanket approval.
 The common worker contract appended below defines settlement and evidence.

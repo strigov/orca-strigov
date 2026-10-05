@@ -279,7 +279,9 @@ guessed process API. Settled retained terminals do not hold write ownership.
 After task creation, `dispatch` validates the proposed role/model/coverage with
 `dispatch_id:null`. Only after VALID use the existing launch recipe; immediately
 save `worker-show --dispatch <actual-id> --json` and `bind-dispatch`. An unbound
-writer intent stays locked until reconciled. Keep actual writer observations for
+writer intent stays locked until bound or, after a failed launch, cleared with
+`reconcile-intent` (a fresh fleet showing the Task's Dispatches settled, or the
+saved `ok:false` launch receipt when none was created; the tree unchanged). Keep actual writer observations for
 C5 provenance; model family comes from roles.md, including cross-family CLI
 launches. Do not invent missing facts.
 

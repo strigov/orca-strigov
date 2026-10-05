@@ -24,7 +24,8 @@ line 1 repeats the token; 4.1 reports also carry `SPEC:` (line 2) and `QUALITY:`
 
 A review, gate or synthesis worker that could not produce its artifact returns
 the bare token `BLOCKED` with `--outcome failed` and a `## Reason`: one fresh
-re-dispatch of the same role, then escalate to the user.
+re-dispatch of the same role in the same round (C6 does not count a BLOCKED
+review as the round's substantive attempt), then escalate to the user.
 
 C6 `accept-report` exact-matches the subject's leading token (text after `:` or a
 space is ignored), the outcome and report line 1, and checks the BINDING against
@@ -59,7 +60,7 @@ C5 packages never capture it; run it before creating the ledger. Item:
   "forbidden_expansions": [],
   "materiality": "BUILD_BREAK | ACCEPTANCE_CRITERIA | DATA_LOSS | SECURITY | REGRESSION | CONSISTENCY | NICE_TO_HAVE",
   "status": "open | fixed | rejected | deferred | verified-by-controller",
-  "check": "<absolute C4 result.json of a cannot_verify CHECK, only for such items>" }
+  "check": "<absolute C4 result.json of the item's literal CHECK command, only for cannot_verify items>" }
 ```
 
 Fixers receive only open ACCEPTED / PARTIALLY_ACCEPTED items; reviewers receive
@@ -74,13 +75,15 @@ loop control; set it only after the user decided, and quote their words.
 Pass the ledger to every C6 proposal as a fresh `ledger:{path,sha256}`. C6 reads
 only `id`, `decision` and `check`. A finding is resolved when:
 
-- the latest accepted review of the same role on the current candidate is a later
-  round and no longer lists it (the normal fix → re-review path); or
+- a later round of the same role on the current candidate covers its unit (the
+  file in its `location`) and no longer lists it (the normal fix → re-review
+  path; a later reviewer that covered other files does not close it); or
 - its ledger entry has decision `DEFER`, `NIT` or `REJECTED_BY_SCOPE`
   (`ESCALATED_TO_HUMAN` keeps it open: ask the user, then record their answer as
   one of those three or as a fix); or
 - it is `cannot_verify` and its ledger `check` names the sealed `result.json` of
-  the literal CHECK, which reported exit code 0.
+  the literal CHECK command whose outcome is its `expect` (`exit <n>`, optionally
+  `; stdout exactly|contains: <text>`).
 
 `status` is bookkeeping for people; no status closes anything. The commit needs
 positive latest gate and reviews on the current candidate and no unresolved
