@@ -315,18 +315,25 @@ def failure_records(records, art, state):
 
 EXPECT = re.compile(r"exit (\d+)(?!\d)(.*)", re.S)
 STDOUT = re.compile(r"; stdout (exactly|contains): (.*)", re.S)
+PROSE_EXIT = re.compile(r"(?<![A-Za-z])exit (\d+)(?!\d)(.*)", re.S)
 
 
-def checked(item, finding):
+def checked(item, finding, key="check", anywhere=False):
     """A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command that exited with the
     code its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against
     the sealed stdout; any other text after the exit code is the human-checked part of the expectation (existing reports
-    such as `exit 0; stdout — …`). The original candidate's bytes are not compared."""
-    path = item.get("check")
-    try: result = v.load(path) if isinstance(path, str) and Path(path).is_absolute() else None
+    such as `exit 0; stdout — …`). The original candidate's bytes are not compared. `key` names the ledger field holding
+    the result: an absolute path, or a {path, sha256} reference whose hash must match. `anywhere` takes the first
+    `exit <n>` in a prose EXPECT (reproduction evidence of a suspected defect, e.g. "On the frozen candidate, exit 0 …")."""
+    ref_ = item.get(key); path = ref_.get("path") if isinstance(ref_, dict) else ref_
+    try:
+        if not (isinstance(path, str) and Path(path).is_absolute()): return False
+        if isinstance(ref_, dict) and v.digest(Path(path).read_bytes()) != ref_.get("sha256"): return False
+        result = v.load(path)
     except (OSError, ValueError): return False
     if not (isinstance(result, dict) and v.evidence_valid(result)): return False
-    want = EXPECT.fullmatch(str(finding.get("expect", "")).strip())
+    text = str(finding.get("expect", "")).strip()
+    want = PROSE_EXIT.search(text) if anywhere else EXPECT.fullmatch(text)
     if want is None or result["evidence"]["key"]["check"]["command"] != finding.get("check") or result["exit_code"] != int(want[1]): return False
     stdout = STDOUT.fullmatch(want[2])
     if stdout is None: return True

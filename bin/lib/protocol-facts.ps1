@@ -209,14 +209,21 @@ function P-FailureRecords($records,$art,$s) {
   # GATE_FAIL evidence: at least one failure of the candidate that BASE does not explain.
   P-Require ((P-GateRecords $records $art $s).failed -gt 0) 'zero failing checks';return ,$records
 }
-function P-Checked($item,$finding) {
+function P-Checked($item,$finding,[string]$key='check',[bool]$anywhere=$false) {
   # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command that exited with the code
   # its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against the
   # sealed stdout; other text after the exit code is the human-checked part (existing `exit 0; stdout — …` reports).
-  $path=V-Get $item 'check'
-  try { if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false };$result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff)) } catch { return $false }
+  # $key names the ledger field holding the result: an absolute path, or a {path, sha256} reference whose hash must match.
+  $ref=V-Get $item $key;$path=if ($ref -is [Collections.IDictionary]) { V-Get $ref 'path' } else { $ref }
+  try {
+    if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false }
+    if ($ref -is [Collections.IDictionary] -and (V-Hash ([IO.File]::ReadAllBytes($path))) -cne (V-Get $ref 'sha256')) { return $false }
+    $result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff))
+  } catch { return $false }
   if (-not ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result))) { return $false }
-  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),'\Aexit ([0-9]+)(?![0-9])(.*)\z','Singleline')
+  # $anywhere takes the first `exit <n>` in a prose EXPECT (reproduction evidence of a suspected defect).
+  $pattern=if ($anywhere) { '(?<![A-Za-z])exit ([0-9]+)(?![0-9])(.*)\z' } else { '\Aexit ([0-9]+)(?![0-9])(.*)\z' }
+  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),$pattern,'Singleline')
   $code=$result['exit_code']
   if (-not $want.Success -or $result.evidence.key.check.command -cne (V-Get $finding 'check') -or -not ($code -is [int] -or $code -is [long]) -or $code -ne [long]$want.Groups[1].Value) { return $false }
   $stdout=[regex]::Match($want.Groups[2].Value,'\A; stdout (exactly|contains): (.*)\z','Singleline');if (-not $stdout.Success) { return $true }
