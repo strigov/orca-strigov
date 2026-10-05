@@ -222,8 +222,11 @@ function P-Checked($item,$finding,[string]$key='check',[bool]$anywhere=$false) {
   } catch { return $false }
   if (-not ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result))) { return $false }
   # $anywhere takes the first `exit <n>` in a prose EXPECT (reproduction evidence of a suspected defect).
-  $pattern=if ($anywhere) { '(?<![A-Za-z])exit ([0-9]+)(?![0-9])(.*)\z' } else { '\Aexit ([0-9]+)(?![0-9])(.*)\z' }
-  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),$pattern,'Singleline')
+  # Reproduction evidence reads only an affirmative statement: `exit <n> …` or `On <context>, exit <n> …`, with no
+  # negation in the prefix or right after the code ("must not exit 0" is never a confirmed reproduction).
+  $pattern=if ($anywhere) { '\A(?:On (?![^,;.]*\b(?:not|never|no)\b)[^,;.]{1,80}, )?exit ([0-9]+)(?![0-9])(?!\s*(?:is|must|should|does|will|may)?\s*(?:not|never)\b)(.*)\z' } else { '\Aexit ([0-9]+)(?![0-9])(.*)\z' }
+  $options=if ($anywhere) { [Text.RegularExpressions.RegexOptions]'Singleline, IgnoreCase' } else { [Text.RegularExpressions.RegexOptions]'Singleline' }
+  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),$pattern,$options)
   $code=$result['exit_code']
   if (-not $want.Success -or $result.evidence.key.check.command -cne (V-Get $finding 'check') -or -not ($code -is [int] -or $code -is [long]) -or $code -ne [long]$want.Groups[1].Value) { return $false }
   $stdout=[regex]::Match($want.Groups[2].Value,'\A; stdout (exactly|contains): (.*)\z','Singleline');if (-not $stdout.Success) { return $true }

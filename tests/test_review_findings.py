@@ -534,6 +534,12 @@ class ReviewFindingTests(unittest.TestCase):
         self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(),
                 ledger=decide(decision='ACCEPTED', status='open', execution_evidence=dict(reproduced, sha256='0' * 64)))
         self.ok(action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=confirmed())
+        # Review r9: a negated expectation never reads as a confirmed reproduction (the sealed CHECK exited 0).
+        for prose in ('If the defect reproduces, must not exit 0; exit 1 confirms reproduction.', 'exit 0 must not occur',
+                      'On a candidate that is not fixed, exit 0'):
+            f.state['accepted'] = [dict(r, findings=[dict(x, expect=prose) if x['id'] == 'RC-CV1' else x for x in r['findings']])
+                                   for r in f.state['accepted']]
+            self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=confirmed())
 
     def test_r2_11_legacy_state_rebuilds_plan_authors_without_code_writers(self):
         """An astra-profile Run without plan_authors: an Anthropic frontend contribution does not bar Opus from the plan."""

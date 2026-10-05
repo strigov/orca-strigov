@@ -315,7 +315,9 @@ def failure_records(records, art, state):
 
 EXPECT = re.compile(r"exit (\d+)(?!\d)(.*)", re.S)
 STDOUT = re.compile(r"; stdout (exactly|contains): (.*)", re.S)
-PROSE_EXIT = re.compile(r"(?<![A-Za-z])exit (\d+)(?!\d)(.*)", re.S)
+# Reproduction evidence reads only an affirmative statement: `exit <n> …` or `On <context>, exit <n> …` (as in
+# "On the frozen candidate, exit 0 and …"), with no negation in the prefix or right after the code.
+PROSE_EXIT = re.compile(r"(?:On (?![^,;.]*\b(?:not|never|no)\b)[^,;.]{1,80}, )?exit (\d+)(?!\d)(?!\s*(?:is|must|should|does|will|may)?\s*(?:not|never)\b)(.*)", re.S | re.I)
 
 
 def checked(item, finding, key="check", anywhere=False):
@@ -323,8 +325,9 @@ def checked(item, finding, key="check", anywhere=False):
     code its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against
     the sealed stdout; any other text after the exit code is the human-checked part of the expectation (existing reports
     such as `exit 0; stdout — …`). The original candidate's bytes are not compared. `key` names the ledger field holding
-    the result: an absolute path, or a {path, sha256} reference whose hash must match. `anywhere` takes the first
-    `exit <n>` in a prose EXPECT (reproduction evidence of a suspected defect, e.g. "On the frozen candidate, exit 0 …")."""
+    the result: an absolute path, or a {path, sha256} reference whose hash must match. `anywhere` (reproduction
+    evidence of a suspected defect) also accepts an affirmative prose lead such as "On the frozen candidate, exit 0 …";
+    a negated statement ("must not exit 0", "exit 0 must not occur") is never read as a confirmed reproduction."""
     ref_ = item.get(key); path = ref_.get("path") if isinstance(ref_, dict) else ref_
     try:
         if not (isinstance(path, str) and Path(path).is_absolute()): return False
@@ -333,7 +336,7 @@ def checked(item, finding, key="check", anywhere=False):
     except (OSError, ValueError): return False
     if not (isinstance(result, dict) and v.evidence_valid(result)): return False
     text = str(finding.get("expect", "")).strip()
-    want = PROSE_EXIT.search(text) if anywhere else EXPECT.fullmatch(text)
+    want = PROSE_EXIT.fullmatch(text) if anywhere else EXPECT.fullmatch(text)
     if want is None or result["evidence"]["key"]["check"]["command"] != finding.get("check") or result["exit_code"] != int(want[1]): return False
     stdout = STDOUT.fullmatch(want[2])
     if stdout is None: return True

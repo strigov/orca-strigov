@@ -332,8 +332,9 @@ A finding of an accepted entry is **resolved** when:
 - it is `blocking`, or it is a `cannot_verify` item whose CHECK asserted a
   suspected defect and reproduced it — the ledger entry has `decision`
   `ACCEPTED`/`PARTIALLY_ACCEPTED` and `execution_evidence`: the sealed result of
-  the literal CHECK whose exit code is the first `exit <n>` its `expect` states,
-  anywhere in its prose (absolute path or `{path,sha256}`),
+  the literal CHECK whose exit code is the one its `expect` affirmatively states
+  (`exit <n> …` or `On <context>, exit <n> …`; a negated statement such as
+  "must not exit 0" never counts) (absolute path or `{path,sha256}`),
   and the current candidate differs from the one the finding was raised on —
   and some later round of the same role on the current candidate covers the
   finding's unit — the file named before `:` in its
