@@ -121,24 +121,32 @@ function P-Entry($x) {
   $value=if ($x.Contains('sha256')) { $x.sha256 } else { $x.type }
   $index=V-Get $x 'index';if ($null -ne $index -and @($index)[0] -ceq '100755') { return $value+'+x' };return $value
 }
+function P-Synthesis($s) {
+  # Accepted synthesis documents of this step: path -> entry. Each summarises an acceptance and is frozen by it.
+  $out=V-Map;foreach ($r in @($s.accepted)) { $x=V-Get $r 'synthesis';if ($null -ne $x) { $out[$x.path]=$x.entry } };return ,$out
+}
 function P-Candidate($files,$s) {
-  # Candidate identity: repository entries (bytes + executable bit); no HEAD, exclusions, staging, declared inputs or plan file.
-  $skip=P-PlanName $s;$entries=V-Map
+  # Candidate identity: repository entries (bytes + executable bit); no HEAD, exclusions, staging, declared inputs,
+  # plan file or accepted synthesis document.
+  $skip=@(P-PlanName $s)+@((P-Synthesis $s).Keys);$entries=V-Map
   foreach ($k in @($files.Keys)) {
     if (-not $k.StartsWith('repo:',[StringComparison]::Ordinal)) { continue };$x=$files[$k];$name=$k.Substring(5)
-    if ($x.type -ceq 'missing' -or $name -ceq $skip) { continue };$entries[$name]=P-Entry $x
+    if ($x.type -ceq 'missing' -or $name -cin $skip) { continue };$entries[$name]=P-Entry $x
   };return V-Id $entries
 }
 function P-Fresh($s,$art) {
   $now=V-Snapshot $s.worktree @() @($art.exclusions)
-  P-Require ($now.valid -and (P-Candidate $now.manifest.files $s) -ceq $art.candidate) 'stale artifact: the working tree is no longer this candidate';return $now
+  P-Require ($now.valid -and (P-Candidate $now.manifest.files $s) -ceq $art.candidate) 'stale artifact: the working tree is no longer this candidate'
+  $synthesis=P-Synthesis $s
+  foreach ($path in @($synthesis.Keys)) { $x=V-Get $now.manifest.files ('repo:'+$path);P-Require ($null -ne $x -and (P-Entry $x) -ceq $synthesis[$path]) ('stale synthesis: '+$path) }
+  return $now
 }
 function P-StepBase($s) { if ($s.step -cin @('final-review','delivery','completion')) { return $s.plan_base };return $s.base }
 function P-PackageBound($obj,$m,$s) {
   # A package reviews the step's diff: from the step base, and a range package's candidate is its reviewed tree.
   P-Require ($obj.base -ceq (P-StepBase $s)) 'package base differs from the step base'
   if ($obj.mode -cne 'range') { return }
-  $skip=@(P-PlanName $s)
+  $skip=@(P-PlanName $s)+@((P-Synthesis $s).Keys)
   $untracked=@(foreach ($k in @($m.files.Keys)) { $x=$m.files[$k];if ($k.StartsWith('repo:',[StringComparison]::Ordinal) -and $x.type -cne 'missing' -and $k.Substring(5) -cnotin $skip -and -not $x.Contains('index')) { $k } })
   $dirty=@(V-Nul (V-Git $s.worktree @('diff','--no-ext-diff','--name-only','-z',$obj.head,'--')) | Where-Object { $_ -cnotin $skip })
   P-Require (-not $untracked.Count -and -not $dirty.Count -and $obj.head -ceq $m.head -and $m.head -ceq (V-GitText $s.worktree @('rev-parse','HEAD'))) 'range package differs from its reviewed tree'
@@ -180,16 +188,24 @@ function P-FleetWorkers($data,$used) {
   P-Require ($null -eq $cursor -and $workers.Count -eq $total -and @($workers | ForEach-Object { $_.dispatchId } | Select-Object -Unique).Count -eq $total) 'incomplete fleet' 2
   return @{workers=$workers;ids=$ids}
 }
-function P-EvidenceRecords($records,$art,$s) {
-  # Sealed C4 results of the candidate's bytes: at least one pass, inherited failures proven on BASE.
-  P-Require ($records -is [Array] -and $records.Count) 'missing executable evidence' 2;$passed=0
+function P-GateRecords($records,$art,$s) {
+  # Sealed C4 results of the candidate's bytes; returns passed and failures not proven inherited from BASE.
+  P-Require ($records -is [Array] -and $records.Count) 'missing executable evidence' 2;$passed=0;$failed=0
   foreach ($entry in $records) {
     $st=P-Record $entry;P-Require (V-EvidenceValid $st) 'stale or invalid runner evidence';$e=$st.evidence
     P-Require ((P-Candidate $e.source_after.manifest.files $s) -ceq $art.candidate) 'evidence snapshot mismatch'
     if ($e.key.check.independent_replay) { P-Require (-not $e.origin_run_id) 'required replay reused implementer evidence' }
-    if ($st.exit_code -eq 0) { $passed++ } else { $base=P-Record (V-Get $entry 'baseline');P-Require ((V-EvidenceValid $base) -and $base.evidence.key.provenance.kind -ceq 'BASE' -and $base.exit_code -ne 0 -and $base.evidence.failure_signature -ceq $e.failure_signature) 'unproven inherited failure' }
-  }
-  P-Require ($passed -gt 0) 'zero passing checks';return ,$records
+    if ($st.exit_code -eq 0) { $passed++ } elseif ($null -eq (V-Get $entry 'baseline')) { $failed++ }
+    else { $base=P-Record $entry.baseline;P-Require ((V-EvidenceValid $base) -and $base.evidence.key.provenance.kind -ceq 'BASE' -and $base.exit_code -ne 0 -and $base.evidence.failure_signature -ceq $e.failure_signature) 'unproven inherited failure' }
+  };return @{passed=$passed;failed=$failed}
+}
+function P-EvidenceRecords($records,$art,$s) {
+  # GATE_OK evidence: at least one pass, every failure proven inherited from BASE.
+  $n=P-GateRecords $records $art $s;P-Require (-not $n.failed) 'unproven inherited failure';P-Require ($n.passed -gt 0) 'zero passing checks';return ,$records
+}
+function P-FailureRecords($records,$art,$s) {
+  # GATE_FAIL evidence: at least one failure of the candidate that BASE does not explain.
+  P-Require ((P-GateRecords $records $art $s).failed -gt 0) 'zero failing checks';return ,$records
 }
 function P-Checked($item,$finding) {
   # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command whose outcome is its

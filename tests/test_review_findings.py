@@ -194,6 +194,188 @@ class ReviewFindingTests(unittest.TestCase):
         p = f.workspace / 'ledger.json'; p.write_text(json.dumps([dict(id='CV1', check=literal), dict(id='CV2', check=literal)]), encoding='utf-8')
         self.ok(ledger=f.reference(p), barrier='awaiting_resolution')
 
+    # -- 6: complementary review assignments ----------------------------------------------------
+    def test_06a_complementary_final_reviews_complete_together(self):
+        f = self.f; contracts = self.mixed_phase()
+        art, coverage = self.mixed_package(contracts)
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Google', artifact=art, coverage=coverage))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
+        sha = f.commit(art)['sha']
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=sha, base=f.git.base), fleet=f.fleet())
+        self.ok(action='advance', barrier='awaiting_final_review')
+        final, coverage = self.mixed_package(contracts)
+        # Claude-written UI reviewed by Astra, OpenAI-written API by Opus: one round, complementary units.
+        self.ok(f.report_input('review-final', 'OpenAI', artifact=final, coverage=self.cover(coverage, ['ui.tsx'])))
+        self.ok(f.report_input('review-final', 'Anthropic', artifact=final, coverage=self.cover(coverage, ['api.py'])))
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+
+    def test_06b_a_partial_later_review_does_not_close_an_uncovered_finding(self):
+        f = self.f; contracts = self.mixed_phase()
+        art, coverage = self.mixed_package(contracts)
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Google', token='REVIEW_BLOCKING', artifact=art, coverage=coverage,
+                               findings=[blocking('F1-B1', location='api.py:1')]), barrier='awaiting_resolution')
+        # Round 2 covers only the UI: it says nothing about api.py.
+        self.ok(f.report_input('review-primary', 'OpenAI', artifact=art, coverage=self.cover(coverage, ['ui.tsx']), round=2))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage), barrier='awaiting_resolution')
+        self.no(1, 'unresolved findings: F1-B1', action='prepare-commit', artifact=art, fleet=f.fleet())
+        self.ok(f.report_input('review-primary', 'Google', artifact=art, coverage=self.cover(coverage, ['api.py']), round=2), barrier='awaiting_commit')
+
+    # -- 7: a rejected plan-author report keeps a recovery path ---------------------------------
+    def test_07_rejected_reviser_report_can_be_redispatched(self):
+        f = self.f; base = f.git.base; self.plan_step()
+        def plan(text):
+            def deliver():
+                f.plan.write_text(text, encoding='utf-8'); return f.plan_artifact()
+            return deliver
+        self.worker('plan-writer', 'Anthropic', deliver=plan(plan_text(base)), token='PLAN_WRITTEN', plan=f.plan_ref, barrier='awaiting_plan_review')
+        accepted = f.plan_artifact()
+        p1 = dict(blocking('P1-B1', location='plan.md'), criterion='scope')
+        self.worker('plan-reviewer', 'OpenAI', assigned=accepted, token='CHANGES_REQUESTED', findings=[p1], barrier='awaiting_resolution')
+        # The reviser edits the plan, then its report fails the worker contract.
+        first = self.assignment('plan-reviser', 'Anthropic', round=2)
+        self.ok(action='dispatch', proposed=first, artifact=accepted, fleet=f.fleet())
+        f.plan.write_text(plan_text(base, 'Draft written before binding.\n'), encoding='utf-8')
+        self.ok(action='bind-dispatch', observation=f.observation(dict(first, dispatch_id='D-reviser-1'), 'running'), barrier='awaiting_writer')
+        bad = f.report_input('plan-reviser', 'Anthropic', token='DONE', artifact=f.plan_artifact(), round=2, assignment=f.state['active'])
+        bad['plan'] = f.plan_ref()
+        self.no(1, 'format: role verdict', bad)
+        # Recovery: a fresh reviser Task on the accepted plan; the draft is the author's working copy.
+        second = self.assignment('plan-reviser', 'Anthropic', round=2)
+        self.ok(action='dispatch', proposed=second, artifact=accepted, fleet=f.fleet([dict(
+            dispatchId='D-reviser-1', taskId=first['task_id'], dispatchStatus='completed', terminalState='retained', resource=None,
+            projection=dict(workspace=None, evidence=dict(durable=True), liveness=dict(verdict='unverifiable')))]))
+        self.ok(action='bind-dispatch', observation=f.observation(dict(second, dispatch_id='D-reviser-2'), 'running'))
+        # A reader still needs the accepted bytes.
+        self.no(1, 'artifact hash mismatch', action='dispatch', proposed=self.assignment('plan-reviewer', 'OpenAI', round=2), artifact=accepted,
+                fleet=f.fleet())
+        f.plan.write_text(plan_text(base, 'Fixture plan, narrowed scope.\n'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'Anthropic', token='REVISED', artifact=f.plan_artifact(), round=2, assignment=f.state['active'])
+        revised['plan'] = f.plan_ref()
+        self.ok(revised, barrier='awaiting_plan_review')
+
+    # -- 8: a failed unbound writer launch can be reconciled ----------------------------------
+    def test_08_failed_unbound_launch_is_reconciled_by_positive_evidence(self):
+        f = self.f; gemini = self.assignment('implementer', 'Google')
+        self.ok(action='dispatch', proposed=gemini, artifact=f.snapshot_ref(), fleet=f.fleet(), barrier='awaiting_writer')
+        row = dict(dispatchId='D-gemini', taskId=gemini['task_id'], dispatchStatus='failed', terminalState='released', resource=None,
+                   projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='exited')))
+        running = dict(row, dispatchStatus='dispatched', terminalState='retained',
+                       projection=dict(row['projection'], evidence=dict(durable=False), liveness=dict(verdict='live')))
+        self.no(2, 'live or unverifiable prior writer', action='reconcile-intent', fleet=f.fleet([running]), artifact=f.snapshot_ref())
+        self.no(2, 'missing launch failure evidence', action='reconcile-intent', fleet=f.fleet(), artifact=f.snapshot_ref())
+        self.write('tracked.txt', 'written by the failed launch\n')
+        self.no(1, 'the failed launch changed the candidate', action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref())
+        self.write('tracked.txt', 'candidate\n')
+        self.ok(action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref(), barrier='awaiting_implementation')
+        self.assertEqual((f.state['active'], f.state['write_ownership']), (None, []))
+        luna = self.assignment('implementer', 'OpenAI')
+        self.ok(action='dispatch', proposed=luna, artifact=f.snapshot_ref(), fleet=f.fleet([row]), barrier='awaiting_writer')
+        # No Dispatch was ever created: the saved failed launch receipt naming the Task is the evidence.
+        failure = f.save(dict(id='local', ok=False, error=dict(code='runtime_error', message='launch failed', data=dict(taskId=luna['task_id'])),
+                              _meta=dict(runtimeId=None)))
+        other = f.save(dict(id='local', ok=False, error=dict(code='runtime_error', message='launch failed', data=dict(taskId='another-task'))))
+        self.no(2, 'missing launch failure evidence', action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref(), launch_failure=other)
+        self.ok(action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref(), launch_failure=failure)
+
+    # -- 9: a BLOCKED review attempt keeps its round ----------------------------------------
+    def test_09_blocked_review_attempt_does_not_consume_the_substantive_round(self):
+        f = self.f
+        self.ok(f.report_input('implementer'))
+        art, coverage = f.package_ref()
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        for cap_round in (1, 4):
+            f.state['rounds']['fused_review'] = cap_round
+            self.ok(f.report_input('review-primary', 'Anthropic', token='BLOCKED', artifact=art, coverage=coverage, round=cap_round))
+            retry = dict(self.assignment('review-primary', 'Anthropic', round=cap_round), coverage=coverage)
+            self.ok(action='dispatch', proposed=retry, artifact=art, fleet=f.fleet())
+            f.state['active'] = None
+        # A substantive same-family repeat still needs a new round.
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage, round=4))
+        again = dict(self.assignment('review-primary', 'Anthropic', round=4), coverage=coverage)
+        self.no(1, 'substantive review needs a new round', action='dispatch', proposed=again, artifact=art, fleet=f.fleet())
+
+    # -- 10: a plan-review extension survives advance ----------------------------------------
+    def test_10_plan_review_extension_does_not_poison_the_next_phase(self):
+        f = self.f; base = f.git.base; self.plan_step()
+        f.plan.write_text(plan_text(base), encoding='utf-8'); f.state['plan'] = f.plan_ref()
+        author = f.observation(f.assignment('plan-writer', 'Anthropic'))
+        f.state.update(plan_authors=[author], provenance=[author])
+        f.state['rounds']['plan_review'] = 4
+        art = f.plan_artifact()
+        p4 = dict(blocking('P4-B1', location='plan.md'), criterion='scope', new_blocker_materiality='blocks the phase split')
+        self.ok(f.report_input('plan-reviewer', 'OpenAI', token='CHANGES_REQUESTED', artifact=art, findings=[p4], round=4), barrier='awaiting_resolution')
+        auth = f.save(dict(schema_version=1, run_id='fixture-run', phase=None, group='plan_review', extra_rounds=1, findings=['P4-B1'],
+                           user_decision='One more plan review round.'))
+        self.ok(action='extend-cap', authorization=auth)
+        self.worker('plan-reviewer', 'OpenAI', assigned=art, round=5, barrier='awaiting_commit')
+        f.git.git('add', 'plan.md')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+        sha = f.git_commit('docs(plans): add fixture plan')
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=sha, base=base), fleet=f.fleet(), barrier='ready_next_phase')
+        self.ok(action='advance')
+        f.plan.write_text(plan_text(base, phase_status='in-progress', phase_base=sha), encoding='utf-8')
+        self.ok(plan=f.plan_ref(), barrier='awaiting_implementation')
+
+    # -- 11: gate-fix rounds: consecutive count and extension identity ---------------------------
+    def gate_fix_round(self, text):
+        """One gate-fix round: the implementer re-dispatched with gate_fix, its fix delivered and accepted."""
+        f = self.f; evidence = dict(tests=['gate command'], commands=['verify-gate'], outputs=['passed'])
+        p = self.assignment('implementer', 'OpenAI', round=f.state['rounds']['gate_fix'] + 1, fix=True, gate_fix=True)
+        self.ok(action='dispatch', proposed=p, artifact=f.snapshot_ref(), fleet=f.fleet())
+        self.ok(action='bind-dispatch', observation=f.observation(dict(p, dispatch_id=p['task_id'] + '-dispatch'), 'running'))
+        self.ok(f.report_input('implementer', artifact=self.writer('tracked.txt', text)(), assignment=f.state['active'],
+                               extra='FIX_EVIDENCE: ' + json.dumps(evidence)))
+
+    def test_11a_a_green_gate_resets_the_consecutive_gate_fix_count(self):
+        f = self.f
+        self.ok(f.report_input('implementer'))
+        for n in range(3):
+            self.gate_fix_round('gate fix %d\n' % n)
+            self.ok(action='record-gate', artifact=f.snapshot_ref(), evidence=self.passing_evidence(), barrier='awaiting_review')
+        self.assertEqual(f.state['rounds']['gate_fix'], 0)
+
+    def test_11b_a_failing_script_gate_registers_an_extendable_finding(self):
+        f = self.f
+        self.ok(f.report_input('implementer'))
+        f.state['rounds']['gate_fix'] = 2
+        self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure(), barrier='awaiting_resolution')
+        self.assertEqual([x['id'] for x in f.state['accepted'][-1]['findings']], ['G3-B1'])
+        self.no(1, 'zero failing checks', action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.passing_evidence())
+        auth = f.save(dict(schema_version=1, run_id='fixture-run', phase='F1', group='gate_fix', extra_rounds=1, findings=['G3-B1'],
+                           user_decision='Allow a third gate-fix round for G3-B1.'))
+        self.ok(action='extend-cap', authorization=auth)
+        self.gate_fix_round('third gate fix\n')
+        self.assertEqual(f.state['rounds']['gate_fix'], 3)
+
+    # -- 12/13: plan authorship is the plan authors only ------------------------------------------
+    def test_12_code_writers_are_not_plan_authors(self):
+        """Opus plans; the implementation fell back to Luna; a later plan revision is still reviewed by Astra."""
+        f = self.f
+        f.state['plan_authors'] = [f.observation(f.assignment('plan-writer', 'Anthropic'))]
+        self.ok(f.report_input('implementer', 'OpenAI'))
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan, phase split.'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'Anthropic', token='REVISED', artifact=f.plan_artifact(), round=1)
+        revised['plan'] = f.plan_ref()
+        self.ok(revised)
+        plan = f.plan_artifact()
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'Anthropic', artifact=plan))
+        self.ok(f.report_input('plan-reviewer', 'OpenAI', artifact=plan))
+
+    def test_13_astra_profile_run_keeps_its_plan_reviewer(self):
+        """An Astra-written plan, a Claude-written frontend, an Astra revision: Opus still reviews the plan."""
+        f = self.f
+        f.state['plan_authors'] = [f.observation(f.assignment('plan-writer', 'OpenAI'))]
+        self.ok(f.report_input('frontend-implementer', 'Anthropic'))
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan, revised by Astra.'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'OpenAI', token='REVISED', artifact=f.plan_artifact(), round=1)
+        revised['plan'] = f.plan_ref()
+        self.ok(revised)
+        plan = f.plan_artifact()
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'OpenAI', artifact=plan))
+        self.ok(f.report_input('plan-reviewer', 'Anthropic', artifact=plan))
+
     # -- 14: a final-fix commit needs a gate on its bytes ----------------------------------------
     def test_14_final_fix_commit_requires_a_gate_on_the_fixed_bytes(self):
         f = self.f; phase = self.to_final_review()
@@ -205,6 +387,43 @@ class ReviewFindingTests(unittest.TestCase):
         self.ok(action='prepare-commit', artifact=fixed, fleet=f.fleet())
         sha = f.git_commit('fix: address final-review findings')
         self.ok(action='confirm-commit', artifact=fixed, commit=dict(sha=sha, base=phase), fleet=f.fleet(), barrier='awaiting_final_review')
+
+    # -- 15: delivery repair returns to the final review ------------------------------------------
+    def test_15_delivery_repair_returns_to_final_review(self):
+        f = self.f; phase = self.to_final_review()
+        final, coverage = f.package_ref()
+        self.ok(f.report_input('review-final', 'Google', artifact=final, coverage=coverage))
+        f.state['rounds']['final_review'] = 1
+        self.no(1, 'reopen-final outside delivery or completion', action='reopen-final', fleet=f.fleet())
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
+        self.ok(action='reopen-final', fleet=f.fleet(), barrier='awaiting_final_review')
+        self.assertEqual((f.state['step'], f.state['final_source'], f.state['rounds']['final_review']), ('final-review', None, 1))
+        self.stage('delivery repair\n')
+        repaired, coverage = f.package_ref()
+        self.ok(action='record-gate', artifact=repaired, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-final', 'Google', artifact=repaired, coverage=coverage, round=2))
+        self.ok(action='prepare-commit', artifact=repaired, fleet=f.fleet())
+        sha = f.git_commit('fix: delivery repair')
+        self.ok(action='confirm-commit', artifact=repaired, commit=dict(sha=sha, base=phase), fleet=f.fleet())
+        self.ok(action='finish-checkpoint', artifact=repaired, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.ok(action='record-gate', artifact=f.snapshot_ref(), evidence=self.passing_evidence())
+        self.ok(action='finish-checkpoint', artifact=f.snapshot_ref(), fleet=f.fleet(), barrier='awaiting_completion_commit')
+
+    # -- 16: synthesis does not invalidate the acceptance it summarises ----------------------------
+    def test_16_synthesis_is_committed_with_the_phase_without_a_new_review(self):
+        f = self.f; art, coverage = self.phase_ready()
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage, round=2))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
+        self.worker('synthesizer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('docs/reviews/fixture-F1.md', '# F1 review synthesis\n'),
+                    token='SYNTHESIS_DONE', barrier='awaiting_commit')
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet())
+        self.write('docs/reviews/fixture-F1.md', '# rewritten after acceptance\n')
+        self.no(1, 'stale synthesis: docs/reviews/fixture-F1.md', action='prepare-commit', artifact=art, fleet=f.fleet())
+        self.write('docs/reviews/fixture-F1.md', '# F1 review synthesis\n')
+        sha = f.git_commit('feat: fixture phase F1')
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=sha, base=f.git.base), fleet=f.fleet(), barrier='awaiting_final_review')
+        self.assertIn('docs/reviews/fixture-F1.md', f.git.git('show', '--name-only', '--format=', sha).split())
 
     # -- 17: both backends share canonical identities and exact model lookup ----------------------
     def test_17_canonical_candidate_and_exact_model_ids(self):

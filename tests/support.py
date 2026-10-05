@@ -481,8 +481,8 @@ class ProtocolFixture(VerificationFixture):
                     base=self.git.base, step='quickfix' if self.quickfix else 'phase', worktree=str(self.git.root),
                     worktree_id='fixture-worktree', workspace=str(self.workspace), active=None,
                     rounds=dict(plan_review=0, fused_review=0, final_review=0, gate_fix=0), cap_extensions=[],
-                    independence_waivers=[], provenance=[], authors={}, accepted=[], write_ownership=[], phase_commits=[],
-                    final_source=None, processed_messages=[], used_fleet_ids=[])
+                    independence_waivers=[], provenance=[], plan_authors=[], authors={}, accepted=[], write_ownership=[],
+                    phase_commits=[], final_source=None, processed_messages=[], used_fleet_ids=[])
 
     def plan_ref(self, path=None):
         path = Path(path or self.plan)
@@ -593,7 +593,8 @@ class ProtocolFixture(VerificationFixture):
         result['page'].update(paging)
         return [dict(self.save(dict(id='fixture-fleet-' + uuid.uuid4().hex, ok=True, result=result)), cursor=None)]
 
-    def report_input(self, role='implementer', family='OpenAI', token=None, artifact=None, coverage=None, findings=None, round=1, extra='', assignment=None):
+    def report_input(self, role='implementer', family='OpenAI', token=None, artifact=None, coverage=None, findings=None, round=1, extra='', assignment=None,
+                     synthesis='docs/reviews/fixture-F1.md'):
         # artifact=False: no artifact (a first plan writer that produced no plan).
         artifact = self.snapshot_ref() if artifact is None else artifact
         obj = read_json(artifact['path']) if artifact and artifact['kind'] != 'plan' else {}
@@ -609,15 +610,19 @@ class ProtocolFixture(VerificationFixture):
         lines = [token]
         if role == 'review-primary': lines += ['SPEC: ' + ('FAIL' if token == 'REVIEW_BLOCKING' else 'OK'), 'QUALITY: OK']
         if role == 'gate': lines += ['verify: fixture=PASS']
+        if role == 'synthesizer': lines += [synthesis]
         lines += ['BINDING: ' + json.dumps(b)]
+        if token == 'BLOCKED': lines += ['## Reason', 'fixture could not produce the artifact']
         if role == 'plan-reviewer': lines += ['## Simplicity', 'SIMPLICITY: OK']
         if role.startswith('review-') or role == 'plan-reviewer': lines += ['FINDINGS: ' + json.dumps(findings or [])]
         if coverage is not None: lines += ['COVERAGE: ' + json.dumps(coverage)]
         lines += [extra]
         report = self.save('\n'.join(lines) + '\n', '.md')
         observation = self.observation(a)
+        failed = token == 'BLOCKED' or (role in ('plan-writer', 'plan-reviser', 'implementer', 'frontend-implementer', 'quickfix', 'synthesizer')
+                                        and token in ('NEEDS_CONTEXT', 'NEEDS_AUTHORIZATION'))
         message = dict(id='fixture-message-' + str(self.serial), type='worker_done', run_id='fixture-run', from_handle='fixture-terminal',
-            subject=token, payload=json.dumps(dict(taskId=a['task_id'], dispatchId=a['dispatch_id'], outcome='succeeded',
+            subject=token, payload=json.dumps(dict(taskId=a['task_id'], dispatchId=a['dispatch_id'], outcome='failed' if failed else 'succeeded',
                 reportPath=report['path'], filesModified=['tracked.txt'])))
         data = dict(schema_version=1, action='accept-report', state=self.state, artifact=artifact, report=report,
                     observation=observation, event=self.save(dict(ok=True, result=dict(message=message))), message_id=message['id'])

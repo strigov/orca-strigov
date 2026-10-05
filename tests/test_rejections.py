@@ -96,8 +96,9 @@ class RejectionTests(unittest.TestCase):
             (review([dict(bad, simplicity=True)]), 1, 'format: simplicity finding'),
             (self.report(assignment=dict(fix, round=2), extra='FIX_EVIDENCE: {"tests":[],"commands":["c"],"outputs":["o"]}'), 1, 'format: fix evidence'),
             (self.edited(self.report('gate', token='GATE_FAIL'), lambda t: t.replace('verify: fixture=PASS', 'nonsense')), 1, 'format: gate summary'),
-            (self.report('synthesizer', token='SYNTHESIS_DONE'), 1, 'format: synthesis path'),
+            (self.report('synthesizer', token='SYNTHESIS_DONE', synthesis='notes/synthesis.md'), 1, 'format: synthesis path'),
             (self.report('diagnosis', token='IMPASSE_SUMMARY'), 1, 'format: diagnosis sections')])
+        self.expect([(self.report('synthesizer', token='SYNTHESIS_DONE'), 1, 'synthesis path is not in the delivered artifact')])
         f.state.update(phase=None, step='plan')
         plan = f.plan_artifact()
         plan_review = lambda findings, round=1, token='CHANGES_REQUESTED': self.report('plan-reviewer', 'Google', token, plan, None, findings, round)

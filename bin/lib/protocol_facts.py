@@ -173,18 +173,26 @@ def entry(x):
     return value + "+x" if (x.get("index") or [None])[0] == "100755" else value
 
 
+def synthesis(state):
+    """Accepted synthesis documents of this step: {path: entry}. Each summarises an acceptance and is frozen by it."""
+    return {r["synthesis"]["path"]: r["synthesis"]["entry"] for r in state["accepted"] if r.get("synthesis")}
+
+
 def candidate(files, state):
-    """Candidate identity: repository entries (bytes + executable bit); no HEAD, exclusions, staging, declared inputs
-    or plan file."""
-    skip = plan_name(state)
+    """Candidate identity: repository entries (bytes + executable bit); no HEAD, exclusions, staging, declared inputs,
+    plan file or accepted synthesis document."""
+    skip = {plan_name(state)} | set(synthesis(state))
     entries = {k[5:]: entry(x) for k, x in files.items()
-               if k.startswith("repo:") and x["type"] != "missing" and k[5:] != skip}
+               if k.startswith("repo:") and x["type"] != "missing" and k[5:] not in skip}
     return v.digest(v.encoded(entries))
 
 
 def fresh(state, art):
     now = v.snapshot(state["worktree"], [], art["exclusions"])
     require(now["valid"] and candidate(now["manifest"]["files"], state) == art["candidate"], "stale artifact: the working tree is no longer this candidate")
+    for path, value in synthesis(state).items():
+        x = now["manifest"]["files"].get("repo:" + path)
+        require(x is not None and entry(x) == value, "stale synthesis: " + path)
     return now
 
 
@@ -196,7 +204,7 @@ def package_bound(obj, m, state):
     """A package reviews the step's diff: from the step base, and a range package's candidate is its reviewed tree."""
     require(obj["base"] == step_base(state), "package base differs from the step base")
     if obj["mode"] != "range": return
-    root = state["worktree"]; skip = {plan_name(state)}
+    root = state["worktree"]; skip = {plan_name(state)} | set(synthesis(state))
     tracked = all("index" in x for k, x in m["files"].items() if k.startswith("repo:") and x["type"] != "missing" and k[5:] not in skip)
     dirty = [p for p in v.git(root, "diff", "--no-ext-diff", "--name-only", "-z", obj["head"], "--").decode("utf-8").split("\0") if p and p not in skip]
     require(tracked and not dirty and obj["head"] == m["head"] == v.text_git(root, "rev-parse", "HEAD"), "range package differs from its reviewed tree")
@@ -270,22 +278,36 @@ def authors(art, provenance):
     return writers
 
 
-def evidence_records(records, art, state):
-    """Sealed C4 results of the candidate's bytes: at least one pass, inherited failures proven on BASE."""
+def gate_records(records, art, state):
+    """Sealed C4 results of the candidate's bytes; returns (passed, failures not proven inherited from BASE)."""
     require(isinstance(records, list) and records, "missing executable evidence", 2)
-    passed = 0
-    for entry in records:
-        st = record(entry)
+    passed = failed = 0
+    for item in records:
+        st = record(item)
         require(v.evidence_valid(st), "stale or invalid runner evidence")
         e = st["evidence"]
         require(candidate(e["source_after"]["manifest"]["files"], state) == art["candidate"], "evidence snapshot mismatch")
         if e["key"]["check"]["independent_replay"]: require(not e.get("origin_run_id"), "required replay reused implementer evidence")
         if st["exit_code"] == 0: passed += 1
+        elif item.get("baseline") is None: failed += 1
         else:
-            base = record(entry.get("baseline"))
+            base = record(item["baseline"])
             require(v.evidence_valid(base) and base["evidence"]["key"]["provenance"]["kind"] == "BASE" and
                     base["exit_code"] != 0 and base["evidence"]["failure_signature"] == e["failure_signature"], "unproven inherited failure")
+    return passed, failed
+
+
+def evidence_records(records, art, state):
+    """GATE_OK evidence: at least one pass, every failure proven inherited from BASE."""
+    passed, failed = gate_records(records, art, state)
+    require(not failed, "unproven inherited failure")
     require(passed > 0, "zero passing checks")
+    return records
+
+
+def failure_records(records, art, state):
+    """GATE_FAIL evidence: at least one failure of the candidate that BASE does not explain."""
+    require(gate_records(records, art, state)[1] > 0, "zero failing checks")
     return records
 
 
@@ -305,6 +327,12 @@ def checked(item, finding):
     try: out = Path(result["stdout_log"]).read_bytes().decode("utf-8").replace("\r\n", "\n")
     except (OSError, UnicodeDecodeError): return False
     return out.rstrip("\n") == want[3] if want[2] == "exactly" else want[3] in out
+
+
+def values(obj):
+    if isinstance(obj, dict): return [x for item in obj.values() for x in values(item)]
+    if isinstance(obj, list): return [x for item in obj for x in values(item)]
+    return [obj]
 
 
 ORCA_PREAMBLE = "You are working inside Orca, a multi-agent IDE. You are a dispatched worker."

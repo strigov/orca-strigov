@@ -18,8 +18,9 @@ $PKeys=@('schema_version','mode','plan','ledger_path','orca_run','plan_base','ph
   'cap_extensions','independence_waivers','provenance','accepted','write_ownership','phase_commits','final_source','processed_messages','used_fleet_ids')
 
 function P-Cap($s,[string]$group) {
-  # Protocol cap plus the user's one-round extensions for this phase (each checked by extend-cap).
-  return $PCaps[$group]+@(@($s.cap_extensions) | Where-Object { $null -ne $_ -and $_.group -ceq $group -and (P-Eq $_.phase $s.phase) }).Count
+  # Protocol cap plus the user's one-round extensions (each checked by extend-cap). Plan review is one budget per
+  # plan, so its extensions count in every phase; the other groups are per phase.
+  return $PCaps[$group]+@(@($s.cap_extensions) | Where-Object { $null -ne $_ -and $_.group -ceq $group -and ($group -ceq 'plan_review' -or (P-Eq $_.phase $s.phase)) }).Count
 }
 function P-Plan($s) {
   if ($null -eq $s.plan -or $null -eq $s.plan.sha256) { return ,@() }
@@ -28,6 +29,11 @@ function P-Plan($s) {
   P-Require ($facts.orca_run -ceq $s.orca_run -and $facts.plan_base -ceq $s.plan_base) 'plan/run/base mismatch'
   if ($null -ne $s.phase) { $p=@($facts.phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and $p[0].base -ceq $s.base) 'phase/base mismatch' }
   return ,$facts.phases
+}
+function P-Drafted($s) {
+  # The live plan file no longer holds the accepted bytes (a plan author's working draft).
+  if ($null -eq $s.plan -or $null -eq $s.plan.sha256) { return $false }
+  try { return (V-FileHash $s.plan.path) -cne $s.plan.sha256 } catch { return $true }
 }
 function P-UpdatePlan($data,$s) {
   # A fresh plan reference: any bytes in a plan author's report, otherwise only bookkeeping lines may move.
@@ -47,6 +53,13 @@ function P-Ledger($data,$s) {
   P-Require ($items -is [Array] -and -not @($items | Where-Object { -not ($_ -is [Collections.IDictionary] -and $_.id -is [string]) }).Count -and @($items | ForEach-Object { $_.id } | Select-Object -Unique).Count -eq $items.Count) 'invalid ledger'
   foreach ($x in $items) { $out[$x.id]=$x };return ,$out
 }
+function P-Settled($w) {
+  # A fleet row that positively ended: durably completed/failed, or released with an exited process.
+  $p=V-Get $w 'projection' @{};if ($null -eq $p) { $p=@{} }
+  if ($w.terminalState -cin @('release_pending','release_unknown') -or (V-Get (V-Get $w 'resource' @{}) 'ownershipState') -cin @('user_owned','external','pre_existing')) { return $false }
+  return (($w.dispatchStatus -cin @('completed','failed') -and (V-Get (V-Get $p 'evidence' @{}) 'durable') -eq $true) -or
+          ($w.terminalState -ceq 'released' -and (V-Get (V-Get $p 'liveness' @{}) 'verdict') -ceq 'exited'))
+}
 function P-Fleet($data,$s) {
   # Invariant (a): a fresh complete fleet shows no live or unverifiable writer in this worktree. A recorded writer
   # must be in it: absence from an inventory taken before that writer started proves nothing.
@@ -63,7 +76,7 @@ function P-Fleet($data,$s) {
     if ($w.terminalState -ceq 'released' -and (V-Get (V-Get $p 'liveness' @{}) 'verdict') -ceq 'exited') { continue };$ownership+=$w.dispatchId
   }
   $s.write_ownership=@($ownership);P-Require (-not $ownership.Count) 'live or unverifiable prior writer' 2
-  $s.used_fleet_ids=@(@($s.used_fleet_ids)+@($fleet.ids) | Where-Object { $null -ne $_ })
+  $s.used_fleet_ids=@(@($s.used_fleet_ids)+@($fleet.ids) | Where-Object { $null -ne $_ });return ,@($fleet.workers)
 }
 function P-FileAuthors($art,$s) {
   # Actual author families per file: the package's write receipts plus the cumulative authorship C6 recorded from
@@ -91,8 +104,10 @@ function P-Independent($art,$coverage,$family,$s) {
   }
 }
 function P-PlanIndependent($s,$family) {
-  P-Require (@($s.provenance).Count) 'unknown plan authors' 2
-  foreach ($author in @($s.provenance)) { P-Require ((P-Family (P-Record $author).result $author) -cne $family) 'same-family plan review' }
+  # Plan authors are the accepted or registered plan writers and revisers only (legacy states: every writer).
+  $authors=if ($null -eq $s.plan_authors) { @($s.provenance) } else { @($s.plan_authors) }
+  P-Require ($authors.Count) 'unknown plan authors' 2
+  foreach ($author in $authors) { P-Require ((P-Family (P-Record $author).result $author) -cne $family) 'same-family plan review' }
 }
 function P-Written($s,$before,$art) {
   # Paths a settled writer changed: its own window (dispatch-time vs delivered capture) when the dispatch-time capture
@@ -114,28 +129,55 @@ function P-Attribute($s,$paths,[string]$family) {
 function P-Latest($s,[string]$role,$cand) {
   $found=-1;$list=@($s.accepted);for ($i=0;$i -lt $list.Count;$i++) { if ($list[$i].role -ceq $role -and (P-Eq $list[$i].candidate $cand)) { $found=$i } };return $found
 }
+function P-Units($finding,$review) {
+  # The reviewed unit a finding is about: its location's file when that file was covered, else the whole coverage.
+  $files=P-List $review.coverage 'files';$path=([string](V-Get $finding 'location' '')).Split(':')[0].Trim()
+  if ($path -cin $files) { return ,@($path) };return ,$files
+}
+function P-Omitted($s,$review,$finding,$cand) {
+  # A later round of the same role on cand covers the finding's unit and none of its reports lists it.
+  $later=@{}
+  foreach ($r in @($s.accepted)) { if ($r.role -ceq $review.role -and (P-Eq $r.candidate $cand) -and $r.round -gt $review.round -and $r.token -cne 'BLOCKED') { $later[[string]$r.round]=@($later[[string]$r.round] | Where-Object { $null -ne $_ })+,$r } }
+  $units=P-Units $finding $review
+  foreach ($rows in $later.Values) {
+    $listed=@(foreach ($r in $rows) { foreach ($f in @($r.findings)) { $f.id } })
+    $covered=@(foreach ($r in $rows) { P-List $r.coverage 'files' })
+    if ($finding.id -cnotin $listed -and (P-Subset $units $covered)) { return $true }
+  };return $false
+}
 function P-Unresolved($s,$cand,$decisions) {
-  # Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round of the role on cand omitting it.
-  $out=@();$list=@($s.accepted)
-  for ($i=0;$i -lt $list.Count;$i++) {
-    $r=$list[$i];$last=P-Latest $s $r.role $cand;$later=if ($last -gt $i) { $list[$last] } else { $null }
+  # Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering the
+  # finding's unit and omitting it. A gate failure is identity only: a positive gate on cand supersedes it.
+  $out=@()
+  foreach ($r in @($s.accepted)) {
+    if ($r.role -ceq 'gate') { continue }
     foreach ($f in @($r.findings)) {
       $item=if ($decisions.ContainsKey($f.id)) { $decisions[$f.id] } else { @{} }
       if ((V-Get $item 'decision') -cin $PDecisions -or ($f.kind -ceq 'cannot_verify' -and (P-Checked $item $f))) { continue }
-      if ($f.kind -ceq 'blocking' -and $null -ne $later -and $later.round -gt $r.round -and $f.id -cnotin @(@($later.findings) | ForEach-Object { $_.id })) { continue }
+      if ($f.kind -ceq 'blocking' -and (P-Omitted $s $r $f $cand)) { continue }
       $out+=$f.id
     }
   };return ,$out
 }
+function P-Approvals($s,[string]$role,$cand) {
+  # The current reports of a role on cand: for reviews, the latest attempt of each family in the latest round
+  # (complementary assignments share one round; a BLOCKED attempt is superseded by its retry); else the latest report.
+  $rows=@(@($s.accepted) | Where-Object { $_.role -ceq $role -and (P-Eq $_.candidate $cand) })
+  if (-not $rows.Count) { return ,@() };if ($role -cnotin $PReview -or $role -ceq 'plan-reviewer') { return ,@($rows[$rows.Count-1]) }
+  $top=($rows | ForEach-Object { $_.round } | Measure-Object -Maximum).Maximum;$byFamily=V-Map
+  foreach ($r in $rows) { if ($r.round -eq $top) { $byFamily[[string]$r.family]=$r } }
+  $current=@(@($byFamily.Values) | Where-Object { $_.token -cne 'BLOCKED' });if ($current.Count) { return ,$current };return ,@($rows[$rows.Count-1])
+}
 function P-Ready($s,$cand,$decisions,$roles=$null) {
-  # The step's required roles have positive latest reports on cand, nothing is unresolved, the reviews are still
+  # The step's required roles have positive current reports on cand, nothing is unresolved, the reviews are still
   # independent of every recorded author, and together they cover the package.
   if ($null -eq $roles) { $roles=$PReady[$s.step] };$rows=@()
   foreach ($role in $roles) {
-    $i=P-Latest $s $role $cand;P-Require ($i -ge 0) ('required report is missing: '+$role) 2
-    P-Require (@($s.accepted)[$i].token -cin $PGood[$role]) ('required report is not positive: '+$role);$rows+=,@($s.accepted)[$i]
+    $current=P-Approvals $s $role $cand;P-Require ($current.Count) ('required report is missing: '+$role) 2
+    foreach ($r in $current) { P-Require ($r.token -cin $PGood[$role]) ('required report is not positive: '+$role) };$rows+=$current
   }
   $still=P-Unresolved $s $cand $decisions;P-Require (-not $still.Count) ('unresolved findings: '+($still -join ', '))
+  foreach ($r in $rows) { if ($r.role -ceq 'plan-reviewer') { P-PlanIndependent $s $r.family } }
   $reviews=@($rows | Where-Object { $_.role -cin $PReview -and $_.role -cne 'plan-reviewer' })
   if (-not $reviews.Count) { return }
   $packages=V-Map
@@ -148,6 +190,10 @@ function P-Ready($s,$cand,$decisions,$roles=$null) {
     $sides=@(foreach ($r in $reviews) { foreach ($x in (P-List $r.coverage 'contracts')) { if ($x.id -ceq $c.id) { foreach ($p in (P-List $x $side)) { $p } } } })
     P-Require (P-Subset @($c[$side] | Where-Object { $_ -cne $skip }) $sides) ('incomplete contract '+$c.id+':'+$side) 2
   } }
+}
+function P-GateFinding($s) {
+  # A failed gate's identity G<r>-B1 (r = the gate-fix round it opens), so the user's cap extension can name it.
+  return [ordered]@{id=('G'+($s.rounds.gate_fix+1)+'-B1');kind='blocking';issue='verification gate failed';location='verify-gate'}
 }
 function P-Current($s) {
   if ($s.step -ceq 'plan') { return $s.plan.sha256 }
@@ -224,23 +270,33 @@ function P-AcceptReport($data,$s) {
   $art=P-Artifact (V-Get $data 'artifact') $s $current;$role=$a.role
   if ($role -cnotin $PWrite) { P-Require ($a.artifact_id -ceq $art.id -and (P-Eq $a.snapshot_id $art.snapshot_id)) 'assigned artifact changed' }
   $fields=P-Report $text $a $art (V-Get $payload 'outcome') (P-List $payload 'filesModified')
-  if ($role -cin @('plan-writer','plan-reviser') -and $fields.token -cin $PWritten) { P-Require ($art.kind -ceq 'plan' -and $art.id -ceq $s.plan.sha256) 'plan author must deliver the current plan' }
+  if ($role -cin $PPlanAuthors -and $fields.token -cin $PWritten) { P-Require ($art.kind -ceq 'plan' -and $art.id -ceq $s.plan.sha256) 'plan author must deliver the current plan' }
   $family=P-Family $o
   if ($role -cin $PReview -and $role -cne 'plan-reviewer') { P-Independent $art $fields.coverage $family $s }
   if ($role -ceq 'plan-reviewer') { P-PlanIndependent $s $family }
   $proofs=if ($role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { ,(P-EvidenceRecords (P-Line $text 'EVIDENCE') $art $s) } else { ,@() }
+  $findings=@(if ($role -ceq 'gate' -and $fields.token -ceq 'GATE_FAIL') { P-GateFinding $s } else { $fields.findings })
+  $synthesis=$null
+  if ($role -ceq 'synthesizer' -and $fields.token -ceq 'SYNTHESIS_DONE') {
+    # The synthesis summarises the acceptance; its bytes are frozen here and leave the candidate identity.
+    $path=($text -split '\n')[1].Trim();$item=if ($null -ne $art.files) { V-Get $art.files ('repo:'+$path) } else { $null }
+    P-Require ($null -ne $item -and $item.type -ceq 'file') 'synthesis path is not in the delivered artifact';$synthesis=[ordered]@{path=$path;entry=(P-Entry $item)}
+  }
   if ($role -cin $PWrite) {
     $s.provenance=@(@($s.provenance)+,$data.observation)
-    if ($role -cnotin $PPlanAuthors) { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $a 'artifact')) $art) $family }
+    if ($role -cin $PPlanAuthors) { if ($null -ne $s.plan_authors) { $s.plan_authors=@(@($s.plan_authors)+,$data.observation) } }
+    else { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $a 'artifact')) $art) $family }
   }
-  $entry=[ordered]@{role=$role;token=$fields.token;round=$a.round;phase=$a.phase;step=$s.step;candidate=$art.candidate;artifact=(V-Get $data 'artifact');findings=@($fields.findings)
+  $entry=[ordered]@{role=$role;token=$fields.token;round=$a.round;phase=$a.phase;step=$s.step;candidate=$art.candidate;artifact=(V-Get $data 'artifact');findings=$findings
     coverage=$fields.coverage;family=$family;report=$report;dispatch_id=$a.dispatch_id;evidence=@($proofs)}
+  if ($null -ne $synthesis) { $entry['synthesis']=$synthesis }
   $s.accepted=@(@($s.accepted)+,$entry);$s.processed_messages=@(@($s.processed_messages)+@($msg.id))
+  if ($role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { $s.rounds.gate_fix=0 }  # the gate-fix cap counts consecutive rounds
   $s.write_ownership=@(@($s.write_ownership) | Where-Object { $_ -cne $a.dispatch_id });$s.active=$null
   if (@($fields.findings | Where-Object { $_.risk -cin @('SECURITY','DATA_LOSS') }).Count) { return 'risk-escalation' };return 'accepted'
 }
 function P-Dispatch($data,$s) {
-  P-Fleet $data $s;$p=V-Get $data 'proposed';P-Need $p @('run_id','task_id','dispatch_id','role','phase','round','worktree_id','model')
+  [void](P-Fleet $data $s);$p=V-Get $data 'proposed';P-Need $p @('run_id','task_id','dispatch_id','role','phase','round','worktree_id','model')
   P-Require ($p.role -is [string] -and $PTokens.Contains($p.role) -and $p.run_id -ceq $s.orca_run -and (P-Eq $p.phase $s.phase) -and $p.worktree_id -ceq $s.worktree_id) 'proposed binding mismatch'
   P-Require (($p.round -is [int] -or $p.round -is [long]) -and $p.round -ge 1) 'invalid proposed round'
   P-Require ($p.task_id -and $null -eq $p.dispatch_id) 'dispatch proposal needs a fresh Task and null not-yet-created Dispatch'
@@ -251,10 +307,13 @@ function P-Dispatch($data,$s) {
   $groups=@{'plan-reviewer'='plan_review';'review-primary'='fused_review';'review-control'='fused_review';'review-final'='final_review'};$group=$groups[$p.role];if ($p.gate_fix) { $group='gate_fix' }
   if ($group) {
     $count=$s.rounds[$group];P-Require ($p.round -in @($count,($count+1)) -and $p.round -le (P-Cap $s $group)) ('round cap/sequence: '+$group);$s.rounds[$group]=$p.round
-    P-Require (-not @(@($s.accepted) | Where-Object { $_.role -ceq $p.role -and $_.round -eq $p.round -and $_.family -ceq $family }).Count) 'substantive review needs a new round'
+  }
+  if ($p.role -cin $PReview) {
+    # A BLOCKED attempt reviewed nothing: its fresh retry keeps the round.
+    P-Require (-not @(@($s.accepted) | Where-Object { $_.role -ceq $p.role -and $_.round -eq $p.round -and $_.family -ceq $family -and $_.token -cne 'BLOCKED' }).Count) 'substantive review needs a new round'
   }
   if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art (V-Get $p 'coverage' @{}) $family $s }
-  # The dispatch-time capture bounds what a writer authored.
+  # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
   $p['artifact_id']=$art.id;$p['snapshot_id']=$art.snapshot_id;$p['artifact']=V-Get $data 'artifact';$p['candidate']=$art.candidate;$s.active=$p
   if ($p.role -cin $PWrite) { $s.write_ownership=@('pending:'+$p.task_id) }
 }
@@ -268,16 +327,23 @@ function P-Validate($data) {
   P-Need $data @('schema_version','action','state');P-Require ($data.schema_version -eq 1) 'unsupported input schema' 2
   $s=P-Decode (V-Json $data.state)
   P-Require ($s -is [Collections.IDictionary] -and $s.schema_version -eq 2) 'schema 1 state: run protocol-state migrate' 2;P-Need $s $PKeys
-  if (-not $s.Contains('authors')) { $s['authors']=V-Map }  # added after the first schema 2 states
+  # Added after the first schema 2 states: plan_authors null keeps the legacy rule (every recorded writer is a plan author).
+  if (-not $s.Contains('plan_authors')) { $s['plan_authors']=$null };if (-not $s.Contains('authors')) { $s['authors']=V-Map }
   P-Require ($s.mode -cin @('plan','quickfix') -and $s.step -cin @('plan','phase','quickfix','final-review','delivery','completion') -and ($s.mode -ceq 'quickfix') -eq ($s.step -ceq 'quickfix') -and ($s.step -ceq 'quickfix') -eq ($null -eq $s.plan)) 'invalid protocol mode/step'
   P-Require ([IO.Path]::IsPathRooted($s.worktree) -and [IO.Path]::IsPathRooted($s.workspace)) 'absolute workspace required'
   P-Require ([IO.Path]::GetFullPath((V-GitText $s.worktree @('rev-parse','--show-toplevel'))).TrimEnd('\','/') -eq [IO.Path]::GetFullPath($s.worktree).TrimEnd('\','/')) 'TARGET is not a Git worktree' 2
   foreach ($sha in $s.plan_base,$s.base) { P-Require ($sha -is [string] -and $sha -cmatch '^[a-f0-9]{40}$' -and (P-IsAncestor $s.worktree $sha $sha)) 'missing recorded base' 2 }
+  $action=$data.action;$decision='accepted'
+  # While a plan author's attempt is current (pending, bound, or settled with a rejected report) the live plan is its
+  # working draft: transitions of that attempt and a fresh author attempt read the accepted reference, not the file.
+  $draft=(V-Get $s.active 'role') -cin $PPlanAuthors -and ($action -cin @('bind-dispatch','accept-report','record-author','reconcile-intent','resume') -or
+    ($action -ceq 'dispatch' -and (V-Get (V-Get $data 'proposed') 'role') -cin $PPlanAuthors))
   P-UpdatePlan $data $s
   P-Require ($null -eq $s.plan -or $null -ne $s.plan.sha256 -or $s.step -ceq 'plan') 'missing plan outside the plan step' 2
-  $decisions=P-Ledger $data $s;$phases=P-Plan $s
+  $decisions=P-Ledger $data $s
+  # Only the live file may be a draft: an accepted plan reference that fails its own checks is never tolerated.
+  $phases=if ($draft -and (P-Drafted $s)) { @() } else { P-Plan $s }
   foreach ($key in $PCaps.Keys) { $n=$s.rounds[$key];P-Require (($n -is [int] -or $n -is [long]) -and $n -ge 0 -and $n -le (P-Cap $s $key)) ('round cap: '+$key) }
-  $action=$data.action;$decision='accepted'
   switch -CaseSensitive ($action) {
     'accept-report' { $decision=P-AcceptReport $data $s }
     'dispatch' { P-Dispatch $data $s }
@@ -289,7 +355,7 @@ function P-Validate($data) {
       [void](P-Observation $data.observation $a);if ($a.role -cin $PWrite) { $s.write_ownership=@($d.id) }
     }
     { $_ -cin @('prepare-commit','confirm-commit') } {
-      P-Fleet $data $s;P-Require ($s.step -cin @('plan','phase','quickfix','final-review')) 'not a commit step'
+      [void](P-Fleet $data $s);P-Require ($s.step -cin @('plan','phase','quickfix','final-review')) 'not a commit step'
       $art=P-Artifact (V-Get $data 'artifact') $s ($action -ceq 'prepare-commit');P-Ready $s $art.candidate $decisions $PCommitReady[$s.step]
       if ($action -ceq 'prepare-commit') { P-Require (-not (V-GitText $s.worktree @('diff','--no-ext-diff','--name-only','--'))) 'hook/working-tree or unstaged source after acceptance' }
       else {
@@ -304,7 +370,7 @@ function P-Validate($data) {
       $s.accepted=@();$s.active=$null;$s.rounds.fused_review=0;$s.rounds.gate_fix=0
     }
     'finish-checkpoint' {
-      P-Fleet $data $s;P-Require ($s.step -cin @('final-review','delivery')) 'not a final checkpoint'
+      [void](P-Fleet $data $s);P-Require ($s.step -cin @('final-review','delivery')) 'not a final checkpoint'
       P-Require (P-Subset @($phases | ForEach-Object { $_.id }) @(@($s.phase_commits) | Where-Object { $_.step -ceq 'phase' } | ForEach-Object { $_.phase })) 'uncommitted phases' 2
       $art=P-Artifact (V-Get $data 'artifact') $s $true
       if ($s.step -ceq 'delivery') { P-Require ($art.candidate -ceq $s.final_source) 'delivery covers a different source than the final review' }
@@ -312,7 +378,7 @@ function P-Validate($data) {
       $s.final_source=$art.candidate;$s.step=if ($s.step -ceq 'final-review') { 'delivery' } else { 'completion' };$s.accepted=@();$s.active=$null
     }
     'complete' {
-      P-Fleet $data $s;P-Require ($s.step -ceq 'completion' -and $s.final_source) 'not a final checkpoint'
+      [void](P-Fleet $data $s);P-Require ($s.step -ceq 'completion' -and $s.final_source) 'not a final checkpoint'
       $art=P-Artifact (V-Get $data 'artifact') $s
       P-Require ($art.kind -cne 'plan' -and $art.candidate -ceq $s.final_source) 'completion candidate differs from the final-reviewed source'
       $fact=V-Get $data 'commit';P-Require ((V-Get $fact 'sha') -cnotin @(@($s.phase_commits) | ForEach-Object { $_.sha })) 'completion requires a separate commit'
@@ -349,15 +415,43 @@ function P-Validate($data) {
       $art=P-Artifact (V-Get $data 'artifact') $s $true
       $s.provenance=@(@($s.provenance)+,$data.observation)
       $own=if ($null -ne $s.active -and (V-Get $s.active 'dispatch_id') -ceq $d.id) { $s.active } else { @{} }
-      if ((V-Get $own 'role') -cnotin $PPlanAuthors) { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $own 'artifact')) $art) $authorFamily }
+      if ((V-Get $own 'role') -cin $PPlanAuthors) { if ($null -ne $s.plan_authors) { $s.plan_authors=@(@($s.plan_authors)+,$data.observation) } }
+      else { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $own 'artifact')) $art) $authorFamily }
       $s.write_ownership=@(@($s.write_ownership) | Where-Object { $_ -cne $d.id })
     }
     'record-gate' {
-      # A green verify-gate needs no worker; its sealed C4 results are the gate evidence (a final-fix commit needs one too).
+      # A verify-gate run needs no worker: its sealed C4 results are the gate evidence. A failing run is recorded too,
+      # so its identity G<r>-B1 exists for the user's gate-fix cap extension.
       P-Require ($s.step -cin @('phase','final-review','delivery') -and -not @($s.write_ownership).Count) 'script gate outside an unowned phase, final-review or delivery candidate'
-      $art=P-Artifact (V-Get $data 'artifact') $s $true;$proofs=P-EvidenceRecords (V-Get $data 'evidence') $art $s
-      $s.accepted=@(@($s.accepted)+,([ordered]@{role='gate';token='GATE_OK';round=$s.rounds.gate_fix;phase=$s.phase;step=$s.step;candidate=$art.candidate;artifact=$data.artifact
-        findings=@();coverage=@{};family=$null;report=$null;dispatch_id=$null;evidence=@($proofs)}))
+      $verdict=V-Get $data 'verdict' 'GATE_OK';P-Require ($verdict -cin @('GATE_OK','GATE_FAIL')) 'unknown gate verdict'
+      $art=P-Artifact (V-Get $data 'artifact') $s $true
+      $proofs=if ($verdict -ceq 'GATE_OK') { P-EvidenceRecords (V-Get $data 'evidence') $art $s } else { P-FailureRecords (V-Get $data 'evidence') $art $s }
+      $findings=@(if ($verdict -ceq 'GATE_FAIL') { P-GateFinding $s })
+      $s.accepted=@(@($s.accepted)+,([ordered]@{role='gate';token=$verdict;round=$s.rounds.gate_fix;phase=$s.phase;step=$s.step;candidate=$art.candidate;artifact=$data.artifact
+        findings=$findings;coverage=@{};family=$null;report=$null;dispatch_id=$null;evidence=@($proofs)}))
+      if ($verdict -ceq 'GATE_OK') { $s.rounds.gate_fix=0 }
+    }
+    'reconcile-intent' {
+      # A writer intent whose launch failed: positive termination of this Task's Dispatches in a fresh fleet, or the
+      # saved failed launch receipt when no Dispatch was created; the tree must be the dispatch-time candidate.
+      $a=$s.active
+      P-Require ($null -ne $a -and $null -eq $a.dispatch_id -and @($s.write_ownership).Count -eq 1 -and @($s.write_ownership)[0] -ceq ('pending:'+$a.task_id)) 'no pending dispatch intent'
+      $s.write_ownership=@();$workers=P-Fleet $data $s;$rows=@($workers | Where-Object { (V-Get $_ 'taskId') -ceq $a.task_id })
+      P-Require (-not @($rows | Where-Object { -not (P-Settled $_) }).Count) 'live or unverifiable prior writer' 2
+      if (-not $rows.Count) {
+        $failure=if ($null -ne (V-Get $data 'launch_failure')) { P-Record $data.launch_failure } else { @{} }
+        P-Require ((V-Get $failure 'ok') -eq $false -and $a.task_id -cin @(V-Values $failure)) 'missing launch failure evidence' 2
+      }
+      if ($null -ne (V-Get $a 'candidate') -and $a.role -cnotin $PPlanAuthors) {
+        P-Require ((P-Artifact (V-Get $data 'artifact') $s $true).candidate -ceq $a.candidate) 'the failed launch changed the candidate: bind it or record-author its writer'
+      }
+      $s.active=$null
+    }
+    'reopen-final' {
+      # A defect found in delivery or by the completion hook goes back to the final review: delivery acceptance is
+      # dropped; findings, authorship, commits and the final-review round count stay.
+      P-Require ($s.step -cin @('delivery','completion') -and -not @(@($s.phase_commits) | Where-Object { $_.step -ceq 'completion' }).Count) 'reopen-final outside delivery or completion'
+      [void](P-Fleet $data $s);$s.step='final-review';$s.final_source=$null;$s.active=$null
     }
     default { P-Require ($action -ceq 'resume') 'unknown action' }
   }

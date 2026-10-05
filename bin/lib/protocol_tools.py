@@ -5,7 +5,7 @@ from pathlib import Path
 import verification as v
 from posix_runtime import artifact_path
 from protocol_facts import require, ref, record, plan_read, artifact
-from protocol_state import CAPS
+from protocol_state import CAPS, DEFAULTS, cap
 
 
 def migrate(args):
@@ -25,7 +25,7 @@ def migrate(args):
     s = dict(schema_version=2, mode=old["mode"], plan=plan, ledger_path=(old.get("ledger") or {}).get("path"), step=step, accepted=[],
              phase_commits=[], final_source=None, processed_messages=old["processed"]["messages"], used_fleet_ids=old.get("used_fleet_ids", []),
              cap_extensions=old.get("cap_extensions", []), independence_waivers=old.get("independence_waivers", []), barrier=None,
-             authors={},  # schema 1 kept no per-file authorship
+             plan_authors=None, authors={},  # schema 1 kept no plan or per-file authorship: the legacy plan-author rule applies
              **{k: old[k] for k in ("orca_run", "plan_base", "phase", "base", "worktree", "worktree_id", "workspace", "active", "rounds", "provenance", "write_ownership")})
     if s["active"]: s["active"].pop("format_corrected", None)
     entry = lambda art, **x: dict(dict(round=0, findings=[], coverage={}, family=None, report=None, dispatch_id=None, evidence=[]), phase=old["phase"],
@@ -60,9 +60,12 @@ def summary(args):
              state.get("phase"), state.get("barrier", "-"), short(state.get("base")), state.get("orca_run")),
              "active: " + ("none" if not a else "role=%s round=%s task=%s dispatch=%s fix=%s model=%s" % (
                  a.get("role"), a.get("round"), a.get("task_id"), a.get("dispatch_id"), a.get("fix", False), a.get("model"))),
-             "rounds: " + " ".join("%s=%s/%s" % (k, rounds.get(k), CAPS[k] + sum(1 for x in state.get("cap_extensions") or []
-                                   if x["group"] == k and x["phase"] == state.get("phase"))) for k in CAPS),
-             "write_ownership: %s" % (state.get("write_ownership") or []), "accepted (%d):" % len(state["accepted"])]
+             "rounds: " + " ".join("%s=%s/%s" % (k, rounds.get(k), cap(dict(DEFAULTS, cap_extensions=state.get("cap_extensions") or [],
+                                   phase=state.get("phase")), k)) for k in CAPS),
+             "write_ownership: %s" % (state.get("write_ownership") or []),
+             "plan_authors: %s  authored files: %d" % ("legacy (every writer)" if state.get("plan_authors") is None else len(state["plan_authors"]),
+                                                      len(state.get("authors") or {})),
+             "accepted (%d):" % len(state["accepted"])]
     rows += ["  %s %s r%s %s %s findings=%s" % (r.get("role"), r.get("token"), r.get("round", r.get("binding", {}).get("round")), r.get("step"),
              short(r["candidate"]) if "candidate" in r else name(r.get("artifact")), ",".join(f["id"] for f in r.get("findings") or []) or "-")
              for r in state["accepted"][-12:]]

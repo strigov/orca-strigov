@@ -41,7 +41,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def plan_step(self):
         f = self.f; f.state.update(phase=None, step='plan')
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
+        f.state['plan_authors'] = f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
         return f.plan_artifact()
 
     def test_crlf_report_bytes_and_original_hash(self):

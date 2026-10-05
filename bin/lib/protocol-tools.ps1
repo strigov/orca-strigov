@@ -15,8 +15,10 @@ function P-Summary($cli) {
   $a=& $get $s 'active' $null
   $rows.Add('active: '+$(if ($a -isnot [Collections.IDictionary]) { 'none' } else { 'role={0} round={1} task={2} dispatch={3} fix={4} model={5}' -f (& $get $a 'role'),(& $get $a 'round'),(& $get $a 'task_id'),(& $get $a 'dispatch_id'),(& $get $a 'fix' $false),(& $get $a 'model') }))
   $rounds=@();$ext=@(& $get $s 'cap_extensions' @())
-  foreach ($k in 'plan_review','fused_review','final_review','gate_fix') { $rounds+=,('{0}={1}/{2}' -f $k,(& $get (& $get $s 'rounds' @{}) $k),($PCaps[$k]+@($ext | Where-Object { $_.group -ceq $k -and (P-Eq $_.phase $s.phase) }).Count)) }
+  foreach ($k in 'plan_review','fused_review','final_review','gate_fix') { $rounds+=,('{0}={1}/{2}' -f $k,(& $get (& $get $s 'rounds' @{}) $k),(P-Cap @{cap_extensions=$ext;phase=(V-Get $s 'phase')} $k)) }
   $rows.Add('rounds: '+($rounds -join ' '));$rows.Add('write_ownership: ['+(@(& $get $s 'write_ownership' @()) -join ', ')+']')
+  $planAuthors=V-Get $s 'plan_authors';$authored=V-Get $s 'authors' @{}
+  $rows.Add(('plan_authors: {0}  authored files: {1}' -f $(if ($null -eq $planAuthors) { 'legacy (every writer)' } else { @($planAuthors).Count }),@(V-Keys $authored).Count))
   $accepted=@($s.accepted);$rows.Add('accepted ('+$accepted.Count+'):')
   foreach ($r in @($accepted | Select-Object -Last 12)) {
     $round=if ($r.Contains('round')) { $r.round } else { & $get (& $get $r 'binding' @{}) 'round' };$where=if ($r.Contains('candidate')) { & $short $r.candidate } else { & $name (& $get $r 'artifact' $null) }
@@ -40,7 +42,7 @@ function P-Migrate($cli) {
   $plan=if ($old.plan) { $live=[IO.File]::ReadAllBytes($old.plan.path);[ordered]@{path=$old.plan.path;sha256=(V-Hash $live);structure=(P-PlanRead ($VUtf8.GetString($live).TrimStart([char]0xfeff).Replace("`r`n","`n"))).shape} } elseif ($old.mode -ceq 'plan') { [ordered]@{path=(P-Record $old.authorization).plan_path;sha256=$null;structure=$null} } else { $null }
   $s=[ordered]@{schema_version=2;mode=$old.mode;plan=$plan;ledger_path=(V-Get (V-Get $old 'ledger' @{}) 'path');step=$step;accepted=@();phase_commits=@();final_source=$null
     processed_messages=@($old.processed.messages);used_fleet_ids=(P-List $old 'used_fleet_ids');cap_extensions=(P-List $old 'cap_extensions');independence_waivers=(P-List $old 'independence_waivers');barrier=$null
-    authors=(V-Map)}  # schema 1 kept no per-file authorship
+    plan_authors=$null;authors=(V-Map)}  # schema 1 kept no plan or per-file authorship: the legacy plan-author rule applies
   foreach ($k in 'orca_run','plan_base','phase','base','worktree','worktree_id','workspace','active','rounds','provenance','write_ownership') { $s[$k]=$old[$k] }
   if ($s.active -is [Collections.IDictionary]) { $s.active.Remove('format_corrected') }
   $entry={ param($art,$fields) $e=[ordered]@{round=0;findings=@();coverage=@{};family=$null;report=$null;dispatch_id=$null;evidence=@();phase=$old.phase;step=$step;candidate=(P-Artifact $art $s).candidate;artifact=$art}

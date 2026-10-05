@@ -12,9 +12,9 @@ import sys
 import verification as v
 from posix_runtime import artifact_path
 from protocol_facts import (Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
-                            plan_name, artifact, fresh, fleet_workers, authors, evidence_records, model_matches, actual_model,
-                            family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
-                            checked, entry, manifest_files, step_base)
+                            plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
+                            actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
+                            checked, entry, manifest_files, step_base, values)
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["REVIEW_OK"], "review-control": ["REVIEW_OK"],
@@ -29,13 +29,14 @@ DECISIONS = ["DEFER", "NIT", "REJECTED_BY_SCOPE"]  # ESCALATED_TO_HUMAN keeps a 
 KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base", "phase", "base", "step", "worktree",
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")
-# Added after the first schema 2 states.
-DEFAULTS = {"authors": {}}
+# Added after the first schema 2 states: plan_authors null keeps the legacy rule (every recorded writer is a plan author).
+DEFAULTS = {"plan_authors": None, "authors": {}}
 
 
 def cap(state, group):
-    """Protocol cap plus the user's one-round extensions for this phase (each checked by extend-cap)."""
-    return CAPS[group] + sum(1 for x in state["cap_extensions"] if x["group"] == group and x["phase"] == state["phase"])
+    """Protocol cap plus the user's one-round extensions (each checked by extend-cap). Plan review is one budget per
+    plan, so its extensions count in every phase; the other groups are per phase."""
+    return CAPS[group] + sum(1 for x in state["cap_extensions"] if x["group"] == group and (group == "plan_review" or x["phase"] == state["phase"]))
 
 
 def plan_facts(state):
@@ -48,6 +49,14 @@ def plan_facts(state):
         phase = next((p for p in facts["phases"] if p["id"] == state["phase"]), None)
         require(phase is not None and phase.get("base") == state["base"], "phase/base mismatch")
     return facts["phases"]
+
+
+def drafted(state):
+    """The live plan file no longer holds the accepted bytes (a plan author's working draft)."""
+    plan = state["plan"]
+    if plan is None or plan["sha256"] is None: return False
+    try: return v.file_digest(artifact_path(plan["path"])) != plan["sha256"]
+    except OSError: return True
 
 
 def update_plan(data, state):
@@ -73,6 +82,15 @@ def ledger(data, state):
     return {x["id"]: x for x in items}
 
 
+def settled(worker):
+    """A fleet row that positively ended: durably completed/failed, or released with an exited process."""
+    p = worker.get("projection") or {}
+    if (worker.get("terminalState") in ("release_pending", "release_unknown") or
+            (worker.get("resource") or {}).get("ownershipState") in ("user_owned", "external", "pre_existing")): return False
+    return ((worker.get("dispatchStatus") in ("completed", "failed") and p.get("evidence", {}).get("durable") is True) or
+            (worker.get("terminalState") == "released" and p.get("liveness", {}).get("verdict") == "exited"))
+
+
 def fleet_clear(data, state):
     """Invariant (a): a fresh complete fleet shows no live or unverifiable writer in this worktree. A recorded writer
     must be in it: absence from an inventory taken before that writer started proves nothing."""
@@ -95,6 +113,7 @@ def fleet_clear(data, state):
     state["write_ownership"] = ownership
     require(not ownership, "live or unverifiable prior writer", 2)
     state["used_fleet_ids"] = state["used_fleet_ids"] + receipt_ids
+    return workers
 
 
 def file_authors(art, state):
@@ -128,8 +147,10 @@ def independent(art, coverage, reviewer, state):
 
 
 def plan_independent(state, reviewer):
-    require(state["provenance"], "unknown plan authors", 2)
-    for author in state["provenance"]:
+    """Plan authors are the accepted or registered plan writers and revisers only (legacy states: every writer)."""
+    plan_authors = state["provenance"] if state["plan_authors"] is None else state["plan_authors"]
+    require(plan_authors, "unknown plan authors", 2)
+    for author in plan_authors:
         require(family(record(author)["result"], author) != reviewer, "same-family plan review")
 
 
@@ -152,35 +173,61 @@ def attribute(state, paths, author_family):
     for path in sorted(paths): state["authors"][path] = sorted(set(state["authors"].get(path, [])) | {author_family})
 
 
-def latest(state, role, cand):
-    rows = [i for i, r in enumerate(state["accepted"]) if r["role"] == role and r["candidate"] == cand]
-    return rows[-1] if rows else None
+def units(finding, review):
+    """The reviewed unit a finding is about: its location's file when that file was covered, else the whole coverage."""
+    files = set(review["coverage"].get("files", []))
+    path = str(finding.get("location", "")).split(":")[0].strip()
+    return {path} if path in files else files
+
+
+def omitted(state, review, finding, cand):
+    """A later round of the same role on cand covers the finding's unit and none of its reports lists it."""
+    later = {}
+    for r in state["accepted"]:
+        if r["role"] == review["role"] and r["candidate"] == cand and r["round"] > review["round"] and r["token"] != "BLOCKED":
+            later.setdefault(r["round"], []).append(r)
+    need_units = units(finding, review)
+    return any(all(finding["id"] not in [f["id"] for f in r["findings"]] for r in rows) and
+               need_units <= {p for r in rows for p in r["coverage"].get("files", [])} for rows in later.values())
 
 
 def unresolved(state, cand, decisions):
-    """Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round of the role on cand omitting it."""
+    """Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering
+    the finding's unit and omitting it. A gate failure is identity only: a positive gate on cand supersedes it."""
     out = []
-    for i, r in enumerate(state["accepted"]):
-        last = latest(state, r["role"], cand); later = state["accepted"][last] if last is not None and last > i else None
+    for r in state["accepted"]:
+        if r["role"] == "gate": continue
         for f in r["findings"]:
             item = decisions.get(f["id"], {})
             if item.get("decision") in DECISIONS or (f["kind"] == "cannot_verify" and checked(item, f)): continue
-            if f["kind"] == "blocking" and later and later["round"] > r["round"] and f["id"] not in [x["id"] for x in later["findings"]]: continue
+            if f["kind"] == "blocking" and omitted(state, r, f, cand): continue
             out.append(f["id"])
     return out
 
 
+def approvals(state, role, cand):
+    """The current reports of a role on cand: for reviews, the latest attempt of each family in the latest round
+    (complementary assignments share one round; a BLOCKED attempt is superseded by its retry); else the latest report."""
+    rows = [r for r in state["accepted"] if r["role"] == role and r["candidate"] == cand]
+    if not rows or role not in REVIEW or role == "plan-reviewer": return rows[-1:]
+    top = max(r["round"] for r in rows)
+    by_family = {r["family"]: r for r in rows if r["round"] == top}
+    return [r for r in by_family.values() if r["token"] != "BLOCKED"] or rows[-1:]
+
+
 def ready(state, cand, decisions, roles=None):
-    """The step's required roles have positive latest reports on cand, nothing is unresolved, the reviews are still
+    """The step's required roles have positive current reports on cand, nothing is unresolved, the reviews are still
     independent of every recorded author, and together they cover the package."""
     rows = []
     for role in READY[state["step"]] if roles is None else roles:
-        i = latest(state, role, cand)
-        require(i is not None, "required report is missing: " + role, 2)
-        require(state["accepted"][i]["token"] in GOOD[role], "required report is not positive: " + role)
-        rows.append(state["accepted"][i])
+        current_rows = approvals(state, role, cand)
+        require(current_rows, "required report is missing: " + role, 2)
+        for r in current_rows: require(r["token"] in GOOD[role], "required report is not positive: " + role)
+        rows += current_rows
     still = unresolved(state, cand, decisions)
     require(not still, "unresolved findings: " + ", ".join(still))
+    for r in rows:
+        if r["role"] == "plan-reviewer": plan_independent(state, r["family"])
     reviews = [r for r in rows if r["role"] in REVIEW and r["role"] != "plan-reviewer"]
     if reviews:
         packages = {}
@@ -195,6 +242,16 @@ def ready(state, cand, decisions, roles=None):
             for side in ("producer", "consumer"):
                 sides = {p for r in reviews for x in r["coverage"].get("contracts", []) if x["id"] == c["id"] for p in x.get(side, [])}
                 require(set(c[side]) - skip <= sides, "incomplete contract " + c["id"] + ":" + side, 2)
+
+
+def latest(state, role, cand):
+    rows = [i for i, r in enumerate(state["accepted"]) if r["role"] == role and r["candidate"] == cand]
+    return rows[-1] if rows else None
+
+
+def gate_finding(state):
+    """A failed gate's identity G<r>-B1 (r = the gate-fix round it opens), so the user's cap extension can name it."""
+    return dict(id="G%d-B1" % (state["rounds"]["gate_fix"] + 1), kind="blocking", issue="verification gate failed", location="verify-gate")
 
 
 def current(state):
@@ -294,18 +351,28 @@ def accept_report(data, state):
     role = active["role"]
     if role not in WRITE: require(active.get("artifact_id") == art["id"] and active.get("snapshot_id") == art["snapshot_id"], "assigned artifact changed")
     token, findings, coverage = report_fields(text, active, art, payload.get("outcome"), payload.get("filesModified", []))
-    if role in ("plan-writer", "plan-reviser") and token in WRITTEN:
+    if role in PLAN_AUTHORS and token in WRITTEN:
         require(art["kind"] == "plan" and art["id"] == state["plan"]["sha256"], "plan author must deliver the current plan")
     actual = family(observed)
     if role in REVIEW and role != "plan-reviewer": independent(art, coverage, actual, state)
     if role == "plan-reviewer": plan_independent(state, actual)
     proofs = evidence_records(line_json(text, "EVIDENCE"), art, state) if role == "gate" and token == "GATE_OK" else []
+    if role == "gate" and token == "GATE_FAIL": findings = [gate_finding(state)]
+    extra = {}
+    if role == "synthesizer" and token == "SYNTHESIS_DONE":
+        # The synthesis summarises the acceptance; its bytes are frozen here and leave the candidate identity.
+        path = text.splitlines()[1].strip(); item = (art["files"] or {}).get("repo:" + path)
+        require(item is not None and item["type"] == "file", "synthesis path is not in the delivered artifact")
+        extra["synthesis"] = dict(path=path, entry=entry(item))
     if role in WRITE:
         state["provenance"].append(data["observation"])
-        if role not in PLAN_AUTHORS: attribute(state, written(state, manifest_files(active.get("artifact")), art), actual)
+        if role in PLAN_AUTHORS:
+            if state["plan_authors"] is not None: state["plan_authors"].append(data["observation"])
+        else: attribute(state, written(state, manifest_files(active.get("artifact")), art), actual)
     state["accepted"].append(dict(role=role, token=token, round=active["round"], phase=active["phase"], step=state["step"],
                                   candidate=art["candidate"], artifact=data.get("artifact"), findings=findings, coverage=coverage,
-                                  family=actual, report=report, dispatch_id=active["dispatch_id"], evidence=proofs))
+                                  family=actual, report=report, dispatch_id=active["dispatch_id"], evidence=proofs, **extra))
+    if role == "gate" and token == "GATE_OK": state["rounds"]["gate_fix"] = 0  # the gate-fix cap counts consecutive rounds
     state["processed_messages"].append(msg["id"])
     state["write_ownership"] = [x for x in state["write_ownership"] if x != active["dispatch_id"]]
     state["active"] = None
@@ -329,10 +396,12 @@ def dispatch(data, state):
         count = state["rounds"][group]
         require(proposed["round"] in (count, count + 1) and proposed["round"] <= cap(state, group), "round cap/sequence: " + group)
         state["rounds"][group] = proposed["round"]
-        require(not any(r["role"] == proposed["role"] and r["round"] == proposed["round"] and r["family"] == reviewer
+    if proposed["role"] in REVIEW:
+        # A BLOCKED attempt reviewed nothing: its fresh retry keeps the round.
+        require(not any(r["role"] == proposed["role"] and r["round"] == proposed["round"] and r["family"] == reviewer and r["token"] != "BLOCKED"
                         for r in state["accepted"]), "substantive review needs a new round")
     if proposed["role"] in REVIEW and proposed["role"] != "plan-reviewer": independent(art, proposed.get("coverage", {}), reviewer, state)
-    # The dispatch-time capture bounds what a writer authored.
+    # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
     proposed.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"], artifact=data.get("artifact"), candidate=art["candidate"])
     state["active"] = proposed
     if proposed["role"] in WRITE: state["write_ownership"] = ["pending:" + proposed["task_id"]]
@@ -359,12 +428,19 @@ def validate(data):
     require(artifact_path(v.text_git(state["worktree"], "rev-parse", "--show-toplevel")) == artifact_path(state["worktree"]), "TARGET is not a Git worktree", 2)
     for sha in (state["plan_base"], state["base"]):
         require(isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha) and is_ancestor(state["worktree"], sha, sha), "missing recorded base", 2)
+    action = data["action"]; decision = "accepted"
+    # While a plan author's attempt is current (pending, bound, or settled with a rejected report) the live plan is its
+    # working draft: transitions of that attempt and a fresh author attempt read the accepted reference, not the file.
+    draft = (state["active"] or {}).get("role") in PLAN_AUTHORS and (
+        action in ("bind-dispatch", "accept-report", "record-author", "reconcile-intent", "resume") or
+        (action == "dispatch" and (data.get("proposed") or {}).get("role") in PLAN_AUTHORS))
     update_plan(data, state)
     require(state["plan"] is None or state["plan"]["sha256"] is not None or state["step"] == "plan", "missing plan outside the plan step", 2)
-    decisions = ledger(data, state); phases = plan_facts(state)
+    decisions = ledger(data, state)
+    # Only the live file may be a draft: an accepted plan reference that fails its own checks is never tolerated.
+    phases = [] if draft and drafted(state) else plan_facts(state)
     for key in CAPS:
         require(type(state["rounds"].get(key)) is int and 0 <= state["rounds"][key] <= cap(state, key), "round cap: " + key)
-    action = data["action"]; decision = "accepted"
     if action == "accept-report": decision = accept_report(data, state)
     elif action == "dispatch": dispatch(data, state)
     elif action == "bind-dispatch":
@@ -440,16 +516,45 @@ def validate(data):
         art = artifact(data.get("artifact"), state, True)
         state["provenance"].append(data["observation"])
         own = state["active"] if (state["active"] or {}).get("dispatch_id") == d.get("id") else {}
-        if own.get("role") not in PLAN_AUTHORS: attribute(state, written(state, manifest_files(own.get("artifact")), art), author_family)
+        if own.get("role") in PLAN_AUTHORS:
+            if state["plan_authors"] is not None: state["plan_authors"].append(data["observation"])
+        else: attribute(state, written(state, manifest_files(own.get("artifact")), art), author_family)
         state["write_ownership"] = [x for x in state["write_ownership"] if x != d.get("id")]
     elif action == "record-gate":
-        # A green verify-gate needs no worker; its sealed C4 results are the gate evidence (a final-fix commit needs one too).
+        # A verify-gate run needs no worker: its sealed C4 results are the gate evidence. A failing run is recorded too,
+        # so its identity G<r>-B1 exists for the user's gate-fix cap extension.
         require(state["step"] in ("phase", "final-review", "delivery") and not state["write_ownership"],
                 "script gate outside an unowned phase, final-review or delivery candidate")
+        verdict = data.get("verdict", "GATE_OK"); require(verdict in ("GATE_OK", "GATE_FAIL"), "unknown gate verdict")
         art = artifact(data.get("artifact"), state, True)
-        state["accepted"].append(dict(role="gate", token="GATE_OK", round=state["rounds"]["gate_fix"], phase=state["phase"], step=state["step"],
-                                      candidate=art["candidate"], artifact=data["artifact"], findings=[], coverage={}, family=None,
-                                      report=None, dispatch_id=None, evidence=evidence_records(data.get("evidence"), art, state)))
+        proofs = (evidence_records if verdict == "GATE_OK" else failure_records)(data.get("evidence"), art, state)
+        state["accepted"].append(dict(role="gate", token=verdict, round=state["rounds"]["gate_fix"], phase=state["phase"], step=state["step"],
+                                      candidate=art["candidate"], artifact=data["artifact"], findings=[] if verdict == "GATE_OK" else [gate_finding(state)],
+                                      coverage={}, family=None, report=None, dispatch_id=None, evidence=proofs))
+        if verdict == "GATE_OK": state["rounds"]["gate_fix"] = 0
+    elif action == "reconcile-intent":
+        # A writer intent whose launch failed: positive termination of this Task's Dispatches in a fresh fleet, or the
+        # saved failed launch receipt when no Dispatch was created; the tree must be the dispatch-time candidate.
+        active = state["active"]
+        require(active is not None and active["dispatch_id"] is None and state["write_ownership"] == ["pending:" + active["task_id"]],
+                "no pending dispatch intent")
+        state["write_ownership"] = []
+        rows = [w for w in fleet_clear(data, state) if w.get("taskId") == active["task_id"]]
+        require(all(settled(w) for w in rows), "live or unverifiable prior writer", 2)
+        if not rows:
+            failure = record(data["launch_failure"]) if data.get("launch_failure") is not None else {}
+            require(failure.get("ok") is False and active["task_id"] in values(failure), "missing launch failure evidence", 2)
+        if active.get("candidate") is not None and active["role"] not in PLAN_AUTHORS:
+            require(artifact(data.get("artifact"), state, True)["candidate"] == active["candidate"],
+                    "the failed launch changed the candidate: bind it or record-author its writer")
+        state["active"] = None
+    elif action == "reopen-final":
+        # A defect found in delivery or by the completion hook goes back to the final review: delivery acceptance is
+        # dropped; findings, authorship, commits and the final-review round count stay.
+        require(state["step"] in ("delivery", "completion") and not any(c["step"] == "completion" for c in state["phase_commits"]),
+                "reopen-final outside delivery or completion")
+        fleet_clear(data, state)
+        state.update(step="final-review", final_source=None, active=None)
     else: require(action == "resume", "unknown action")
     state["barrier"] = barrier(state, phases, decisions)
     return state, decision

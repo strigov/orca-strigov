@@ -309,7 +309,7 @@ class TransitionTests(unittest.TestCase):
         f = self.f; base = f.git.base; self.plan_step()
         f.plan.write_text(plan_text(base), encoding='utf-8')
         f.state['plan'] = f.plan_ref()
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
+        f.state['plan_authors'] = f.state['provenance'] = [f.observation(f.assignment('plan-writer'))]
         approved = f.plan_artifact()
         self.ok(f.report_input('plan-reviewer', 'Anthropic', artifact=approved), barrier='awaiting_commit')
         confirm = lambda sha, b=base: self.proposal('confirm-commit', artifact=approved, commit=dict(sha=sha, base=b), fleet=f.fleet())
@@ -343,12 +343,16 @@ class TransitionTests(unittest.TestCase):
         self.no(2, 'review requires a complete package', f.report_input('review-control', 'Google', artifact=f.snapshot_ref(), coverage=coverage))
         # A plan reviewer is outside every plan author family.
         f.state.update(phase=None, step='plan')
-        f.state['provenance'] = [f.observation(f.assignment('plan-writer', 'Anthropic'))]
+        f.state['plan_authors'] = [f.observation(f.assignment('plan-writer', 'Anthropic'))]
         plan = f.plan_artifact()
         self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'Anthropic', artifact=plan))
         self.ok(f.report_input('plan-reviewer', 'Google', artifact=plan), barrier='awaiting_commit')
-        f.state['provenance'] = []
+        f.state['plan_authors'] = []
         self.no(2, 'unknown plan authors', f.report_input('plan-reviewer', 'Google', artifact=plan, round=2))
+        # A legacy state without plan_authors keeps the old rule: every recorded writer counts as a plan author.
+        legacy = {k: v for k, v in f.state.items() if k != 'plan_authors'}; f.state = legacy
+        f.state['provenance'] = [f.observation(f.assignment('implementer', 'Google'))]
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'Google', artifact=plan, round=2))
 
     def test_user_waiver_only_where_every_family_authored(self):
         f = self.f; files = ['plan.md', 'tracked.txt']
@@ -508,8 +512,9 @@ class TransitionTests(unittest.TestCase):
         rc, text, err = command(f.argv('protocol-state', 'migrate', source['path'], out), f.git.root)
         self.assertEqual(rc, 0, (text, err))
         migrated = read_json(out)
-        self.assertEqual({k: migrated[k] for k in state if k not in ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier')},
-                         {k: state[k] for k in state if k not in ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier')})
+        skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier', 'plan_authors')
+        self.assertEqual({k: migrated[k] for k in state if k not in skip}, {k: state[k] for k in state if k not in skip})
+        self.assertIsNone(migrated['plan_authors'])  # schema 1 kept no plan authorship: the legacy rule applies
         self.assertEqual([r['role'] for r in migrated['accepted']], ['review-primary'])
         self.assertEqual((migrated['processed_messages'], migrated['used_fleet_ids'], migrated['rounds']['fused_review']), (['m1'], ['fleet-1'], 1))
         f.state = migrated
