@@ -125,12 +125,17 @@ only the ledger path.
   `finish-checkpoint` clears `accepted`; a later final review needs a new round.
 - `plan_approved`: the plan structure digest of the latest independent plan
   approval. When `plan.structure` differs (a substantive revision after the plan
-  step) the plan review is pending (see Plan reference).
-- `authors_incomplete`: `{path: phases}` for an upgraded older state: files
-  whose rebuilt author set came from fewer distinct write receipts than the
-  phases that changed them (its phase commits since `plan_base` plus the
-  uncommitted change). Such a file is `unknown actual author` for any review
-  whose package declares fewer distinct write receipts for it than that count.
+  step) the plan review is pending (see Plan reference). `plan_approval_evidence`
+  keeps the saved state a `resume` imported it from (see Actions).
+- `authors_incomplete`: `{path: [[start, end], …]}` for an upgraded older state:
+  per rebuilt file, the change windows that changed it but that no surviving
+  write row was dispatched in. A change window is one confirmed
+  phase/final-fix/quickfix commit since `plan_base` (or the uncommitted change);
+  its writers were dispatched in (previous commit time, this commit time], the
+  plan commit opening the first. A write row belongs to the window containing its
+  receipt's `dispatch.createdAt`; several rows of one window never stand in for
+  another. Such a file is `unknown actual author` for any review whose package
+  does not declare a writer dispatched in each missing window.
 - **Older states.** A state written before these fields existed is upgraded on
   its first validate, only from evidence it holds: `authors` from the validated
   write receipts of the C5 packages its accepted reviews used (with
@@ -138,7 +143,9 @@ only the ledger path.
   plan-writer/plan-reviser entries (their `provenance` observations) and from
   those package writes that touched the plan file; `attempts` = one consumed
   final-review attempt per counted round when it is in `delivery` or
-  `completion`, else empty; `plan_approved` = the structure of its latest
+  `completion`, or in `final-review` with `rounds.final_review > 0` (an older
+  runtime may already have reopened it; there the identity `R<round>-REOPEN` is
+  registered too, so the user's `extend-cap` can name it), else empty; `plan_approved` = the structure of its latest
   accepted plan-reviewer APPROVED artifact when no plan author's entry came
   later, else the plan-only commit's plan when no plan author's entry remains,
   else none (the revision awaits its plan review). Nothing rebuilt stays unknown,
@@ -167,10 +174,14 @@ other transition still requires the accepted bytes: after a failed or abandoned
 attempt, either accept a fresh author's report or restore the accepted copy.
 
 **Plan author's lane.** A plan writer or reviser edits the plan file only: its
-dispatch captures the repository candidate (`active.source`), and its
-`accept-report` (or `record-author`) rejects any change to it with `plan author
-changed source outside the plan: revert it or re-dispatch the change to an
-implementer`; nothing is attributed silently.
+dispatch captures the repository candidate (`active.source`). Its
+`accept-report`, and `reconcile-intent` of its unbound intent, reject any change
+to it with `plan author changed source outside the plan: revert it or attribute
+it with record-author (route further source work to an implementer)` and keep
+the assignment. `record-author` of that plan author attributes the change
+explicitly: its family joins `plan_authors` and, for every path changed since
+the step base, `authors` (it needs a current snapshot artifact then). Nothing is
+attributed silently.
 
 **Pending plan review.** An accepted plan-writer/plan-reviser report that
 changes the plan structure after the plan step (a mid-phase revision) sets the
@@ -231,13 +242,13 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 
 | Action | Inputs and effect |
 | --- | --- |
-| `resume` | Structure only: state shape, plan, bases, caps; returns the barrier. |
+| `resume` | Structure only: state shape, plan, bases, caps; returns the barrier. Optional `prior_plan_approval_state` (`{path,sha256}` of an earlier saved state or proposal of this Run): when its latest accepted `plan-reviewer` `APPROVED` entry has no plan author's entry after it, its report hash and BINDING (run, role, dispatch, round, artifact) match the entry, its reviewer family is outside every current `plan_authors` family, the state shares the Run, worktree, plan path and `plan_base`, its processed message ids are all in the current state, and the approved artifact's plan structure equals the current one, `plan_approved` is restored and `plan_approval_evidence` records the reference. Nothing else is taken from it (rounds, findings, ownership and source acceptances stay); otherwise `prior plan approval does not apply: <why>`. |
 | `dispatch` | `fleet`, `proposed` (`run_id,task_id,dispatch_id:null,role,phase,round,worktree_id,model`, review `coverage`, optional `fix:true`, `gate_fix:true`), `artifact` (omitted only for the first plan-writer before the plan exists). Freezes the assignment, the artifact reference and its candidate in `active`; a writer becomes `pending:<task>` in `write_ownership`. Reviewer and gate-fix rounds go `count` or `count+1` within the cap; repeating a review role/round with the same family needs a new round unless that attempt was `BLOCKED` (a fresh retry keeps the round); review coverage must be independent. |
 | `bind-dispatch` | `observation` of the pending fresh Task (not a `--retry-of`); the actual model must match the proposal (a roles.md `MODEL_ALIASES` alias matches its full-id prefix). A writer then owns the worktree. |
 | `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). See Accepting a report. Clears `active`. |
 | `record-gate` | Current `artifact`, `evidence` (sealed C4 `result.json` references of one verify-gate run) and optional `verdict` (`GATE_OK` default, or `GATE_FAIL`) in the phase, final-review or delivery step with no writer. GATE_OK: at least one pass, every failure a proven BASE inheritance; it resets the consecutive gate-fix count. GATE_FAIL: at least one failure BASE does not explain; the entry carries the finding `G<r>-B1` (r = `rounds.gate_fix + 1`) that a gate-fix cap extension can name. |
 | `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported, and the current `artifact` (a plan author may omit it before the plan exists): its bytes still carry its family. Required before anything replaces a bound writer that settled without an accepted report. Appends the reference to `provenance`; a plan author (the active plan-writer/reviser, or any author given with a `kind:plan` artifact) goes to `plan_authors`, any other writer's family is recorded in `authors` for the paths it changed (its own window when it is the active assignment or the Dispatch of its still unbound Task, else everything changed since the step base). The Dispatch of the active unbound Task (a launch that started with another model and wrote) also clears that intent. More author families only make reviews stricter; approvals that lose independence stop counting at readiness. |
-| `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed without writing: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate. A launch that wrote is registered with `record-author` instead, which clears the intent without reverting its changes. |
+| `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed without writing: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate — for a plan author, the source candidate captured at its dispatch (the plan file may differ; any source change keeps the intent with the plan-lane reason). A launch that wrote is registered with `record-author` instead, which clears the intent without reverting its changes. |
 | `reopen-final` | `fleet`, in `delivery` or `completion` before the completion commit: a defect found in delivery or a completion-hook source repair returns to `final-review`. Clears `final_source`; keeps `accepted` findings (so a delivery gate failure stays nameable), commits, authorship, the final-review round count and the consumed final-review `attempts`: the next final review needs a new round. Takes the current `artifact` and registers the bound recovery item `R<round>-REOPEN` (an entry of role `reopen` citing that capture; its issue says whether the source changed after the final checkpoint), which the user's `extend-cap` can name at the cap — also when a completion hook reformatted source and nothing failed. |
 | `prepare-commit` | `fleet`, current `artifact`; the candidate is ready and nothing is unstaged. Records nothing. |
 | `confirm-commit` | `fleet`, the accepted `artifact`, `commit:{sha,base}`. Readiness plus the commit check; records the commit once (a repeat confirms the same commit idempotently). Steps `plan`, `phase`, `quickfix`, `final-review` (final-fix commit: a gate on the fixed bytes plus the final review). |
