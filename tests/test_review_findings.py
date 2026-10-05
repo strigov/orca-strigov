@@ -803,6 +803,23 @@ class ReviewFindingTests(unittest.TestCase):
         self.no(1, 'same-family review: producer.ts', action='dispatch', artifact=art, fleet=f.fleet(),
                 proposed=dict(self.assignment('review-control', 'OpenAI'), coverage=coverage))
 
+    def test_r6_2_a_file_restored_by_a_later_phase_keeps_its_earlier_writers(self):
+        """Review r6 finding 2: a file one recorded phase changed and a later one restored is absent from the endpoint
+        diff; the legacy superset must still cover it."""
+        f = self.f
+        self.legacy_producer(['OpenAI'], [('Google', ['producer.ts', 'fresh.ts', 'plan.md'], None)])
+        head = f.git.git('rev-parse', 'HEAD').strip(); base = f.state['phase_commits'][0]['base']
+        f.git.git('stash', '-q', '-u')
+        f.git.git('checkout', '-q', '--detach', base); self.write('gone.ts', 'export const gone = 1\n'); f.git.git('add', 'gone.ts')
+        added = f.git_commit('an earlier phase adds gone.ts')
+        f.git.git('checkout', '-q', '-'); f.git.git('stash', 'pop', '-q')
+        self.assertEqual(f.git.git('rev-parse', 'HEAD').strip(), head)
+        self.assertNotIn('gone.ts', f.git.git('diff', '--name-only', f.state['plan_base'], f.state['base']))
+        f.state['phase_commits'].append(dict(phase='F0', step='phase', sha=added, base=base, candidate='restored-later'))
+        self.legacy('authors', 'plan_authors')
+        self.ok()
+        self.assertEqual(f.state['authors'].get('gone.ts'), ['Google', 'OpenAI'])
+
     def test_r5_3_plan_author_reversion_and_deletion_are_attributed(self):
         """Review r5 finding 3: a plan reviser restores a file to the phase base and deletes another, then fails."""
         f = self.f; self.write('extra.txt', 'written by the implementer\n')

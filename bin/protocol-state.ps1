@@ -101,7 +101,10 @@ function P-Upgrade($s) {
     }
     if (-not $s.Contains('authors')) {
       $end=if ($s.step -cin @('plan','phase','quickfix')) { $s.base } else { 'HEAD' }
-      $earlier=@(V-Nul (V-Git $s.worktree @('diff','--no-ext-diff','--name-only','-z',$s.plan_base,$end,'--')) | Where-Object { $_ -cne $name })
+      # Every path any recorded commit range changed, not only the endpoint diff: a file changed in one phase and
+      # restored in a later one still had that phase's writers.
+      $ranges=@(,@($s.plan_base,$end));foreach ($c in @($s.phase_commits)) { if ($null -ne $c) { $ranges+=,@($c.base,$c.sha) } }
+      $earlier=@(@(foreach ($r in $ranges) { V-Nul (V-Git $s.worktree @('diff','--no-ext-diff','--name-only','-z',$r[0],$r[1],'--')) }) | Where-Object { $_ -cne $name } | Sort-Object -Unique -CaseSensitive)
       if ($earlier.Count) {
         $superset=P-LegacySuperset $s
         foreach ($x in $earlier) { $rebuilt[$x]=@(@(@($rebuilt[$x] | Where-Object { $null -ne $_ })+@($superset)) | Sort-Object -Unique -CaseSensitive) }

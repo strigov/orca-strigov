@@ -98,8 +98,11 @@ def upgrade(state):
                                      dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
         if "authors" not in state:
             end = state["base"] if state["step"] in ("plan", "phase", "quickfix") else "HEAD"
-            earlier = [x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], end, "--").decode("utf-8").split("\0")
-                       if x and x != name]
+            # Every path any recorded commit range changed, not only the endpoint diff: a file changed in one phase and
+            # restored in a later one still had that phase's writers.
+            ranges = [(state["plan_base"], end)] + [(c["base"], c["sha"]) for c in state["phase_commits"]]
+            earlier = sorted({x for a, b in ranges for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", a, b, "--").decode("utf-8").split("\0")
+                              if x and x != name})
             superset = legacy_superset(state) if earlier else set()
             for x in earlier: rebuilt.setdefault(x, set()).update(superset)
             state["authors"] = {path: sorted(f) for path, f in sorted(rebuilt.items())}

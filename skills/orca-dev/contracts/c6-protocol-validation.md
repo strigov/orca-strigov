@@ -34,8 +34,10 @@ mistaken variants):
 cumulative `authors` cannot prove who wrote its earlier phases: their review
 packages left the state at `advance`, and receipt counts or Dispatch timestamps
 do not establish completeness. C6 therefore does not try. On upgrade, every file
-committed in an earlier phase of the Run (`plan_base`..the current phase's
-`base`; every phase in the final steps) gets the conservative superset: every
+changed by any recorded commit range of the Run (`plan_base`..the current
+phase's `base`, and each recorded phase commit's own range, so a file restored
+by a later phase is still included; every phase in the final steps) gets the
+conservative superset: every
 model family among the state's `provenance` writer observations plus the
 families of every write row of every package the state still references (an
 observation whose family cannot be read counts as every family). Files touched
@@ -43,6 +45,16 @@ only in the current phase follow the normal package and `record-author` rules.
 The superset can only over-approximate authorship, so independence only gets
 stricter; where it leaves no independent family for a file, the user's
 `waive-independence` applies.
+
+Known limitation: a writer family that appears neither in `provenance` nor in a
+package the state still references (an earlier writer replaced without an
+accepted report under the pre-upgrade runtime, its package dropped at `advance`)
+is missing from the superset. Only states written before this upgrade can have
+that gap; new states record authorship cumulatively. The two Runs upgraded in
+practice were audited on 2026-10-05 against every package saved in their
+workspaces (p3a-core: 12 packages, p3b-docsvc: 56): every recorded writer family
+of their source files (Google; OpenAI only for the plan file) is inside the
+superset C6 computes for them.
 
 ## What C6 checks
 
