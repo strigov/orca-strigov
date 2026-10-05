@@ -116,26 +116,41 @@ function P-PlanName($s) {
   $mode=if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
   if (-not $path.StartsWith($root,$mode)) { return $null };return $path.Substring($root.Length).Replace('\','/')
 }
+function P-Entry($x) {
+  # A repository entry's identity: its bytes (or type) and the Git executable bit of its index entry.
+  $value=if ($x.Contains('sha256')) { $x.sha256 } else { $x.type }
+  $index=V-Get $x 'index';if ($null -ne $index -and @($index)[0] -ceq '100755') { return $value+'+x' };return $value
+}
 function P-Candidate($files,$s) {
-  # Candidate identity: repository entries and their bytes; no HEAD, exclusions, index, declared inputs or plan file.
+  # Candidate identity: repository entries (bytes + executable bit); no HEAD, exclusions, staging, declared inputs or plan file.
   $skip=P-PlanName $s;$entries=V-Map
   foreach ($k in @($files.Keys)) {
     if (-not $k.StartsWith('repo:',[StringComparison]::Ordinal)) { continue };$x=$files[$k];$name=$k.Substring(5)
-    if ($x.type -ceq 'missing' -or $name -ceq $skip) { continue };$entries[$name]=if ($x.Contains('sha256')) { $x.sha256 } else { $x.type }
+    if ($x.type -ceq 'missing' -or $name -ceq $skip) { continue };$entries[$name]=P-Entry $x
   };return V-Id $entries
 }
 function P-Fresh($s,$art) {
   $now=V-Snapshot $s.worktree @() @($art.exclusions)
   P-Require ($now.valid -and (P-Candidate $now.manifest.files $s) -ceq $art.candidate) 'stale artifact: the working tree is no longer this candidate';return $now
 }
+function P-StepBase($s) { if ($s.step -cin @('final-review','delivery','completion')) { return $s.plan_base };return $s.base }
+function P-PackageBound($obj,$m,$s) {
+  # A package reviews the step's diff: from the step base, and a range package's candidate is its reviewed tree.
+  P-Require ($obj.base -ceq (P-StepBase $s)) 'package base differs from the step base'
+  if ($obj.mode -cne 'range') { return }
+  $skip=@(P-PlanName $s)
+  $untracked=@(foreach ($k in @($m.files.Keys)) { $x=$m.files[$k];if ($k.StartsWith('repo:',[StringComparison]::Ordinal) -and $x.type -cne 'missing' -and $k.Substring(5) -cnotin $skip -and -not $x.Contains('index')) { $k } })
+  $dirty=@(V-Nul (V-Git $s.worktree @('diff','--no-ext-diff','--name-only','-z',$obj.head,'--')) | Where-Object { $_ -cnotin $skip })
+  P-Require (-not $untracked.Count -and -not $dirty.Count -and $obj.head -ceq $m.head -and $m.head -ceq (V-GitText $s.worktree @('rev-parse','HEAD'))) 'range package differs from its reviewed tree'
+}
 function P-Artifact($r,$s,$current=$false) {
   # A plan, C4 snapshot or C5 package reference; $current=$null admits a missing artifact (first plan writer).
-  if ($null -eq $r -and $null -eq $current) { return @{kind=$null;id=$null;snapshot_id=$null;candidate=$null;manifest=$null} }
+  if ($null -eq $r -and $null -eq $current) { return @{kind=$null;id=$null;snapshot_id=$null;candidate=$null;manifest=$null;files=$null} }
   $text=P-Ref $r;$kind=V-Get $r 'kind'
   if ($kind -ceq 'plan') {
     $source=if ($r.Contains('source_path')) { $r.source_path } else { $r.path }
     if ($current) { P-Require ($null -ne $s.plan -and $r.sha256 -ceq $s.plan.sha256 -and $source -ceq $s.plan.path) 'assigned plan mismatch' }
-    return @{kind=$kind;id=$r.sha256;snapshot_id=$null;candidate=$r.sha256;manifest=$null}
+    return @{kind=$kind;id=$r.sha256;snapshot_id=$null;candidate=$r.sha256;manifest=$null;files=$null}
   }
   $obj=P-Decode $text;$manifest=$null
   if ($kind -ceq 'package') {
@@ -143,8 +158,13 @@ function P-Artifact($r,$s,$current=$false) {
     P-Require ($obj.complete -eq $true -and (V-Id $identity) -ceq $packageId) 'incomplete package' 2;$snap=$obj.snapshot_after;$id=$packageId;$manifest=$obj
   } else { P-Require ($kind -ceq 'snapshot' -and $obj.valid -eq $true) 'invalid snapshot' 2;$snap=$obj;$id=$obj.snapshot_id }
   $m=$snap.manifest;P-Require ([IO.Path]::GetFullPath($m.root) -eq [IO.Path]::GetFullPath($s.worktree)) 'artifact worktree mismatch'
-  $art=@{kind=$kind;id=$id;snapshot_id=$snap.snapshot_id;candidate=(P-Candidate $m.files $s);head=$m.head;exclusions=@($m.exclusions);manifest=$manifest}
-  if ($current) { [void](P-Fresh $s $art) };return $art
+  $art=@{kind=$kind;id=$id;snapshot_id=$snap.snapshot_id;candidate=(P-Candidate $m.files $s);head=$m.head;exclusions=@($m.exclusions);manifest=$manifest;files=$m.files}
+  if ($current) { [void](P-Fresh $s $art);if ($kind -ceq 'package') { P-PackageBound $obj $m $s } };return $art
+}
+function P-ManifestFiles($r) {
+  # The captured files of a snapshot or package reference; $null for a plan or an absent artifact.
+  if ($r -isnot [Collections.IDictionary] -or (V-Get $r 'kind') -cnotin @('snapshot','package')) { return $null }
+  $obj=P-Record $r;if ($r.kind -ceq 'package') { return ,$obj.snapshot_after.manifest.files };return ,$obj.manifest.files
 }
 function P-FleetWorkers($data,$used) {
   # All worker rows of one complete, unused, all-Run worker-list collection, plus its receipt ids.
@@ -170,6 +190,19 @@ function P-EvidenceRecords($records,$art,$s) {
     if ($st.exit_code -eq 0) { $passed++ } else { $base=P-Record (V-Get $entry 'baseline');P-Require ((V-EvidenceValid $base) -and $base.evidence.key.provenance.kind -ceq 'BASE' -and $base.exit_code -ne 0 -and $base.evidence.failure_signature -ceq $e.failure_signature) 'unproven inherited failure' }
   }
   P-Require ($passed -gt 0) 'zero passing checks';return ,$records
+}
+function P-Checked($item,$finding) {
+  # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command whose outcome is its
+  # EXPECT (`exit <n>`, optionally `; stdout exactly|contains: <text>`); the original candidate's bytes are not compared.
+  $path=V-Get $item 'check'
+  try { if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false };$result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff)) } catch { return $false }
+  if (-not ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result))) { return $false }
+  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),'^exit ([0-9]+)(?:; stdout (exactly|contains): (.*))?$','Singleline')
+  $code=$result['exit_code']
+  if (-not $want.Success -or $result.evidence.key.check.command -cne (V-Get $finding 'check') -or -not ($code -is [int] -or $code -is [long]) -or $code -ne [long]$want.Groups[1].Value) { return $false }
+  if (-not $want.Groups[2].Success) { return $true }
+  try { $out=$VUtf8.GetString([IO.File]::ReadAllBytes($result.stdout_log)).Replace("`r`n","`n") } catch { return $false }
+  if ($want.Groups[2].Value -ceq 'exactly') { return $out.TrimEnd([char]10) -ceq $want.Groups[3].Value };return $out.Contains($want.Groups[3].Value)
 }
 $POrcaPreamble='You are working inside Orca, a multi-agent IDE. You are a dispatched worker.'
 function P-RolesFact([string]$label) { return ,(P-Line ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../skills/orca-dev/roles.md'),$VUtf8).TrimStart([char]0xfeff)) $label) }

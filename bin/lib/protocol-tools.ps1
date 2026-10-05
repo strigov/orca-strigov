@@ -39,7 +39,8 @@ function P-Migrate($cli) {
   # The live plan may have moved by bookkeeping lines since the v1 state was saved: adopt its current bytes.
   $plan=if ($old.plan) { $live=[IO.File]::ReadAllBytes($old.plan.path);[ordered]@{path=$old.plan.path;sha256=(V-Hash $live);structure=(P-PlanRead ($VUtf8.GetString($live).TrimStart([char]0xfeff).Replace("`r`n","`n"))).shape} } elseif ($old.mode -ceq 'plan') { [ordered]@{path=(P-Record $old.authorization).plan_path;sha256=$null;structure=$null} } else { $null }
   $s=[ordered]@{schema_version=2;mode=$old.mode;plan=$plan;ledger_path=(V-Get (V-Get $old 'ledger' @{}) 'path');step=$step;accepted=@();phase_commits=@();final_source=$null
-    processed_messages=@($old.processed.messages);used_fleet_ids=(P-List $old 'used_fleet_ids');cap_extensions=(P-List $old 'cap_extensions');independence_waivers=(P-List $old 'independence_waivers');barrier=$null}
+    processed_messages=@($old.processed.messages);used_fleet_ids=(P-List $old 'used_fleet_ids');cap_extensions=(P-List $old 'cap_extensions');independence_waivers=(P-List $old 'independence_waivers');barrier=$null
+    authors=(V-Map)}  # schema 1 kept no per-file authorship
   foreach ($k in 'orca_run','plan_base','phase','base','worktree','worktree_id','workspace','active','rounds','provenance','write_ownership') { $s[$k]=$old[$k] }
   if ($s.active -is [Collections.IDictionary]) { $s.active.Remove('format_corrected') }
   $entry={ param($art,$fields) $e=[ordered]@{round=0;findings=@();coverage=@{};family=$null;report=$null;dispatch_id=$null;evidence=@();phase=$old.phase;step=$step;candidate=(P-Artifact $art $s).candidate;artifact=$art}

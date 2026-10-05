@@ -481,7 +481,7 @@ class ProtocolFixture(VerificationFixture):
                     base=self.git.base, step='quickfix' if self.quickfix else 'phase', worktree=str(self.git.root),
                     worktree_id='fixture-worktree', workspace=str(self.workspace), active=None,
                     rounds=dict(plan_review=0, fused_review=0, final_review=0, gate_fix=0), cap_extensions=[],
-                    independence_waivers=[], provenance=[], accepted=[], write_ownership=[], phase_commits=[],
+                    independence_waivers=[], provenance=[], authors={}, accepted=[], write_ownership=[], phase_commits=[],
                     final_source=None, processed_messages=[], used_fleet_ids=[])
 
     def plan_ref(self, path=None):
@@ -678,8 +678,10 @@ class ProtocolFixture(VerificationFixture):
             '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', 'protocol fixture')
         return dict(sha=self.git.git('rev-parse', 'HEAD').strip(), base=base, artifact=artifact)
 
-    def package_ref(self, families=None, contracts=None, start_families=(), claims=None, unbound=False):
-        files = self.git.git('diff', '--name-only', self.git.base).splitlines()
+    def package_ref(self, families=None, contracts=None, start_families=(), claims=None, unbound=False, base=None, head='WORKTREE'):
+        # C6 binds a package to the step base: the phase base, or plan_base in the final steps.
+        base = base or (self.state['plan_base'] if self.state['step'] in ('final-review', 'delivery', 'completion') else self.state['base'])
+        files = self.git.git('-c', 'core.quotePath=false', 'diff', '--name-only', base, *([] if head == 'WORKTREE' else [head])).splitlines()
         writes = []
         for family, names in (families or {'OpenAI': files}).items():
             a = self.assignment(family=family)
@@ -694,7 +696,7 @@ class ProtocolFixture(VerificationFixture):
         path = self.workspace / ('package-' + str(self.serial) + '.diff')
         write_json(str(path) + '.provenance.json', dict(schema_version=1, writes=writes,
             contracts=contracts or [dict(id='C1', producer=['tracked.txt'], consumer=['plan.md'])], inputs=[]))
-        result = command(self.argv('review-package', self.git.base, 'WORKTREE', path), self.git.root)
+        result = command(self.argv('review-package', base, head, path), self.git.root)
         if result[0]: raise AssertionError(result)
         ref = self.reference(str(path) + '.manifest.json', kind='package')
         m = read_json(ref['path'])

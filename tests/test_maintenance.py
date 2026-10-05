@@ -105,10 +105,13 @@ class MaintenanceTests(unittest.TestCase):
         rc, passed = f.verified_run(code="print('assertion holds')"); self.assertEqual(rc, 0, passed)
         self.both(self.case('record-gate', artifact=art, evidence=[f.reference(Path(passed['run_dir']) / 'result.json')]))
         ledger = f.workspace / 'ledger.json'
-        for run, code in ((result, 1), (passed, 0)):
+        # The literal CHECK failed; another command's passing result does not close it either (review finding 5).
+        for run in (result, passed):
             ledger.write_text(json.dumps([dict(id='CV-negative', check=str(Path(run['run_dir']) / 'result.json'))]))
-            self.both(self.case('prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger)), code,
-                      'unresolved findings: CV-negative' if code else '')
+            self.both(self.case('prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger)), 1,
+                      'unresolved findings: CV-negative')
+        ledger.write_text(json.dumps([dict(id='CV-negative', decision='DEFER')]))
+        self.both(self.case('prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger)))
 
     def test_each_attempt_has_its_own_immutable_report(self):
         f = self.f; art = f.snapshot_ref(); saved = []

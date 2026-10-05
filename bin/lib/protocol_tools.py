@@ -25,6 +25,7 @@ def migrate(args):
     s = dict(schema_version=2, mode=old["mode"], plan=plan, ledger_path=(old.get("ledger") or {}).get("path"), step=step, accepted=[],
              phase_commits=[], final_source=None, processed_messages=old["processed"]["messages"], used_fleet_ids=old.get("used_fleet_ids", []),
              cap_extensions=old.get("cap_extensions", []), independence_waivers=old.get("independence_waivers", []), barrier=None,
+             authors={},  # schema 1 kept no per-file authorship
              **{k: old[k] for k in ("orca_run", "plan_base", "phase", "base", "worktree", "worktree_id", "workspace", "active", "rounds", "provenance", "write_ownership")})
     if s["active"]: s["active"].pop("format_corrected", None)
     entry = lambda art, **x: dict(dict(round=0, findings=[], coverage={}, family=None, report=None, dispatch_id=None, evidence=[]), phase=old["phase"],

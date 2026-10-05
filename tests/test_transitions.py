@@ -106,10 +106,11 @@ class TransitionTests(unittest.TestCase):
         self.no(2, 'unknown actual model family', action='dispatch', proposed=proposed, artifact=art, fleet=f.fleet())
         foreign = dict(author, path=f.save(dict(read_json(author['path']), result=dict(read_json(author['path'])['result'], dispatch=dict(read_json(author['path'])['result']['dispatch'], runId='other-run'))))['path'])
         foreign['sha256'] = f.reference(foreign['path'])['sha256']
-        self.no(1, 'outside this Run', action='record-author', observation=foreign)
-        self.ok(action='record-author', observation=author)
+        self.no(1, 'outside this Run', action='record-author', observation=foreign, artifact=f.snapshot_ref())
+        self.ok(action='record-author', observation=author, artifact=f.snapshot_ref())
         self.assertEqual(f.state['provenance'], [author])
-        self.no(1, 'author already recorded', action='record-author', observation=author)
+        self.assertEqual(f.state['authors'], {'tracked.txt': ['Anthropic']})  # everything it may have changed since the phase base
+        self.no(1, 'author already recorded', action='record-author', observation=author, artifact=f.snapshot_ref())
         # With the author registered, the Google reviewer is independent of OpenAI and Anthropic and may be dispatched.
         self.ok(action='dispatch', proposed=proposed, artifact=art, fleet=f.fleet())
         anthropic = f.assignment('review-primary', 'Anthropic'); anthropic.update(dispatch_id=None, coverage=coverage)
@@ -371,7 +372,8 @@ class TransitionTests(unittest.TestCase):
         self.ok(f.report_input('implementer'))
         art, coverage = f.package_ref()
         self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
-        cv = dict(id='CV1', kind='cannot_verify', issue='not run', location='tracked.txt', check='python3 -c "assert 1"', expect='exit 0')
+        check_path, spec = f.verified_spec(code="print('assertion holds')")
+        cv = dict(id='CV1', kind='cannot_verify', issue='not run', location='tracked.txt', check=spec['command'], expect='exit 0')
         self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage, findings=[cv]))
         self.ok(f.report_input('review-control', 'Google', token='REVIEW_BLOCKING', artifact=art, coverage=coverage,
                                findings=[dict(id='C1-B1', kind='blocking', issue='scope', location='tracked.txt', authorization_relation='outside plan',
@@ -389,7 +391,10 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check='relative/result.json')))['state']['barrier'], 'awaiting_resolution')
         forged = f.workspace / 'forged-result.json'; forged.write_text('{"exit_code": 0}', encoding='utf-8')
         self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check=str(forged))))['state']['barrier'], 'awaiting_resolution')
-        passing = str(Path(self.passing_evidence()[0]['path']))
+        unrelated = str(Path(self.passing_evidence()[0]['path']))
+        self.assertEqual(self.ok(ledger=ledger(dict(id='CV1', check=unrelated)))['state']['barrier'], 'awaiting_resolution')
+        rc, out, err = f.start(check_path).finish(); self.assertEqual(rc, 0, (out, err))
+        passing = str(Path(spec['run_dir']) / 'result.json')
         self.ok(action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=ledger(dict(id='CV1', check=passing)))
         for decision in ('DEFER', 'NIT', 'REJECTED_BY_SCOPE'):
             self.ok(ledger=ledger(dict(id='CV1', decision=decision)), barrier='awaiting_commit')
@@ -458,6 +463,7 @@ class TransitionTests(unittest.TestCase):
         self.stage('final fix\n')
         fixed, coverage = f.package_ref()
         self.ok(f.report_input('review-final', 'Google', artifact=fixed, coverage=coverage))
+        self.ok(action='record-gate', artifact=fixed, evidence=self.passing_evidence())
         self.ok(action='prepare-commit', artifact=fixed, fleet=f.fleet())
         fix = f.git_commit('fix: address final-review findings')
         self.ok(action='confirm-commit', artifact=fixed, commit=dict(sha=fix, base=sha), fleet=f.fleet(), barrier='awaiting_final_review')
