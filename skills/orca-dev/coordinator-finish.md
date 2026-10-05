@@ -15,8 +15,10 @@ plan-only completion commit → `complete`. A final-fix commit needs a gate on t
 fixed bytes in the `final-review` step (`record-gate` or a gate worker) besides
 the final review. A real defect found in delivery, or a source repair a
 completion hook forces, goes back with `reopen-final` (C6 keeps findings,
-authorship and the final-review round count) and follows the final-fix route
-again within the cap of 2. Final-fix tasks receive
+authorship, the final-review round count and the consumed attempts) and follows
+the final-fix route again with a new final-review round; record the delivery
+failure with `record-gate verdict:"GATE_FAIL"` so that, at the cap of 2, the
+user's `extend-cap` can name it. Final-fix tasks receive
 `[FIX_FINDING_REFERENCES]` through prompt-routing.md; a final finding is resolved
 when the round-2 review of the fixed tree no longer lists it.
 

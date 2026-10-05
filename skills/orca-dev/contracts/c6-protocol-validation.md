@@ -2,6 +2,34 @@
 
 Part of [runtime-contracts.md](../runtime-contracts.md); load only when the index says so.
 
+## Threat model
+
+C6 guards a run of cooperating agents against **hallucination and drift**: a
+coordinator or worker forgetting a step, misremembering a path or artifact,
+claiming work it did not do, mixing up roles or model families, re-using a stale
+file by mistake, or a worker writing outside its lane. Every requirement is a
+fact the legitimate flow produces at that moment (a receipt, a sealed result, a
+capture), so a mistaken proposal is rejected with a reason that names the next
+legitimate step.
+
+C6 is **not** a defence against a deliberately adversarial coordinator crafting
+inputs to defeat the checker: the coordinator owns the state and saves the
+receipts, and C6 does not authenticate them. Machinery whose only purpose is to
+stop a crafted input is out of scope. Known bypasses that need deliberate
+crafting, kept out of scope on purpose (the simple guards below still catch the
+mistaken variants):
+
+- **Pre-launch inventory plus a failure receipt.** `reconcile-intent` trusts an
+  unused fleet and an `ok:false` launch receipt naming the Task; a crafted pair
+  (an inventory collected before a retried launch, an old failure receipt) can
+  drop a still-live writer's intent.
+- **Stale completion with a changed plan.** A proposal pairing an old Dispatch's
+  completion message with a plan author's changed plan reference returns
+  `decision:stale` but adopts the plan bytes the author path allows.
+- **Same command text elsewhere.** A cannot_verify `check` result is bound to the
+  finding by its literal command and exit code, not by the checkout or platform
+  it ran in; the same text sealed in another checkout passes.
+
 ## What C6 checks
 
 `bin/protocol-state validate INPUT_JSON [RESUME_OUT]` (native Windows:
@@ -67,8 +95,9 @@ only the ledger path.
 {"schema_version":2,"mode":"plan|quickfix","plan":{"path","sha256","structure"}|null,"ledger_path":null,
  "orca_run","plan_base","phase","base","step","worktree","worktree_id","workspace",
  "active":null,"rounds":{"plan_review":0,"fused_review":0,"final_review":0,"gate_fix":0},
- "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"accepted":[],
- "write_ownership":[],"phase_commits":[],"final_source":null,"processed_messages":[],"used_fleet_ids":[],"barrier":"..."}
+ "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"attempts":[],
+ "plan_approved":null,"accepted":[],"write_ownership":[],"phase_commits":[],"final_source":null,
+ "processed_messages":[],"used_fleet_ids":[],"barrier":"..."}
 ```
 
 - `mode:plan` uses steps `plan`, `phase`, `final-review`, `delivery`,
@@ -86,12 +115,24 @@ only the ledger path.
   settled writer registered by `record-author` (Path A start receipts for C5
   write receipts).
 - `plan_authors`: observation references of the accepted or registered
-  plan-writer/plan-reviser attempts only; plan-review independence reads these.
-  A state written before this field existed reads it as `null`, which keeps the
-  old rule (every `provenance` entry is a plan author) until the Run ends.
+  plan-writer/plan-reviser attempts (and of a `record-author` with a plan
+  artifact) only; plan-review independence reads these. Empty means unknown:
+  no plan reviewer is independent (`unknown plan authors`).
 - `authors`: `{path: [family, …]}`, the cumulative actual author families C6
   recorded per repository path (plan file excluded) from every accepted or
   registered writer of the Run; never cleared by `advance` or the final steps.
+- `attempts`: the consumed final-review attempts `{role,round,family}`, kept when
+  `finish-checkpoint` clears `accepted`; a later final review needs a new round.
+- `plan_approved`: the plan structure digest of the latest independent plan
+  approval. When `plan.structure` differs (a substantive revision after the plan
+  step) the plan review is pending (see Plan reference).
+- **Older states.** A state written before these fields existed is upgraded on
+  its first validate, from what it holds: `authors` from the validated write
+  receipts of the C5 packages its accepted reviews used; `plan_authors` from its
+  accepted plan-writer/plan-reviser entries (their `provenance` observations)
+  and from those package writes that touched the plan file; `attempts` empty;
+  `plan_approved` = the current structure once past the plan step. Nothing
+  rebuilt stays unknown, never independent.
 - `active` also keeps the dispatch-time `artifact` reference and `candidate`:
   they bound what that writer authored and prove an unbound launch wrote nothing.
 - `final_source`: the candidate the final review accepted (set by
@@ -114,6 +155,15 @@ author do not require the live file to equal `state.plan`, and the fresh author
 is assigned the accepted bytes (a workspace copy, `artifact kind:plan`). Every
 other transition still requires the accepted bytes: after a failed or abandoned
 attempt, either accept a fresh author's report or restore the accepted copy.
+
+**Pending plan review.** An accepted plan-writer/plan-reviser report that
+changes the plan structure after the plan step (a mid-phase revision) sets the
+barrier `awaiting_plan_review`: until an independent `plan-reviewer` APPROVED is
+accepted on the revised plan (which records `plan_approved`), only plan authors,
+plan reviewers and diagnosis may be dispatched, and `prepare-commit`,
+`confirm-commit`, `advance`, `finish-checkpoint` and `complete` reject with
+`plan revision awaits an independent plan review`. Bookkeeping edits do not
+change the structure.
 
 `plan.structure` is the SHA-256 of the frontmatter with its bookkeeping lines
 removed, a NUL, then the body. Bookkeeping lines are top-level `status:`,
@@ -142,8 +192,10 @@ review. A Git executable-bit change after acceptance is a new candidate.
 
 Canonical JSON is `json.dumps(value, ensure_ascii=True, sort_keys=True,
 separators=(",", ":"))` on both backends (PowerShell writes the same bytes:
-non-ASCII and DEL as lowercase `\uXXXX`, keys in ordinal order); JSON object
-keys and model ids are compared case-sensitively on both.
+non-ASCII and DEL as lowercase `\uXXXX`, keys in Unicode code-point order also
+beyond the BMP, Python float repr including `-0.0`); JSON object keys and model
+ids are compared case-sensitively on both. `verification canonical IN OUT`
+writes those bytes (parity fixture).
 
 A current **package** must start at the step base (`base` in the phase and
 quickfix steps, `plan_base` in the final steps): otherwise `package base differs
@@ -167,9 +219,9 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 | `bind-dispatch` | `observation` of the pending fresh Task (not a `--retry-of`); the actual model must match the proposal (a roles.md `MODEL_ALIASES` alias matches its full-id prefix). A writer then owns the worktree. |
 | `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). See Accepting a report. Clears `active`. |
 | `record-gate` | Current `artifact`, `evidence` (sealed C4 `result.json` references of one verify-gate run) and optional `verdict` (`GATE_OK` default, or `GATE_FAIL`) in the phase, final-review or delivery step with no writer. GATE_OK: at least one pass, every failure a proven BASE inheritance; it resets the consecutive gate-fix count. GATE_FAIL: at least one failure BASE does not explain; the entry carries the finding `G<r>-B1` (r = `rounds.gate_fix + 1`) that a gate-fix cap extension can name. |
-| `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported, and the current `artifact`: its bytes still carry its family. Appends the reference to `provenance` and records the family in `authors` for the paths it changed (its own window when it is the active assignment, else everything changed since the step base; a plan author goes to `plan_authors`). More author families only make reviews stricter; approvals that lose independence stop counting at readiness. |
-| `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate (otherwise bind or `record-author` the writer). |
-| `reopen-final` | `fleet`, in `delivery` or `completion` before the completion commit: a defect found in delivery or a completion-hook source repair returns to `final-review`. Clears `final_source`; keeps `accepted` findings (so a delivery gate failure stays nameable), commits, authorship and the final-review round count (the cap bounds the loop). |
+| `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported, and the current `artifact` (a plan author may omit it before the plan exists): its bytes still carry its family. Required before anything replaces a bound writer that settled without an accepted report. Appends the reference to `provenance`; a plan author (the active plan-writer/reviser, or any author given with a `kind:plan` artifact) goes to `plan_authors`, any other writer's family is recorded in `authors` for the paths it changed (its own window when it is the active assignment or the Dispatch of its still unbound Task, else everything changed since the step base). The Dispatch of the active unbound Task (a launch that started with another model and wrote) also clears that intent. More author families only make reviews stricter; approvals that lose independence stop counting at readiness. |
+| `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed without writing: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate. A launch that wrote is registered with `record-author` instead, which clears the intent without reverting its changes. |
+| `reopen-final` | `fleet`, in `delivery` or `completion` before the completion commit: a defect found in delivery or a completion-hook source repair returns to `final-review`. Clears `final_source`; keeps `accepted` findings (so a delivery gate failure stays nameable), commits, authorship, the final-review round count and the consumed final-review `attempts`: the next final review needs a new round, and at the cap the user's `extend-cap` naming the recorded failure (`G<r>-B1`). |
 | `prepare-commit` | `fleet`, current `artifact`; the candidate is ready and nothing is unstaged. Records nothing. |
 | `confirm-commit` | `fleet`, the accepted `artifact`, `commit:{sha,base}`. Readiness plus the commit check; records the commit once (a repeat confirms the same commit idempotently). Steps `plan`, `phase`, `quickfix`, `final-review` (final-fix commit: a gate on the fixed bytes plus the final review). |
 | `advance` | After a confirmed commit of this step/phase: next phase with `base` = that commit, or `final-review` after the last phase. Clears `accepted`, `active`, fused-review and gate-fix rounds. |
@@ -206,9 +258,9 @@ no reused origin where independent replay is required; a gate `GATE_FAIL`
 carries the finding `G<r>-B1`. An accepted writer's family is recorded in
 `authors` for the paths it changed between its dispatch-time artifact and the
 delivered one (everything changed since the step base when the dispatch-time
-capture is unknown); a plan author is recorded in `plan_authors`. A
-`SYNTHESIS_DONE` report's line-2 path must be a file of the delivered artifact;
-its bytes are frozen (see Synthesis). A defective report is rejected and the
+capture is unknown); a plan author is recorded in `plan_authors`, and an
+independent plan-reviewer APPROVED records `plan_approved`. A `SYNTHESIS_DONE`
+report's line-2 path must be a file of the delivered artifact (see Synthesis). A defective report is rejected and the
 role is simply re-dispatched (a new Task, same round).
 SECURITY/DATA_LOSS findings return `decision:risk-escalation`.
 
@@ -222,16 +274,20 @@ A finding of an accepted entry is **resolved** when:
   fixed and re-reviewed; or
 - it is `cannot_verify` and the ledger entry has `check`: an absolute path to an
   intact sealed C4 `result.json` whose `evidence.key.check.command` is the
-  finding's literal `check` and whose outcome is its `expect`: `exit <n>`,
-  optionally followed by `; stdout exactly: <text>` (the sealed stdout without
-  trailing newlines equals `<text>`) or `; stdout contains: <text>`. Any other
-  `expect` cannot be closed by a check; the original candidate's bytes are not
+  finding's literal `check` and whose exit code is the one its `expect` states
+  first (`exit <n>`). Only the explicit form `exit <n>; stdout exactly: <text>`
+  (the sealed stdout without trailing newlines equals `<text>`) or
+  `exit <n>; stdout contains: <text>` is matched against the stdout; any other
+  text after the exit code (`exit 0; stdout — …`) is the human-checked part the
+  coordinator confirmed when it recorded the result. An `expect` that states no
+  exit code cannot be closed by a check. The original candidate's bytes are not
   compared; or
 - it is `blocking` and some later round of the same role on the current
   candidate covers the finding's unit — the file named before `:` in its
-  `location` when the original review covered it, else the original review's
-  whole file coverage — through its non-BLOCKED reports, none of which lists
-  the id. A later partial reviewer that did not cover the unit resolves nothing.
+  `location` when the original review covered it as a file or in a contract
+  side, else the original review's whole coverage — through the files and
+  contract sides of its non-BLOCKED reports, none of which lists the id. A later
+  partial reviewer that did not cover the unit resolves nothing.
 
 A gate entry's finding (`G<r>-B1`) is an identity for cap extensions only: a
 positive gate on the current candidate supersedes it.
@@ -258,21 +314,30 @@ The reviews' COVERAGE together covers every file (except the plan file), part
 and contract side of the first review's package. A contract side may name files
 the package did not change (earlier phases' producers); reviewers list them in the
 side after inspecting them, without file coverage, but a family recorded in
-`authors` for such a file may not cover it. Reviews of earlier candidates
-stay in `accepted` only for their findings.
+`authors` for such a file may not cover it, and a file written earlier in this
+Run (changed since `plan_base`) with no recorded author is `unknown actual
+author: <file>` until the package provenance declares its writer's receipt
+(files untouched since `plan_base` have no author in this Run). Reviews of
+earlier candidates stay in `accepted` only for their findings.
 
 ## Synthesis
 
 A multi-round phase's synthesis document (Step 4.5) summarises the acceptance;
-it does not reopen it. When a `synthesizer` report `SYNTHESIS_DONE` is accepted,
-its line-2 path and that file's entry in the delivered artifact are recorded on
-the entry (`synthesis:{path,entry}`). From then on that path leaves the
+it does not reopen it. When a `synthesizer` report `SYNTHESIS_DONE` is accepted
+and the synthesizer's only change (its dispatch-to-delivery window) is one
+Markdown document directly under `docs/reviews/` (by convention
+`docs/reviews/<slug>-<phase>.md`), its path and entry are recorded on the entry
+(`synthesis:{path,entry}`). Any other path it wrote keeps the change in the
+candidate: the reviewed artifact is stale and the gate and reviews follow as for
+any change. From then on a recorded path leaves the
 candidate identity of the step (like the plan file), so the reviewed artifact
 stays current and the synthesis needs no further gate or review round; instead
 every currency check requires the file to keep exactly the recorded bytes
-(`stale synthesis: <path>`), so the commit holds the synthesizer's bytes. The
-exclusion ends with the step (`advance` clears `accepted`); the committed
-document is then ordinary history.
+(`stale synthesis: <path>`), so the commit holds the synthesizer's bytes. To
+recover from a changed document, restore it or dispatch a new synthesizer: its
+own dispatch and acceptance skip the frozen-bytes check and its accepted
+document replaces the recorded one. The exclusion ends with the step (`advance`
+clears `accepted`); the committed document is then ordinary history.
 
 ## Commits
 
@@ -302,6 +367,7 @@ through `reopen-final` to `final-review` (fix, gate, final review round, commit,
 checkpoint again).
 
 `state.barrier`, in order: `awaiting_writer` (a writer intent or bound writer);
+`awaiting_plan_review` while a mid-phase plan revision awaits its review;
 after a recorded commit of this step `ready_next_phase`, `awaiting_final_review`
 or `complete`; `awaiting_final_review`, `awaiting_delivery`,
 `awaiting_completion_commit` in the final steps; `awaiting_plan_writer` /
@@ -310,7 +376,7 @@ failed); `awaiting_commit` when ready; else `awaiting_plan_review` /
 `awaiting_gate` without the first required role, `awaiting_resolution` with a
 non-positive latest required report or an unresolved finding, `awaiting_review`
 otherwise. The candidate of the plan step is the plan; of other steps the last
-accepted non-diagnosis entry.
+accepted entry that is not diagnosis, synthesis or a plan author/review.
 
 Caps: plan review 4 per plan (its extensions count in every phase, so a plan
 revision extended before a phase commit does not poison later phases), fused
@@ -396,7 +462,10 @@ state and durable/liveness projection. Incomplete/unknown observations block; a
 receipt id proves freshness once (`used_fleet_ids`). Receipt uniqueness proves
 non-reuse, not age: every Dispatch in `write_ownership` must be listed in the
 fleet (`recorded writer missing from fleet: <id>`), so an inventory collected
-before that writer started cannot clear it. A durably completed or
+before that writer started cannot clear it, and a recorded writer that settled
+without an accepted report must be registered with `record-author` before any
+transition that needs a fleet (`writer <id> settled without an accepted report:
+record-author it first`). A durably completed or
 failed retained terminal is not a writer even when its workspace is null,
 provided ownership is not external/user-owned/pre-existing and release is not
 pending/unknown; other null-workspace records remain unknown. Unknown/external
@@ -473,9 +542,9 @@ step/phase's `accepted` entries (request-artifact entries dropped) and recorded
 script gates as gate entries, phase commits and the completion commit (each with
 its artifact's candidate), the final review's candidate as `final_source`,
 cap extensions, waivers, provenance, rounds, processed message ids and used fleet
-ids. `plan_authors` is `null` (schema 1 kept no plan authorship: the legacy
-rule applies) and `authors` is empty. Everything else is dropped. Then run
-`resume` on the output.
+ids. `plan_authors`, `authors`, `attempts` and `plan_approved` are left out:
+the first validate rebuilds them (see Older states). Everything else is
+dropped. Then run `resume` on the output.
 
 ## Removed in v2
 

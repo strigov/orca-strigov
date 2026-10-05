@@ -281,7 +281,11 @@ After task creation, `dispatch` validates the proposed role/model/coverage with
 save `worker-show --dispatch <actual-id> --json` and `bind-dispatch`. An unbound
 writer intent stays locked until bound or, after a failed launch, cleared with
 `reconcile-intent` (a fresh fleet showing the Task's Dispatches settled, or the
-saved `ok:false` launch receipt when none was created; the tree unchanged). Keep actual writer observations for
+saved `ok:false` launch receipt when none was created; the tree unchanged). A
+launch that started another model and wrote is registered with `record-author`
+(its settled observation and the current artifact), which also clears the
+intent. A bound writer that settled without an accepted report is registered
+with `record-author` before anything replaces it. Keep actual writer observations for
 C5 provenance; model family comes from roles.md, including cross-family CLI
 launches. Do not invent missing facts.
 

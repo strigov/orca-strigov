@@ -76,14 +76,15 @@ Pass the ledger to every C6 proposal as a fresh `ledger:{path,sha256}`. C6 reads
 only `id`, `decision` and `check`. A finding is resolved when:
 
 - a later round of the same role on the current candidate covers its unit (the
-  file in its `location`) and no longer lists it (the normal fix → re-review
+  file in its `location`, as a file or a contract side) and no longer lists it (the normal fix → re-review
   path; a later reviewer that covered other files does not close it); or
 - its ledger entry has decision `DEFER`, `NIT` or `REJECTED_BY_SCOPE`
   (`ESCALATED_TO_HUMAN` keeps it open: ask the user, then record their answer as
   one of those three or as a fix); or
 - it is `cannot_verify` and its ledger `check` names the sealed `result.json` of
-  the literal CHECK command whose outcome is its `expect` (`exit <n>`, optionally
-  `; stdout exactly|contains: <text>`).
+  the literal CHECK command that exited with the code its `expect` states (C6
+  also matches the stdout for the explicit `; stdout exactly|contains: <text>`
+  form; any other text after the exit code you confirmed by reading the output).
 
 `status` is bookkeeping for people; no status closes anything. The commit needs
 positive latest gate and reviews on the current candidate and no unresolved

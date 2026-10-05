@@ -85,7 +85,7 @@ For fix rounds (round 2+ in Step 4), compare the diff against the AUTHORIZED_CHA
 
 Issues must cite `file:line` where the deviation is.
 
-If a requirement cannot be verified from this diff alone (it lives in unchanged code or spans phases), do NOT broaden your search — report it as a `CANNOT_VERIFY:` item in the output. Its `CHECK:` must be executable without judgment: one concrete shell command (`grep`, `git`, `sed -n '<n>,<m>p' <file>`) — never a tool name — with the exact expected result in `EXPECT:` written as `exit <n>`, `exit <n>; stdout exactly: <text>` or `exit <n>; stdout contains: <text>` (the coordinator closes the item only with that command's sealed result showing that outcome). `CANNOT_VERIFY` items do not affect the line-1 verdict token.
+If a requirement cannot be verified from this diff alone (it lives in unchanged code or spans phases), do NOT broaden your search — report it as a `CANNOT_VERIFY:` item in the output. Its `CHECK:` must be executable without judgment: one concrete shell command (`grep`, `git`, `sed -n '<n>,<m>p' <file>`) — never a tool name — with the exact expected result in `EXPECT:` starting with the exit code: `exit <n>`, `exit <n>; stdout exactly: <text>`, `exit <n>; stdout contains: <text>`, or `exit <n>; <what the output shows>` (the coordinator closes the item only with that command's sealed result; the two `stdout` forms are matched mechanically). `CANNOT_VERIFY` items do not affect the line-1 verdict token.
 
 ### 4b. Code quality (always — even when 4a found issues)
 
@@ -124,7 +124,7 @@ Keep SPEC/QUALITY on lines 2/3. Emit canonical FINDINGS and COVERAGE; CANNOT_VER
 
 ```
 CANNOT_VERIFY:
-- CANNOT_VERIFY: <requirement> | CHECK: <one concrete shell command> | EXPECT: exit <n>[; stdout exactly|contains: <text>]
+- CANNOT_VERIFY: <requirement> | CHECK: <one concrete shell command> | EXPECT: exit <n>[; stdout exactly|contains: <text> | ; <expected output>]
 - ...
 
 PLAN_MANDATED:

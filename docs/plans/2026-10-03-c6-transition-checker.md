@@ -30,6 +30,25 @@ coordinator finish a phase with a fifth of the receipts. Keep what carries
 real safety: one writer per tree, nothing committed that was not reviewed and
 gated on exactly those bytes, no reviewer from an author family.
 
+## Threat model (user decision, 2026-10-05)
+
+The plugin coordinates several cooperating agents and guards against
+hallucination and drift: a model forgetting a step, misremembering a path or
+artifact, claiming work it did not do, mixing up roles/families, re-using a
+stale file by mistake, or a worker writing outside its lane. C6 is not a
+defence against a deliberately adversarial coordinator crafting inputs to
+defeat the checker; reviews must not judge it as an anti-forgery system, and no
+machinery is added whose only purpose is to stop a crafted input. Every
+requirement must be a fact the legitimate flow produces at that moment.
+
+Known bypasses that need deliberate crafting stay out of scope (simple guards
+still catch the mistaken variants; the contract's Threat model section keeps
+the current list): a pre-launch inventory paired with an `ok:false` failure
+receipt dropping a live writer's intent in `reconcile-intent` (review r2 #1);
+a stale completion message paired with a plan author's changed plan reference
+(r2 #5); a cannot_verify result of the same command text sealed in another
+checkout or platform (r2 #7).
+
 ## Keep / drop
 
 | Keep (hard invariant) | Drop |
