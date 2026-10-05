@@ -29,8 +29,8 @@ DECISIONS = ["DEFER", "NIT", "REJECTED_BY_SCOPE"]  # ESCALATED_TO_HUMAN keeps a 
 KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base", "phase", "base", "step", "worktree",
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")
-# Added after the first schema 2 states: plan_authors null keeps the legacy rule (every recorded writer is a plan author).
-DEFAULTS = {"plan_authors": None, "authors": {}}
+# Added after the first schema 2 states; a state without them is upgraded once by upgrade().
+DEFAULTS = {"plan_authors": [], "authors": {}}
 
 
 def cap(state, group):
@@ -49,6 +49,34 @@ def plan_facts(state):
         phase = next((p for p in facts["phases"] if p["id"] == state["phase"]), None)
         require(phase is not None and phase.get("base") == state["base"], "phase/base mismatch")
     return facts["phases"]
+
+
+def upgrade(state):
+    """A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write
+    receipts of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its
+    accepted plan writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer
+    independent (see independent and plan_independent)."""
+    if "authors" not in state or state.get("plan_authors") is None:
+        name = plan_name(state); rebuilt = {}; plan_refs = []; observed = {}
+        for ref in state["provenance"]:
+            try: observed[record(ref)["result"]["dispatch"]["id"]] = ref
+            except (Rejected, OSError, ValueError, KeyError, TypeError): pass
+        def plan_author(ref):
+            if ref["path"] not in [r["path"] for r in plan_refs]: plan_refs.append(ref)
+        for r in state["accepted"]:
+            if r["role"] in PLAN_AUTHORS and r.get("dispatch_id") in observed: plan_author(observed[r["dispatch_id"]])
+            if (r.get("artifact") or {}).get("kind") != "package": continue
+            try:
+                m = record(r["artifact"]); writers = authors(dict(manifest=m), state["provenance"])
+            except (Rejected, OSError, ValueError, KeyError, TypeError): continue
+            for path, families in writers.items():
+                if path != name: rebuilt.setdefault(path, set()).update(families)
+            for w in m["provenance"].get("writes", []):
+                if name in w["files"]:
+                    plan_author(next((x for x in state["provenance"] if x["path"] == w["receipt_path"] and x["sha256"] == w["receipt_sha256"]),
+                                     dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
+        state.setdefault("authors", {path: sorted(f) for path, f in sorted(rebuilt.items())})
+        if state.get("plan_authors") is None: state["plan_authors"] = plan_refs
 
 
 def drafted(state):
@@ -135,6 +163,8 @@ def independent(art, coverage, reviewer, state):
         require(reviewer not in writers[name] or (name, reviewer) in waived, "same-family review: " + name)
     require(set(coverage.get("parts", [])) <= {p["path"] for p in m["parts"]}, "unknown coverage part")
     contracts = {c["id"]: c for c in m["coverage"]["contracts"]}
+    sides = sorted({p for c in coverage.get("contracts", []) for side in ("producer", "consumer") for p in c.get(side, [])} - changed - {plan_name(state)})
+    earlier = set(x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], "--", *sides).decode("utf-8").split("\0") if x) if sides else set()
     for c in coverage.get("contracts", []):
         require(c.get("id") in contracts, "unknown coverage contract")
         for side in ("producer", "consumer"):
@@ -143,14 +173,15 @@ def independent(art, coverage, reviewer, state):
             # review, but its recorded authors still exclude their family from covering it.
             require(set(c.get(side, [])) & changed <= set(coverage.get("files", [])), "contract side lacks file review")
             for name in set(c.get(side, [])) - changed:
+                # Written earlier in this Run but with no recorded author: unknown, never independent.
+                require(writers.get(name) or name not in earlier, "unknown actual author: " + name, 2)
                 require(reviewer not in writers.get(name, ()) or (name, reviewer) in waived, "same-family review: " + name)
 
 
 def plan_independent(state, reviewer):
-    """Plan authors are the accepted or registered plan writers and revisers only (legacy states: every writer)."""
-    plan_authors = state["provenance"] if state["plan_authors"] is None else state["plan_authors"]
-    require(plan_authors, "unknown plan authors", 2)
-    for author in plan_authors:
+    """Plan authors are the accepted or registered plan writers and revisers only (rebuilt once for an older state)."""
+    require(state["plan_authors"], "unknown plan authors", 2)
+    for author in state["plan_authors"]:
         require(family(record(author)["result"], author) != reviewer, "same-family plan review")
 
 
@@ -421,7 +452,7 @@ def validate(data):
     state = copy.deepcopy(data["state"])
     require(isinstance(state, dict) and state.get("schema_version") == 2, "schema 1 state: run protocol-state migrate", 2)
     need(state, KEYS)
-    for key, default in DEFAULTS.items(): state.setdefault(key, copy.deepcopy(default))
+    upgrade(state)
     require(state["mode"] in ("plan", "quickfix") and state["step"] in READY and
             (state["mode"] == "quickfix") == (state["step"] == "quickfix") == (state["plan"] is None), "invalid protocol mode/step")
     require(Path(state["worktree"]).is_absolute() and Path(state["workspace"]).is_absolute(), "absolute workspace required")

@@ -311,22 +311,26 @@ def failure_records(records, art, state):
     return records
 
 
-EXPECT = re.compile(r"exit (\d+)(?:; stdout (exactly|contains): (.*))?", re.S)
+EXPECT = re.compile(r"exit (\d+)(?!\d)(.*)", re.S)
+STDOUT = re.compile(r"; stdout (exactly|contains): (.*)", re.S)
 
 
 def checked(item, finding):
-    """A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command whose outcome is its
-    EXPECT (`exit <n>`, optionally `; stdout exactly|contains: <text>`); the original candidate's bytes are not compared."""
+    """A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command that exited with the
+    code its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against
+    the sealed stdout; any other text after the exit code is the human-checked part of the expectation (existing reports
+    such as `exit 0; stdout — …`). The original candidate's bytes are not compared."""
     path = item.get("check")
     try: result = v.load(path) if isinstance(path, str) and Path(path).is_absolute() else None
     except (OSError, ValueError): return False
     if not (isinstance(result, dict) and v.evidence_valid(result)): return False
     want = EXPECT.fullmatch(str(finding.get("expect", "")).strip())
     if want is None or result["evidence"]["key"]["check"]["command"] != finding.get("check") or result["exit_code"] != int(want[1]): return False
-    if want[2] is None: return True
+    stdout = STDOUT.fullmatch(want[2])
+    if stdout is None: return True
     try: out = Path(result["stdout_log"]).read_bytes().decode("utf-8").replace("\r\n", "\n")
     except (OSError, UnicodeDecodeError): return False
-    return out.rstrip("\n") == want[3] if want[2] == "exactly" else want[3] in out
+    return out.rstrip("\n") == stdout[2] if stdout[1] == "exactly" else stdout[2] in out
 
 
 def values(obj):

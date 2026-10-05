@@ -349,10 +349,15 @@ class TransitionTests(unittest.TestCase):
         self.ok(f.report_input('plan-reviewer', 'Google', artifact=plan), barrier='awaiting_commit')
         f.state['plan_authors'] = []
         self.no(2, 'unknown plan authors', f.report_input('plan-reviewer', 'Google', artifact=plan, round=2))
-        # A legacy state without plan_authors keeps the old rule: every recorded writer counts as a plan author.
-        legacy = {k: v for k, v in f.state.items() if k != 'plan_authors'}; f.state = legacy
-        f.state['provenance'] = [f.observation(f.assignment('implementer', 'Google'))]
-        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'Google', artifact=plan, round=2))
+        # An older state without plan_authors rebuilds them from its accepted plan entries and the package writes that
+        # touched the plan file (here: Anthropic wrote plan.md); a code writer is not a plan author.
+        legacy = {k: v for k, v in f.state.items() if k != 'plan_authors'}
+        f.state = dict(legacy, provenance=[f.observation(f.assignment('implementer', 'Google'))])
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'Anthropic', artifact=plan, round=2))
+        self.ok(f.report_input('plan-reviewer', 'Google', artifact=plan, round=2))
+        # With nothing to rebuild from, plan authorship stays unknown: never independent.
+        f.state = dict(legacy, accepted=[], provenance=[f.observation(f.assignment('implementer', 'Google'))])
+        self.no(2, 'unknown plan authors', f.report_input('plan-reviewer', 'Google', artifact=plan, round=3))
 
     def test_user_waiver_only_where_every_family_authored(self):
         f = self.f; files = ['plan.md', 'tracked.txt']
@@ -512,9 +517,9 @@ class TransitionTests(unittest.TestCase):
         rc, text, err = command(f.argv('protocol-state', 'migrate', source['path'], out), f.git.root)
         self.assertEqual(rc, 0, (text, err))
         migrated = read_json(out)
-        skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier', 'plan_authors')
+        skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier', 'plan_authors', 'authors')
         self.assertEqual({k: migrated[k] for k in state if k not in skip}, {k: state[k] for k in state if k not in skip})
-        self.assertIsNone(migrated['plan_authors'])  # schema 1 kept no plan authorship: the legacy rule applies
+        self.assertNotIn('plan_authors', migrated); self.assertNotIn('authors', migrated)  # the first validate rebuilds them
         self.assertEqual([r['role'] for r in migrated['accepted']], ['review-primary'])
         self.assertEqual((migrated['processed_messages'], migrated['used_fleet_ids'], migrated['rounds']['fused_review']), (['m1'], ['fleet-1'], 1))
         f.state = migrated

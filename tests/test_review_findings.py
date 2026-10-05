@@ -452,6 +452,73 @@ class ReviewFindingTests(unittest.TestCase):
 
 
     # == Round-2 review (Astra xhigh) ==
+    def rebase_on(self, name, text):
+        """Commit one file as an earlier phase of this Run (after plan_base) and make that commit the phase base."""
+        f = self.f; self.write(name, text)
+        f.git.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
+                  '-c', 'core.hooksPath=', 'commit', '-qm', 'earlier phase', '--', name)
+        new = f.git.git('rev-parse', 'HEAD').strip()
+        f.plan.write_text(f.plan.read_text().replace('    base: ' + f.git.base, '    base: ' + new), encoding='utf-8')
+        f.state.update(base=new, plan=f.plan_ref())
+        return new
+
+    def legacy(self):
+        """The state shape of the live Runs, written before authors/plan_authors/attempts/plan_approved existed."""
+        for key in ('authors', 'plan_authors', 'attempts', 'plan_approved'): self.f.state.pop(key, None)
+
+    def test_r2_10_free_text_expect_is_checked_by_its_exit_code(self):
+        """p3b F3R2-CV1: `exit 0; stdout — <prose>` with a sealed result already recorded as verified-by-controller."""
+        f = self.f
+        self.ok(f.report_input('implementer'))
+        art, coverage = f.package_ref()
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        path, spec = f.verified_spec(code="print('one JSON line')")
+        prose = dict(id='F3R2-CV1', kind='cannot_verify', issue='merge result not run', location='tracked.txt', check=spec['command'],
+                     expect='exit 0; stdout — одна JSON-строка из двух объектов, где x.d="conflict" (без \\n)')
+        wrong = dict(prose, id='CV-exit', expect='exit 3; stdout — the command fails')
+        noexit = dict(prose, id='CV-prose', expect='the merge reports a conflict')
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage, findings=[prose, wrong, noexit]))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage), barrier='awaiting_resolution')
+        rc, out, err = f.start(path).finish(); self.assertEqual(rc, 0, (out, err))
+        result = str(Path(spec['run_dir']) / 'result.json')
+        ledger = f.workspace / 'ledger.json'
+        ledger.write_text(json.dumps([dict(id=i, check=result, status='verified-by-controller') for i in ('F3R2-CV1', 'CV-exit', 'CV-prose')]))
+        self.no(1, 'unresolved findings: CV-exit, CV-prose', action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger))
+        ledger.write_text(json.dumps([dict(id='F3R2-CV1', check=result), dict(id='CV-exit', decision='DEFER'), dict(id='CV-prose', decision='DEFER')]))
+        self.ok(action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger))
+
+    def test_r2_11_legacy_state_rebuilds_plan_authors_without_code_writers(self):
+        """An astra-profile Run without plan_authors: an Anthropic frontend contribution does not bar Opus from the plan."""
+        f = self.f; self.baseline_tracked()
+        self.write('api.ts', 'export const api = 1\n')
+        art, coverage = f.package_ref(families={'OpenAI': ['plan.md'], 'Google': ['api.ts']})
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.legacy()
+        self.ok()
+        self.assertEqual(f.state['authors'], {'api.ts': ['Google']})
+        self.assertEqual(len(f.state['plan_authors']), 1)
+        self.ok(f.report_input('frontend-implementer', 'Anthropic', artifact=self.writer('ui.tsx', 'export const ui = 1\n')()))
+        f.plan.write_text(f.plan.read_text().replace('Fixture plan.', 'Fixture plan, revised by Astra.'), encoding='utf-8')
+        revised = f.report_input('plan-reviser', 'OpenAI', token='REVISED', artifact=f.plan_artifact())
+        revised['plan'] = f.plan_ref()
+        self.ok(revised)
+        plan = f.plan_artifact()
+        self.no(1, 'same-family plan review', f.report_input('plan-reviewer', 'OpenAI', artifact=plan))
+        self.ok(f.report_input('plan-reviewer', 'Anthropic', artifact=plan))
+
+    def test_r2_03_unattributed_earlier_side_file_is_unknown_not_independent(self):
+        """A contract side names a file written earlier in this Run with no recorded author (a legacy state's history)."""
+        f = self.f
+        self.rebase_on('lib/earlier.ts', 'export const earlier = 1\n')
+        self.ok(f.report_input('implementer', 'Google'))
+        sides = [dict(id='C1', producer=['lib/earlier.ts'], consumer=['tracked.txt'])]
+        art, coverage = f.package_ref(families={'Google': ['tracked.txt', 'plan.md']}, contracts=sides)
+        review = lambda family, cov: dict(self.assignment('review-primary', family), coverage=dict(cov, contracts=sides))
+        self.no(2, 'unknown actual author: lib/earlier.ts', action='dispatch', proposed=review('Anthropic', coverage), artifact=art, fleet=f.fleet())
+        # Declaring the earlier writer's receipt in the package resolves it.
+        art, coverage = f.package_ref(families={'Google': ['tracked.txt', 'plan.md', 'lib/earlier.ts']}, contracts=sides)
+        self.ok(action='dispatch', proposed=review('Anthropic', coverage), artifact=art, fleet=f.fleet())
+
     def test_r2_13_canonical_json_vectors(self):
         """Golden canonical bytes both backends must emit: code-point key order (U+10000 after U+E000), -0.0, escapes."""
         f = self.f; src = f.workspace / 'canonical-in.json'; out = f.workspace / 'canonical-out.json'

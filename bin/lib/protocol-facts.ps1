@@ -208,17 +208,18 @@ function P-FailureRecords($records,$art,$s) {
   P-Require ((P-GateRecords $records $art $s).failed -gt 0) 'zero failing checks';return ,$records
 }
 function P-Checked($item,$finding) {
-  # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command whose outcome is its
-  # EXPECT (`exit <n>`, optionally `; stdout exactly|contains: <text>`); the original candidate's bytes are not compared.
+  # A cannot_verify finding is checked by the sealed run-check result of its literal CHECK command that exited with the code
+  # its EXPECT states (`exit <n>` first). Only the explicit `; stdout exactly|contains: <text>` form is matched against the
+  # sealed stdout; other text after the exit code is the human-checked part (existing `exit 0; stdout — …` reports).
   $path=V-Get $item 'check'
   try { if (-not ($path -is [string] -and [IO.Path]::IsPathRooted($path))) { return $false };$result=P-Decode ([IO.File]::ReadAllText($path,$VUtf8).TrimStart([char]0xfeff)) } catch { return $false }
   if (-not ($result -is [Collections.IDictionary] -and (V-EvidenceValid $result))) { return $false }
-  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),'^exit ([0-9]+)(?:; stdout (exactly|contains): (.*))?$','Singleline')
+  $want=[regex]::Match(([string](V-Get $finding 'expect' '')).Trim(),'\Aexit ([0-9]+)(?![0-9])(.*)\z','Singleline')
   $code=$result['exit_code']
   if (-not $want.Success -or $result.evidence.key.check.command -cne (V-Get $finding 'check') -or -not ($code -is [int] -or $code -is [long]) -or $code -ne [long]$want.Groups[1].Value) { return $false }
-  if (-not $want.Groups[2].Success) { return $true }
+  $stdout=[regex]::Match($want.Groups[2].Value,'\A; stdout (exactly|contains): (.*)\z','Singleline');if (-not $stdout.Success) { return $true }
   try { $out=$VUtf8.GetString([IO.File]::ReadAllBytes($result.stdout_log)).Replace("`r`n","`n") } catch { return $false }
-  if ($want.Groups[2].Value -ceq 'exactly') { return $out.TrimEnd([char]10) -ceq $want.Groups[3].Value };return $out.Contains($want.Groups[3].Value)
+  if ($stdout.Groups[1].Value -ceq 'exactly') { return $out.TrimEnd([char]10) -ceq $stdout.Groups[2].Value };return $out.Contains($stdout.Groups[2].Value)
 }
 $POrcaPreamble='You are working inside Orca, a multi-agent IDE. You are a dispatched worker.'
 function P-RolesFact([string]$label) { return ,(P-Line ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../skills/orca-dev/roles.md'),$VUtf8).TrimStart([char]0xfeff)) $label) }

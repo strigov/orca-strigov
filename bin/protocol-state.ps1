@@ -30,6 +30,30 @@ function P-Plan($s) {
   if ($null -ne $s.phase) { $p=@($facts.phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and $p[0].base -ceq $s.base) 'phase/base mismatch' }
   return ,$facts.phases
 }
+function P-Upgrade($s) {
+  # A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write receipts
+  # of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its accepted plan
+  # writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer independent.
+  if (-not $s.Contains('authors') -or $null -eq (V-Get $s 'plan_authors')) {
+    $name=P-PlanName $s;$rebuilt=V-Map;$planRefs=New-Object Collections.ArrayList;$observed=V-Map
+    foreach ($ref in @($s.provenance)) { try { $observed[(P-Record $ref).result.dispatch.id]=$ref } catch { } }
+    $addPlan={ param($ref) if ($ref.path -cnotin @($planRefs | ForEach-Object { $_.path })) { [void]$planRefs.Add($ref) } }
+    foreach ($r in @($s.accepted)) {
+      $id=V-Get $r 'dispatch_id';if ($r.role -cin $PPlanAuthors -and $null -ne $id -and $observed.Contains($id)) { & $addPlan $observed[$id] }
+      if ((V-Get (V-Get $r 'artifact' @{}) 'kind') -cne 'package') { continue }
+      try { $m=P-Record $r.artifact;$writers=P-Authors @{manifest=$m} @($s.provenance) } catch { continue }
+      foreach ($path in @($writers.Keys)) { if ($path -cne $name) { $rebuilt[$path]=@(@(@($rebuilt[$path] | Where-Object { $null -ne $_ })+@($writers[$path])) | Sort-Object -Unique -CaseSensitive) } }
+      foreach ($w in (P-List $m.provenance 'writes')) {
+        if ($name -cin @($w.files)) {
+          $known=@(@($s.provenance) | Where-Object { $_.path -ceq $w.receipt_path -and $_.sha256 -ceq $w.receipt_sha256 })
+          & $addPlan $(if ($known.Count) { $known[0] } else { [ordered]@{path=$w.receipt_path;sha256=$w.receipt_sha256} })
+        }
+      }
+    }
+    if (-not $s.Contains('authors')) { $sorted=V-Map;foreach ($k in @($rebuilt.Keys | Sort-Object -CaseSensitive)) { $sorted[$k]=$rebuilt[$k] };$s['authors']=$sorted }
+    if ($null -eq (V-Get $s 'plan_authors')) { $s['plan_authors']=@($planRefs) }
+  }
+}
 function P-Drafted($s) {
   # The live plan file no longer holds the accepted bytes (a plan author's working draft).
   if ($null -eq $s.plan -or $null -eq $s.plan.sha256) { return $false }
@@ -94,19 +118,26 @@ function P-Independent($art,$coverage,$family,$s) {
   P-Require (P-Subset $files $changed) 'unknown coverage file'
   foreach ($name in $files) { P-Require ($writers[$name]) ('unknown actual author: '+$name) 2;P-Require ($family -cnotin @($writers[$name]) -or (($name+'|'+$family) -cin $waived)) ('same-family review: '+$name) }
   P-Require (P-Subset $parts @($m.parts | ForEach-Object { $_.path })) 'unknown coverage part'
+  $plan=P-PlanName $s
+  $sides=@(foreach ($c in (P-List $coverage 'contracts')) { foreach ($side in 'producer','consumer') { foreach ($p in (P-List $c $side)) { if ($p -cnotin $changed -and $p -cne $plan) { $p } } } })
+  $sides=@($sides | Select-Object -Unique)
+  $earlier=if ($sides.Count) { @(V-Nul (V-Git $s.worktree (@('diff','--no-ext-diff','--name-only','-z',$s.plan_base,'--')+$sides))) } else { @() }
   foreach ($c in (P-List $coverage 'contracts')) {
     $match=@($m.coverage.contracts | Where-Object { $_.id -ceq (V-Get $c 'id') });P-Require ($match.Count -eq 1) 'unknown coverage contract'
     foreach ($side in 'producer','consumer') {
       $list=P-List $c $side;P-Require (P-Subset $list $match[0][$side]) 'unknown contract side';P-Require (P-Subset @($list | Where-Object { $_ -cin $changed }) $files) 'contract side lacks file review'
       # An unchanged side file needs no file review, but its recorded authors still exclude their family from covering it.
-      foreach ($name in @($list | Where-Object { $_ -cnotin $changed })) { P-Require ($family -cnotin @($writers[$name]) -or (($name+'|'+$family) -cin $waived)) ('same-family review: '+$name) }
+      foreach ($name in @($list | Where-Object { $_ -cnotin $changed })) {
+        # Written earlier in this Run but with no recorded author: unknown, never independent.
+        P-Require ($writers[$name] -or $name -cnotin $earlier) ('unknown actual author: '+$name) 2
+        P-Require ($family -cnotin @($writers[$name]) -or (($name+'|'+$family) -cin $waived)) ('same-family review: '+$name)
+      }
     }
   }
 }
 function P-PlanIndependent($s,$family) {
-  # Plan authors are the accepted or registered plan writers and revisers only (legacy states: every writer).
-  $authors=if ($null -eq $s.plan_authors) { @($s.provenance) } else { @($s.plan_authors) }
-  P-Require ($authors.Count) 'unknown plan authors' 2
+  # Plan authors are the accepted or registered plan writers and revisers only (rebuilt once for an older state).
+  $authors=@($s.plan_authors);P-Require ($authors.Count) 'unknown plan authors' 2
   foreach ($author in $authors) { P-Require ((P-Family (P-Record $author).result $author) -cne $family) 'same-family plan review' }
 }
 function P-Written($s,$before,$art) {
@@ -328,7 +359,7 @@ function P-Validate($data) {
   $s=P-Decode (V-Json $data.state)
   P-Require ($s -is [Collections.IDictionary] -and $s.schema_version -eq 2) 'schema 1 state: run protocol-state migrate' 2;P-Need $s $PKeys
   # Added after the first schema 2 states: plan_authors null keeps the legacy rule (every recorded writer is a plan author).
-  if (-not $s.Contains('plan_authors')) { $s['plan_authors']=$null };if (-not $s.Contains('authors')) { $s['authors']=V-Map }
+  P-Upgrade $s
   P-Require ($s.mode -cin @('plan','quickfix') -and $s.step -cin @('plan','phase','quickfix','final-review','delivery','completion') -and ($s.mode -ceq 'quickfix') -eq ($s.step -ceq 'quickfix') -and ($s.step -ceq 'quickfix') -eq ($null -eq $s.plan)) 'invalid protocol mode/step'
   P-Require ([IO.Path]::IsPathRooted($s.worktree) -and [IO.Path]::IsPathRooted($s.workspace)) 'absolute workspace required'
   P-Require ([IO.Path]::GetFullPath((V-GitText $s.worktree @('rev-parse','--show-toplevel'))).TrimEnd('\','/') -eq [IO.Path]::GetFullPath($s.worktree).TrimEnd('\','/')) 'TARGET is not a Git worktree' 2
