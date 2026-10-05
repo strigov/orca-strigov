@@ -493,6 +493,36 @@ class ReviewFindingTests(unittest.TestCase):
         ledger.write_text(json.dumps([dict(id='F3R2-CV1', check=result), dict(id='CV-exit', decision='DEFER'), dict(id='CV-prose', decision='DEFER')]))
         self.ok(action='prepare-commit', artifact=art, fleet=f.fleet(), ledger=f.reference(ledger))
 
+    def test_p3b_confirmed_cannot_verify_defect_closes_through_fix_and_re_review(self):
+        """p3b RC-F3-CV1: a control review's CHECK asserted a suspected defect (exit 0 = reproduced). The ledger accepted
+        it as a defect to fix; after the fix a later control round covers the file without the item. Its CHECK can never
+        pass again, so it must close the way a blocking finding does — and only through such a covering review."""
+        f = self.f
+        self.ok(f.report_input('implementer', 'OpenAI'))
+        art, coverage = f.package_ref(families={'OpenAI': ['tracked.txt', 'plan.md']})
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        cv = dict(id='RC-CV1', kind='cannot_verify', issue='suspected merge defect', location='tracked.txt',
+                  check='node check.mjs', expect='On the frozen candidate, exit 0 and stdout REPRODUCED confirms the defect')
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, findings=[cv]), barrier='awaiting_resolution')
+        ledger = f.workspace / 'ledger.json'
+        def decide(**item): ledger.write_text(json.dumps([dict(id='RC-CV1', **item)])); return f.reference(ledger)
+        accepted = decide(decision='ACCEPTED', status='open')
+        # The fix round produces a new candidate; both reviews run again on it.
+        self.ok(f.report_input('implementer', 'OpenAI', artifact=self.writer('tracked.txt', 'fixed merge\n')(),
+                               assignment=dict(f.assignment('implementer', 'OpenAI'), fix=True),
+                               extra='FIX_EVIDENCE: ' + json.dumps(dict(tests=['merge regression'], commands=['npm test'], outputs=['ok']))))
+        fixed, coverage = f.package_ref(families={'OpenAI': ['tracked.txt', 'plan.md']})
+        self.ok(action='record-gate', artifact=fixed, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=fixed, coverage=coverage, round=2))
+        partial = dict(coverage, files=[x for x in coverage['files'] if x != 'tracked.txt'], contracts=[])
+        self.ok(f.report_input('review-control', 'Google', artifact=fixed, coverage=partial, round=2))
+        # A later round that did not look at the file closes nothing; without the ledger's acceptance nothing closes either.
+        self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=accepted)
+        self.ok(f.report_input('review-control', 'Google', artifact=fixed, coverage=coverage, round=3))
+        self.no(1, 'unresolved findings: RC-CV1', action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=decide(status='open'))
+        self.ok(action='prepare-commit', artifact=fixed, fleet=f.fleet(), ledger=decide(decision='ACCEPTED', status='open'))
+
     def test_r2_11_legacy_state_rebuilds_plan_authors_without_code_writers(self):
         """An astra-profile Run without plan_authors: an Anthropic frontend contribution does not bar Opus from the plan."""
         f = self.f; self.baseline_tracked()

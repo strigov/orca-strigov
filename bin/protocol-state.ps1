@@ -298,7 +298,10 @@ function P-Unresolved($s,$cand,$decisions) {
     foreach ($f in @($r.findings)) {
       $item=if ($decisions.ContainsKey($f.id)) { $decisions[$f.id] } else { @{} }
       if ((V-Get $item 'decision') -cin $PDecisions -or ($f.kind -ceq 'cannot_verify' -and (P-Checked $item $f))) { continue }
-      if ($f.kind -ceq 'blocking' -and (P-Omitted $s $r $f $(if ($r.role -ceq 'plan-reviewer') { $planCand } else { $cand }))) { continue }
+      # A cannot_verify item the ledger accepted as a confirmed defect (its CHECK asserted the defect, so it can never
+      # pass) becomes a fix item: like a blocking finding it closes when a later round covers its unit without it.
+      $fixable=($f.kind -ceq 'blocking') -or ((V-Get $item 'decision') -cin @('ACCEPTED','PARTIALLY_ACCEPTED'))
+      if ($fixable -and (P-Omitted $s $r $f $(if ($r.role -ceq 'plan-reviewer') { $planCand } else { $cand }))) { continue }
       $out+=$f.id
     }
   };return ,$out

@@ -347,7 +347,8 @@ def omitted(state, review, finding, cand):
 
 def unresolved(state, cand, decisions):
     """Resolved: a ledger decision; a cannot_verify item checked by its literal CHECK; a later round on cand covering
-    the finding's unit and omitting it. A gate failure is identity only: a positive gate on cand supersedes it."""
+    the finding's unit and omitting it (for blocking findings, and for cannot_verify items the ledger accepted as
+    confirmed defects). A gate failure is identity only: a positive gate on cand supersedes it."""
     # Plan-review findings belong to the plan: outside the plan step they resolve against the latest approved plan.
     approved = [r["candidate"] for r in state["accepted"] if (r["role"], r["token"]) == ("plan-reviewer", "APPROVED")]
     plan_cand = approved[-1] if approved and state["step"] != "plan" else cand
@@ -357,7 +358,10 @@ def unresolved(state, cand, decisions):
         for f in r["findings"]:
             item = decisions.get(f["id"], {})
             if item.get("decision") in DECISIONS or (f["kind"] == "cannot_verify" and checked(item, f)): continue
-            if f["kind"] == "blocking" and omitted(state, r, f, plan_cand if r["role"] == "plan-reviewer" else cand): continue
+            # A cannot_verify item the ledger accepted as a confirmed defect (its CHECK asserted the defect, so it can never
+            # pass) becomes a fix item: like a blocking finding it closes when a later round covers its unit without it.
+            fixable = f["kind"] == "blocking" or item.get("decision") in ("ACCEPTED", "PARTIALLY_ACCEPTED")
+            if fixable and omitted(state, r, f, plan_cand if r["role"] == "plan-reviewer" else cand): continue
             out.append(f["id"])
     return out
 

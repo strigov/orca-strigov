@@ -329,8 +329,10 @@ A finding of an accepted entry is **resolved** when:
   coordinator confirmed when it recorded the result. An `expect` that states no
   exit code cannot be closed by a check. The original candidate's bytes are not
   compared; or
-- it is `blocking` and some later round of the same role on the current
-  candidate covers the finding's unit — the file named before `:` in its
+- it is `blocking`, or it is `cannot_verify` and the ledger entry's `decision`
+  is `ACCEPTED`/`PARTIALLY_ACCEPTED` (the CHECK confirmed a defect, so it can
+  never pass again and the item became a fix item), and some later round of the
+  same role on the current candidate covers the finding's unit — the file named before `:` in its
   `location` when the original review covered it as a file or in a contract
   side, else the original review's whole coverage — through the files and
   contract sides of its non-BLOCKED reports, none of which lists the id. A later
