@@ -31,12 +31,39 @@ function P-Plan($s) {
   if ($null -ne $s.phase) { $p=@($facts.phases | Where-Object { $_.id -ceq $s.phase });P-Require ($p.Count -eq 1 -and $p[0].base -ceq $s.base) 'phase/base mismatch' }
   return ,$facts.phases
 }
+function P-PhaseChanges($s,$paths) {
+  # How many phases of this Run changed each path: its confirmed phase/final-fix commits plus the uncommitted change.
+  $count=V-Map;if (-not @($paths).Count) { return ,$count }
+  $touched={ param($rev) @(V-Nul (V-Git $s.worktree (@('diff','--no-ext-diff','--name-only','-z')+$rev+@('--')+@($paths | Sort-Object -CaseSensitive)))) }
+  $revs=@(foreach ($c in @($s.phase_commits)) { if ($c.step -cin @('phase','final-review','quickfix')) { ,@($c.base,$c.sha) } })+,@('HEAD')
+  foreach ($rev in $revs) { foreach ($x in (& $touched $rev)) { $count[$x]=1+$(if ($count.Contains($x)) { $count[$x] } else { 0 }) } }
+  return ,$count
+}
+function P-ApprovedStructure($s) {
+  # The plan structure an older state can prove approved: its latest accepted plan-reviewer APPROVED (unless a plan
+  # author's entry came later), else the plan-only commit's plan when no plan author's entry remains. Otherwise none.
+  if ($null -eq $s.plan -or $s.step -ceq 'plan') { return $null }
+  $list=@($s.accepted);$approval=-1;$revision=-1
+  for ($i=0;$i -lt $list.Count;$i++) {
+    if ($list[$i].role -cin $PPlanAuthors) { $revision=$i } elseif ($list[$i].role -ceq 'plan-reviewer' -and $list[$i].token -ceq 'APPROVED') { $approval=$i }
+  }
+  try {
+    if ($approval -ge 0 -and $approval -gt $revision) { return (P-PlanRead (P-Ref $list[$approval].artifact)).shape }
+    $commit=@(@($s.phase_commits) | Where-Object { $_.step -ceq 'plan' } | Select-Object -First 1)
+    if ($commit.Count -and $revision -lt 0) {
+      return (P-PlanRead ($VUtf8.GetString((V-Git $s.worktree @('show',($commit[0].sha+':'+(P-PlanName $s))))).TrimStart([char]0xfeff).Replace("`r`n","`n"))).shape
+    }
+  } catch { }
+  return $null
+}
 function P-Upgrade($s) {
   # A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write receipts
   # of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its accepted plan
-  # writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer independent.
+  # writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer independent. A rebuilt
+  # file whose distinct write receipts are fewer than the phases that changed it stays in authors_incomplete. Consumed
+  # final-review rounds and the approved plan structure are rebuilt only from evidence the state holds.
   if (-not $s.Contains('authors') -or $null -eq (V-Get $s 'plan_authors')) {
-    $name=P-PlanName $s;$rebuilt=V-Map;$planRefs=New-Object Collections.ArrayList;$observed=V-Map
+    $name=P-PlanName $s;$rebuilt=V-Map;$rows=V-Map;$planRefs=New-Object Collections.ArrayList;$observed=V-Map
     foreach ($ref in @($s.provenance)) { try { $observed[(P-Record $ref).result.dispatch.id]=$ref } catch { } }
     $addPlan={ param($ref) if ($ref.path -cnotin @($planRefs | ForEach-Object { $_.path })) { [void]$planRefs.Add($ref) } }
     foreach ($r in @($s.accepted)) {
@@ -45,18 +72,26 @@ function P-Upgrade($s) {
       try { $m=P-Record $r.artifact;$writers=P-Authors @{manifest=$m} @($s.provenance) } catch { continue }
       foreach ($path in @($writers.Keys)) { if ($path -cne $name) { $rebuilt[$path]=@(@(@($rebuilt[$path] | Where-Object { $null -ne $_ })+@($writers[$path])) | Sort-Object -Unique -CaseSensitive) } }
       foreach ($w in (P-List $m.provenance 'writes')) {
+        foreach ($x in @($w.files)) { $rows[$x]=@(@(@($rows[$x] | Where-Object { $null -ne $_ })+@($w.receipt_path)) | Select-Object -Unique) }
         if ($name -cin @($w.files)) {
           $known=@(@($s.provenance) | Where-Object { $_.path -ceq $w.receipt_path -and $_.sha256 -ceq $w.receipt_sha256 })
           & $addPlan $(if ($known.Count) { $known[0] } else { [ordered]@{path=$w.receipt_path;sha256=$w.receipt_sha256} })
         }
       }
     }
-    if (-not $s.Contains('authors')) { $sorted=V-Map;foreach ($k in @($rebuilt.Keys | Sort-Object -CaseSensitive)) { $sorted[$k]=$rebuilt[$k] };$s['authors']=$sorted }
+    if (-not $s.Contains('authors')) {
+      $sorted=V-Map;foreach ($k in @($rebuilt.Keys | Sort-Object -CaseSensitive)) { $sorted[$k]=$rebuilt[$k] };$s['authors']=$sorted
+      $needed=P-PhaseChanges $s @($rebuilt.Keys);$incomplete=V-Map
+      foreach ($k in @($needed.Keys)) { if (@($rows[$k] | Where-Object { $null -ne $_ }).Count -lt $needed[$k]) { $incomplete[$k]=$needed[$k] } }
+      $s['authors_incomplete']=$incomplete
+    }
     if ($null -eq (V-Get $s 'plan_authors')) { $s['plan_authors']=@($planRefs) }
   }
-  if (-not $s.Contains('attempts')) { $s['attempts']=@() }
-  # A Run past its plan step had its plan structure approved; a revision after that awaits a new plan review.
-  if (-not $s.Contains('plan_approved')) { $s['plan_approved']=$(if ($null -ne $s.plan -and $s.step -cne 'plan') { $s.plan.structure } else { $null }) }
+  if (-not $s.Contains('authors_incomplete')) { $s['authors_incomplete']=V-Map }
+  if (-not $s.Contains('attempts')) {  # a checkpoint already consumed the final-review rounds counted so far
+    $s['attempts']=@(if ($s.step -cin @('delivery','completion')) { for ($n=1;$n -le $s.rounds.final_review;$n++) { [ordered]@{role='review-final';round=$n;family=$null} } })
+  }
+  if (-not $s.Contains('plan_approved')) { $s['plan_approved']=P-ApprovedStructure $s }
 }
 function P-PlanReviewed($s) {
   # No substantive plan revision awaits its independent plan review (the plan step has its own approval barrier).
@@ -134,6 +169,13 @@ function P-Independent($art,$coverage,$family,$s) {
   $sides=@(foreach ($c in (P-List $coverage 'contracts')) { foreach ($side in 'producer','consumer') { foreach ($p in (P-List $c $side)) { if ($p -cnotin $changed -and $p -cne $plan) { $p } } } })
   $sides=@($sides | Select-Object -Unique)
   $earlier=if ($sides.Count) { @(V-Nul (V-Git $s.worktree (@('diff','--no-ext-diff','--name-only','-z',$s.plan_base,'--')+$sides))) } else { @() }
+  $declared=V-Map
+  foreach ($w in (P-List $m.provenance 'writes')) { foreach ($x in @($w.files)) { $declared[$x]=@(@(@($declared[$x] | Where-Object { $null -ne $_ })+@($w.receipt_path)) | Select-Object -Unique) } }
+  foreach ($name in @(@($files)+@($sides) | Select-Object -Unique)) {
+    # An older state's rebuilt author set for this file misses earlier phases: the package must declare them.
+    $needed=if ($s.authors_incomplete.Contains($name)) { $s.authors_incomplete[$name] } else { 0 }
+    P-Require (@($declared[$name] | Where-Object { $null -ne $_ }).Count -ge $needed) ('unknown actual author: '+$name) 2
+  }
   foreach ($c in (P-List $coverage 'contracts')) {
     $match=@($m.coverage.contracts | Where-Object { $_.id -ceq (V-Get $c 'id') });P-Require ($match.Count -eq 1) 'unknown coverage contract'
     foreach ($side in 'producer','consumer') {

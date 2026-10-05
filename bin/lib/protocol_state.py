@@ -14,7 +14,7 @@ from posix_runtime import artifact_path
 from protocol_facts import (Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
                             plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
                             actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
-                            checked, entry, manifest_files, step_base, values)
+                            checked, entry, manifest_files, step_base, values, candidate)
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["REVIEW_OK"], "review-control": ["REVIEW_OK"],
@@ -30,7 +30,7 @@ KEYS = ("schema_version", "mode", "plan", "ledger_path", "orca_run", "plan_base"
         "worktree_id", "workspace", "active", "rounds", "cap_extensions", "independence_waivers", "provenance", "accepted",
         "write_ownership", "phase_commits", "final_source", "processed_messages", "used_fleet_ids")
 # Added after the first schema 2 states; a state without them is upgraded once by upgrade().
-DEFAULTS = {"plan_authors": [], "authors": {}, "attempts": [], "plan_approved": None}
+DEFAULTS = {"plan_authors": [], "authors": {}, "authors_incomplete": {}, "attempts": [], "plan_approved": None}
 PLAN_ROLES = PLAN_AUTHORS + ("plan-reviewer", "diagnosis")  # may run while a plan revision awaits its review
 
 
@@ -52,13 +52,30 @@ def plan_facts(state):
     return facts["phases"]
 
 
+def phase_changes(state, paths):
+    """How many phases of this Run changed each path: its confirmed phase/final-fix commits plus the uncommitted change."""
+    if not paths: return {}
+    count = {}
+    def touched(*rev):
+        out = v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", *rev, "--", *sorted(paths)).decode("utf-8")
+        return {x for x in out.split("\0") if x}
+    for c in state["phase_commits"]:
+        if c["step"] in ("phase", "final-review", "quickfix"):
+            for x in touched(c["base"], c["sha"]): count[x] = count.get(x, 0) + 1
+    for x in touched("HEAD"): count[x] = count.get(x, 0) + 1
+    return count
+
+
 def upgrade(state):
     """A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write
     receipts of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its
     accepted plan writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer
-    independent (see independent and plan_independent)."""
+    independent (see independent and plan_independent). A rebuilt file whose distinct write receipts are fewer than
+    the phases that changed it lost earlier writers with their phase's packages: authors_incomplete keeps it unknown
+    until a package declares as many writes. Consumed final-review rounds and the approved plan structure are rebuilt
+    only from evidence the state holds."""
     if "authors" not in state or state.get("plan_authors") is None:
-        name = plan_name(state); rebuilt = {}; plan_refs = []; observed = {}
+        name = plan_name(state); rebuilt = {}; rows = {}; plan_refs = []; observed = {}
         for ref in state["provenance"]:
             try: observed[record(ref)["result"]["dispatch"]["id"]] = ref
             except (Rejected, OSError, ValueError, KeyError, TypeError): pass
@@ -73,14 +90,39 @@ def upgrade(state):
             for path, families in writers.items():
                 if path != name: rebuilt.setdefault(path, set()).update(families)
             for w in m["provenance"].get("writes", []):
+                for path in w["files"]: rows.setdefault(path, set()).add(w["receipt_path"])
                 if name in w["files"]:
                     plan_author(next((x for x in state["provenance"] if x["path"] == w["receipt_path"] and x["sha256"] == w["receipt_sha256"]),
                                      dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
-        state.setdefault("authors", {path: sorted(f) for path, f in sorted(rebuilt.items())})
+        if "authors" not in state:
+            state["authors"] = {path: sorted(f) for path, f in sorted(rebuilt.items())}
+            needed = phase_changes(state, set(rebuilt))
+            state["authors_incomplete"] = {x: n for x, n in sorted(needed.items()) if len(rows.get(x, ())) < n}
         if state.get("plan_authors") is None: state["plan_authors"] = plan_refs
-    state.setdefault("attempts", [])
-    # A Run past its plan step had its plan structure approved; a revision after that awaits a new plan review.
-    state.setdefault("plan_approved", state["plan"]["structure"] if state["plan"] and state["step"] != "plan" else None)
+    state.setdefault("authors_incomplete", {})
+    if "attempts" not in state:  # a checkpoint already consumed the final-review rounds counted so far
+        done = state["step"] in ("delivery", "completion")
+        state["attempts"] = [dict(role="review-final", round=n, family=None) for n in range(1, state["rounds"]["final_review"] + 1)] if done else []
+    if "plan_approved" not in state: state["plan_approved"] = approved_structure(state)
+
+
+def approved_structure(state):
+    """The plan structure an older state can prove approved: its latest accepted plan-reviewer APPROVED (unless a plan
+    author's entry came later), else the plan-only commit's plan when no plan author's entry remains. Otherwise none:
+    the revision awaits its plan review."""
+    if state["plan"] is None or state["step"] == "plan": return None
+    roles = [r["role"] if r["role"] in PLAN_AUTHORS else "approval" if (r["role"], r["token"]) == ("plan-reviewer", "APPROVED") else None
+             for r in state["accepted"]]
+    approvals = [i for i, x in enumerate(roles) if x == "approval"]; revisions = [i for i, x in enumerate(roles) if x in PLAN_AUTHORS]
+    try:
+        if approvals and (not revisions or approvals[-1] > revisions[-1]):
+            return plan_read(ref(state["accepted"][approvals[-1]]["artifact"]))["shape"]
+        commit = next((c for c in state["phase_commits"] if c["step"] == "plan"), None)
+        if commit and not revisions:
+            text = v.git(state["worktree"], "show", commit["sha"] + ":" + plan_name(state)).decode("utf-8-sig").replace("\r\n", "\n")
+            return plan_read(text)["shape"]
+    except (Rejected, OSError, ValueError, KeyError, TypeError, v.subprocess.SubprocessError): pass
+    return None
 
 
 def plan_reviewed(state):
@@ -177,6 +219,12 @@ def independent(art, coverage, reviewer, state):
     contracts = {c["id"]: c for c in m["coverage"]["contracts"]}
     sides = sorted({p for c in coverage.get("contracts", []) for side in ("producer", "consumer") for p in c.get(side, [])} - changed - {plan_name(state)})
     earlier = set(x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], "--", *sides).decode("utf-8").split("\0") if x) if sides else set()
+    declared = {}
+    for w in m["provenance"].get("writes", []):
+        for x in w["files"]: declared.setdefault(x, set()).add(w["receipt_path"])
+    for name in set(coverage.get("files", [])) | set(sides):
+        # An older state's rebuilt author set for this file misses earlier phases: the package must declare them.
+        require(len(declared.get(name, ())) >= state["authors_incomplete"].get(name, 0), "unknown actual author: " + name, 2)
     for c in coverage.get("contracts", []):
         require(c.get("id") in contracts, "unknown coverage contract")
         for side in ("producer", "consumer"):

@@ -517,13 +517,15 @@ class TransitionTests(unittest.TestCase):
         rc, text, err = command(f.argv('protocol-state', 'migrate', source['path'], out), f.git.root)
         self.assertEqual(rc, 0, (text, err))
         migrated = read_json(out)
-        skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier', 'plan_authors', 'authors')
+        rebuilt = ('plan_authors', 'authors', 'authors_incomplete', 'attempts', 'plan_approved')  # the first validate rebuilds them
+        skip = ('rounds', 'accepted', 'processed_messages', 'used_fleet_ids', 'barrier') + rebuilt
         self.assertEqual({k: migrated[k] for k in state if k not in skip}, {k: state[k] for k in state if k not in skip})
-        self.assertNotIn('plan_authors', migrated); self.assertNotIn('authors', migrated)  # the first validate rebuilds them
+        self.assertFalse(set(rebuilt) & set(migrated))
         self.assertEqual([r['role'] for r in migrated['accepted']], ['review-primary'])
         self.assertEqual((migrated['processed_messages'], migrated['used_fleet_ids'], migrated['rounds']['fused_review']), (['m1'], ['fleet-1'], 1))
         f.state = migrated
-        self.ok(barrier='awaiting_gate')
+        # This schema 1 fixture holds neither a plan-only commit nor a plan approval: the plan structure is unproven.
+        self.ok(barrier='awaiting_plan_review')
         rc, text, err = command(f.argv('protocol-state', 'migrate', source['path'], out), f.git.root)
         self.assertEqual(rc, 2, text); self.assertIn('new absolute file', text)
         self.no(2, 'schema 1 state: run protocol-state migrate', dict(schema_version=1, action='resume', state=v1))

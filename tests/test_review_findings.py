@@ -127,6 +127,7 @@ class ReviewFindingTests(unittest.TestCase):
         """Two phases: Claude writes the C1 producer in F1; in F2 an Anthropic reviewer may not cover it as a side."""
         f = self.f; base = f.git.base; self.baseline_tracked()
         f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md'); f.state['plan'] = f.plan_ref()
+        f.state['plan_approved'] = f.state['plan']['structure']  # the Run's approved plan
         self.worker('frontend-implementer', 'Anthropic', assigned=f.snapshot_ref(), deliver=self.writer('ui.ts', 'export const ui = 1\n'),
                     barrier='awaiting_gate')
         c1 = [dict(id='C1', producer=['ui.ts'], consumer=['plan.md'])]
@@ -467,9 +468,9 @@ class ReviewFindingTests(unittest.TestCase):
         f.state.update(base=new, plan=f.plan_ref())
         return new
 
-    def legacy(self):
+    def legacy(self, *keys):
         """The state shape of the live Runs, written before authors/plan_authors/attempts/plan_approved existed."""
-        for key in ('authors', 'plan_authors', 'attempts', 'plan_approved'): self.f.state.pop(key, None)
+        for key in keys or ('authors', 'plan_authors', 'authors_incomplete', 'attempts', 'plan_approved'): self.f.state.pop(key, None)
 
     def test_r2_10_free_text_expect_is_checked_by_its_exit_code(self):
         """p3b F3R2-CV1: `exit 0; stdout — <prose>` with a sealed result already recorded as verified-by-controller."""
@@ -633,6 +634,62 @@ class ReviewFindingTests(unittest.TestCase):
         rc, stdout, stderr = f.helper('canonical', src, out)
         self.assertEqual(rc, 0, (stdout, stderr))
         self.assertEqual(out.read_bytes(), b'{"a":-0.0,"b":[0.1,2.0,1e-05,1e+16,1000000000000001.0],"c":"d\'Artagnan <x> \\u0437","\\ue000":1,"\\ud800\\udc00":2}')
+
+    # == Round-3 review (Astra xhigh) =============================================================================
+    def revise(self, family, text, round=1):
+        """A plan reviser's accepted REVISED report changing the plan body (a substantive mid-phase revision)."""
+        f = self.f; f.plan.write_text(f.plan.read_text().replace('Fixture plan', text, 1), encoding='utf-8')
+        data = f.report_input('plan-reviser', family, token='REVISED', artifact=f.plan_artifact(), round=round)
+        data['plan'] = f.plan_ref()
+        return data
+
+    def test_r3_2_partial_legacy_history_keeps_a_file_unknown(self):
+        """OpenAI writes the producer in F1; Google changes it in F2; only F2's package survives the upgrade."""
+        f = self.f; base = f.git.base; self.baseline_tracked()
+        f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md')
+        f.state['plan'] = f.plan_ref(); f.state['plan_approved'] = f.state['plan']['structure']
+        self.worker('implementer', 'OpenAI', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 1\n'), barrier='awaiting_gate')
+        art, coverage = f.package_ref(families={'OpenAI': ['producer.ts', 'plan.md']})
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
+        f1 = f.git_commit('feat(F1): producer')
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=f1, base=base), fleet=f.fleet())
+        self.ok(action='advance')
+        f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
+        self.ok(plan=f.plan_ref())
+        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 2\n'), barrier='awaiting_gate')
+        art, coverage = f.package_ref(families={'Google': ['producer.ts', 'plan.md']})
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.legacy('authors', 'plan_authors', 'authors_incomplete')
+        self.ok()
+        self.assertEqual((f.state['authors'], f.state['authors_incomplete']), ({'producer.ts': ['Google']}, {'producer.ts': 2}))
+        astra = lambda a, c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
+        self.no(2, 'unknown actual author: producer.ts', action='dispatch', proposed=astra(art, coverage), artifact=art, fleet=f.fleet())
+        # Declaring the earlier phase's writer too makes the history complete, and then OpenAI is its author.
+        full, coverage = f.package_ref(families={'Google': ['producer.ts', 'plan.md'], 'OpenAI': ['producer.ts']})
+        self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(full, coverage), artifact=full, fleet=f.fleet())
+
+    def test_r3_3_upgrade_keeps_an_unreviewed_revision_pending(self):
+        f = self.f; self.phase_ready()
+        self.ok(self.revise('Anthropic', 'Fixture plan, split'))
+        self.legacy()
+        self.ok(barrier='awaiting_plan_review')
+        # With the approval in the state, the upgrade proves the revised structure approved.
+        self.ok(f.report_input('plan-reviewer', 'Google', artifact=f.plan_artifact()))
+        self.legacy()
+        self.ok(barrier='awaiting_commit')
+
+    def test_r3_6_legacy_checkpoint_keeps_its_consumed_rounds(self):
+        f = self.f; self.to_final_review()
+        final, coverage = f.package_ref()
+        for n in (1, 2): self.worker('review-final', 'Google', assigned=final, coverage=coverage, round=n)
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.legacy('attempts')
+        self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
+        self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref())
+        self.no(1, 'substantive review needs a new round', action='dispatch', artifact=final, fleet=f.fleet(),
+                proposed=dict(self.assignment('review-final', 'Google', round=2), coverage=coverage))
 
 
 if __name__ == '__main__': unittest.main()

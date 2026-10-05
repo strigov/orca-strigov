@@ -156,6 +156,7 @@ class CoordinatorSessionTests(unittest.TestCase):
                       '    consumes: ["C1"]\n    produces: []\n')
         f.plan.write_text(f.plan.read_text().replace('---\nFixture plan.', next_phase + '---\nFixture plan.'))
         f.state['plan'] = f.plan_ref()
+        f.state['plan_approved'] = f.state['plan']['structure']  # the Run's approved two-phase plan
         f.git.git('add', 'plan.md')
         self.bind()
         self.assertEqual(f.validate(f.report_input())[0], 0)
