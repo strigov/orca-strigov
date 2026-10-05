@@ -30,6 +30,20 @@ mistaken variants):
   finding by its literal command and exit code, not by the checkout or platform
   it ran in; the same text sealed in another checkout passes.
 
+**Legacy authorship rule (limitation).** A state written before C6 kept
+cumulative `authors` cannot prove who wrote its earlier phases: their review
+packages left the state at `advance`, and receipt counts or Dispatch timestamps
+do not establish completeness. C6 therefore does not try. On upgrade, every file
+committed in an earlier phase of the Run (`plan_base`..the current phase's
+`base`; every phase in the final steps) gets the conservative superset: every
+model family among the state's `provenance` writer observations plus the
+families of every write row of every package the state still references (an
+observation whose family cannot be read counts as every family). Files touched
+only in the current phase follow the normal package and `record-author` rules.
+The superset can only over-approximate authorship, so independence only gets
+stricter; where it leaves no independent family for a file, the user's
+`waive-independence` applies.
+
 ## What C6 checks
 
 `bin/protocol-state validate INPUT_JSON [RESUME_OUT]` (native Windows:
@@ -95,7 +109,7 @@ only the ledger path.
 {"schema_version":2,"mode":"plan|quickfix","plan":{"path","sha256","structure"}|null,"ledger_path":null,
  "orca_run","plan_base","phase","base","step","worktree","worktree_id","workspace",
  "active":null,"rounds":{"plan_review":0,"fused_review":0,"final_review":0,"gate_fix":0},
- "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"authors_incomplete":{},"attempts":[],
+ "cap_extensions":[],"independence_waivers":[],"provenance":[],"plan_authors":[],"authors":{},"attempts":[],
  "plan_approved":null,"accepted":[],"write_ownership":[],"phase_commits":[],"final_source":null,
  "processed_messages":[],"used_fleet_ids":[],"barrier":"..."}
 ```
@@ -127,19 +141,10 @@ only the ledger path.
   approval. When `plan.structure` differs (a substantive revision after the plan
   step) the plan review is pending (see Plan reference). `plan_approval_evidence`
   keeps the saved state a `resume` imported it from (see Actions).
-- `authors_incomplete`: `{path: [[start, end], …]}` for an upgraded older state:
-  per rebuilt file, the change windows that changed it but that no surviving
-  write row was dispatched in. A change window is one confirmed
-  phase/final-fix/quickfix commit since `plan_base` (or the uncommitted change);
-  its writers were dispatched in (previous commit time, this commit time], the
-  plan commit opening the first. A write row belongs to the window containing its
-  receipt's `dispatch.createdAt`; several rows of one window never stand in for
-  another. Such a file is `unknown actual author` for any review whose package
-  does not declare a writer dispatched in each missing window.
 - **Older states.** A state written before these fields existed is upgraded on
   its first validate, only from evidence it holds: `authors` from the validated
-  write receipts of the C5 packages its accepted reviews used (with
-  `authors_incomplete` as above); `plan_authors` from its accepted
+  write receipts of the C5 packages its accepted reviews used, plus the legacy
+  superset for files of earlier phases (see Threat model); `plan_authors` from its accepted
   plan-writer/plan-reviser entries (their `provenance` observations) and from
   those package writes that touched the plan file; `attempts` = one consumed
   final-review attempt per counted round when it is in `delivery` or
@@ -178,10 +183,12 @@ dispatch captures the repository candidate (`active.source`). Its
 `accept-report`, and `reconcile-intent` of its unbound intent, reject any change
 to it with `plan author changed source outside the plan: revert it or attribute
 it with record-author (route further source work to an implementer)` and keep
-the assignment. `record-author` of that plan author attributes the change
-explicitly: its family joins `plan_authors` and, for every path changed since
-the step base, `authors` (it needs a current snapshot artifact then). Nothing is
-attributed silently.
+the assignment. Its dispatch also keeps the source entries it started from
+(`active.source_files`). `record-author` of that plan author attributes the
+change explicitly: its family joins `plan_authors` and `authors` for exactly the
+delta against those dispatch-time entries, reversions to the base and deletions
+included (an assignment saved without them: every path changed since the step
+base, with a current snapshot artifact). Nothing is attributed silently.
 
 **Pending plan review.** An accepted plan-writer/plan-reviser report that
 changes the plan structure after the plan step (a mid-phase revision) sets the

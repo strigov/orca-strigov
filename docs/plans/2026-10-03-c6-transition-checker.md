@@ -49,6 +49,13 @@ a stale completion message paired with a plan author's changed plan reference
 (r2 #5); a cannot_verify result of the same command text sealed in another
 checkout or platform (r2 #7).
 
+Legacy authorship (decision 2026-10-05, review r5): completeness of pre-upgrade
+history is not proven. A state without cumulative `authors` gives every file of
+its earlier phases the superset of all writer families it names (provenance
+observations plus surviving package write rows); per-receipt and timestamp
+heuristics were tried and dropped. It only over-approximates authorship; a file
+left with no independent family goes through `waive-independence`.
+
 ## Keep / drop
 
 | Keep (hard invariant) | Drop |
