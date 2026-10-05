@@ -5,10 +5,11 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'lib/verification.ps1')
 . (Join-Path $PSScriptRoot 'lib/protocol-facts.ps1')
-$PCaps=[ordered]@{plan_review=4;fused_review=4;final_review=2;gate_fix=2}
-$PGood=@{'plan-reviewer'=@('APPROVED');gate=@('GATE_OK');'review-primary'=@('REVIEW_OK');'review-control'=@('REVIEW_OK');'review-final'=@('REVIEW_OK');quickfix=@('DONE','DONE_WITH_CONCERNS')}
+# Ordinal maps throughout: a group, role or step differing only in case is unknown, as in Python.
+$PCaps=V-Map;$PCaps['plan_review']=4;$PCaps['fused_review']=4;$PCaps['final_review']=2;$PCaps['gate_fix']=2
+$PGood=V-Map;$PGood['plan-reviewer']=@('APPROVED');$PGood['gate']=@('GATE_OK');$PGood['review-primary']=@('REVIEW_OK');$PGood['review-control']=@('REVIEW_OK');$PGood['review-final']=@('REVIEW_OK');$PGood['quickfix']=@('DONE','DONE_WITH_CONCERNS')
 $PWritten=@('DONE','DONE_WITH_CONCERNS','PLAN_WRITTEN','REVISED','SYNTHESIS_DONE')
-$PReady=@{plan=@('plan-reviewer');quickfix=@('quickfix');phase=@('gate','review-primary','review-control');'final-review'=@('review-final');delivery=@('gate');completion=@()}
+$PReady=V-Map;$PReady['plan']=@('plan-reviewer');$PReady['quickfix']=@('quickfix');$PReady['phase']=@('gate','review-primary','review-control');$PReady['final-review']=@('review-final');$PReady['delivery']=@('gate');$PReady['completion']=@()
 $PDecisions=@('DEFER','NIT','REJECTED_BY_SCOPE')  # ESCALATED_TO_HUMAN keeps a finding open until the user decides
 $PKeys=@('schema_version','mode','plan','ledger_path','orca_run','plan_base','phase','base','step','worktree','worktree_id','workspace','active','rounds',
   'cap_extensions','independence_waivers','provenance','accepted','write_ownership','phase_commits','final_source','processed_messages','used_fleet_ids')
@@ -158,13 +159,13 @@ function P-CommitCheck($s,$fact,$cand,$art) {
   P-Require ($base -ceq $art.head) 'commit base differs from accepted candidate HEAD'
   $now=P-Fresh $s $art
   P-Require (-not (V-GitText $root @('diff','--no-ext-diff','--name-only','--'))) 'hook/working-tree or unstaged source after acceptance'
-  $expected=@{}
+  $expected=V-Map
   foreach ($label in @($now.manifest.files.Keys)) {
     if (-not $label.StartsWith('repo:',[StringComparison]::Ordinal) -or $label.Substring(5) -ceq $name) { continue };$item=$now.manifest.files[$label]
     P-Require ($item.Contains('index')) 'accepted source was not staged';if ($item.type -cne 'missing') { $expected[$label.Substring(5)]=$item.index }
   }
-  $tree=@{};foreach ($row in (V-Nul (V-Git $root @('ls-tree','-r','-z',$sha)))) { $pair=$row.Split(@([char]9),2);$meta=$pair[0].Split(' ');$tree[$pair[1]]=@($meta[0],$meta[2]) }
-  $hasPlan=$null -ne $name -and $tree.ContainsKey($name);if ($hasPlan) { $tree.Remove($name) }
+  $tree=V-Map;foreach ($row in (V-Nul (V-Git $root @('ls-tree','-r','-z',$sha)))) { $pair=$row.Split(@([char]9),2);$meta=$pair[0].Split(' ');$tree[$pair[1]]=@($meta[0],$meta[2]) }
+  $hasPlan=$null -ne $name -and $tree.Contains($name);if ($hasPlan) { $tree.Remove($name) }
   P-Require (P-Eq $tree $expected) 'commit does not contain accepted index/source'
   if (-not $hasPlan) { return $null }
   $facts=P-PlanRead ($VUtf8.GetString((V-Git $root @('show',($sha+':'+$name)))).TrimStart([char]0xfeff).Replace("`r`n","`n"))
@@ -206,7 +207,7 @@ function P-AcceptReport($data,$s) {
 }
 function P-Dispatch($data,$s) {
   P-Fleet $data $s;$p=V-Get $data 'proposed';P-Need $p @('run_id','task_id','dispatch_id','role','phase','round','worktree_id','model')
-  P-Require ($p.role -is [string] -and $PTokens.ContainsKey($p.role) -and $p.run_id -ceq $s.orca_run -and (P-Eq $p.phase $s.phase) -and $p.worktree_id -ceq $s.worktree_id) 'proposed binding mismatch'
+  P-Require ($p.role -is [string] -and $PTokens.Contains($p.role) -and $p.run_id -ceq $s.orca_run -and (P-Eq $p.phase $s.phase) -and $p.worktree_id -ceq $s.worktree_id) 'proposed binding mismatch'
   P-Require (($p.round -is [int] -or $p.round -is [long]) -and $p.round -ge 1) 'invalid proposed round'
   P-Require ($p.task_id -and $null -eq $p.dispatch_id) 'dispatch proposal needs a fresh Task and null not-yet-created Dispatch'
   $unplanned=$null -ne $s.plan -and $null -eq $s.plan.sha256

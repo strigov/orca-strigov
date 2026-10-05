@@ -11,21 +11,60 @@ function V-Keys($value) {
   if ($value -is [Collections.IDictionary]) { return @($value.Keys) }
   return @($value.PSObject.Properties | ForEach-Object { $_.Name })
 }
+function V-Map() {
+  # JSON objects are case-sensitive: an ordinal map, never PowerShell's case-insensitive [ordered]/@{} (model ids, paths).
+  return ,(New-Object Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal))
+}
 function V-Normal($value) {
   if ($null -eq $value -or $value -is [string] -or $value -is [ValueType]) { return $value }
   if ($value -is [Collections.IDictionary] -or $value -is [pscustomobject]) {
     $keys = [string[]]@(V-Keys $value); [Array]::Sort($keys, [StringComparer]::Ordinal)
-    $result = [ordered]@{}
+    $result = V-Map
     foreach ($key in $keys) { $result[$key] = V-Normal (V-Get $value $key) }
-    return $result
+    return ,$result
   }
   $result = @(); foreach ($item in $value) { $result += ,(V-Normal $item) }; return ,$result
 }
+function V-JsonString([string]$text) {
+  # Python json.dumps(ensure_ascii=True): escape quote, backslash, controls and everything outside space..tilde.
+  $escaped = [regex]::Replace($text, '[\\"]|[^ -~]', {
+    param($m) $c = [int][char]$m.Value
+    switch ($c) { 34 { return '\"' } 92 { return '\\' } 10 { return '\n' } 13 { return '\r' } 9 { return '\t' } 8 { return '\b' } 12 { return '\f' } }
+    return '\u' + $c.ToString('x4')
+  })
+  return '"' + $escaped + '"'
+}
+function V-JsonNumber($value) {
+  $culture = [Globalization.CultureInfo]::InvariantCulture
+  if ($value -is [double] -or $value -is [single]) {
+    $d = [double]$value; if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw 'non-finite JSON number' }
+    # Python float repr: integral values below 1e16 keep ".0"; otherwise the shortest round trip with a 2-digit exponent.
+    if ($d -eq [Math]::Floor($d) -and [Math]::Abs($d) -lt 1e16) { return ([decimal]$d).ToString($culture) + '.0' }
+    $r = $d.ToString('R', $culture)
+    if ($r -match '^(-?[0-9.]+)E([+-])([0-9]+)$') { $r = $Matches[1] + 'e' + $Matches[2] + ([int]$Matches[3]).ToString('00') }
+    return $r
+  }
+  return ([IFormattable]$value).ToString($null, $culture)
+}
+function V-JsonWrite($value, [Text.StringBuilder]$out) {
+  if ($null -eq $value) { [void]$out.Append('null'); return }
+  if ($value -is [bool]) { [void]$out.Append($(if ($value) { 'true' } else { 'false' })); return }
+  if ($value -is [string] -or $value -is [char]) { [void]$out.Append((V-JsonString ([string]$value))); return }
+  if ($value -is [datetime] -or $value -is [datetimeoffset]) { [void]$out.Append((V-JsonString $value.ToString('o', [Globalization.CultureInfo]::InvariantCulture))); return }
+  if ($value -is [ValueType]) { [void]$out.Append((V-JsonNumber $value)); return }
+  if ($value -is [Collections.IDictionary]) {
+    $keys = [string[]]@($value.Keys); [Array]::Sort($keys, [StringComparer]::Ordinal); [void]$out.Append('{'); $first = $true
+    foreach ($key in $keys) { if (-not $first) { [void]$out.Append(',') }; $first = $false; [void]$out.Append((V-JsonString $key)).Append(':'); V-JsonWrite $value[$key] $out }
+    [void]$out.Append('}'); return
+  }
+  [void]$out.Append('['); $first = $true
+  foreach ($item in $value) { if (-not $first) { [void]$out.Append(',') }; $first = $false; V-JsonWrite $item $out }
+  [void]$out.Append(']')
+}
 function V-Json($value) {
-  # Native ConvertTo-Json emits no pipeline value for a top-level null.
-  if ($null -eq $value) { return 'null' }
-  if ($PSVersionTable.PSVersion.Major -ge 7) { return ConvertTo-Json -InputObject (V-Normal $value) -Depth 80 -Compress -EscapeHandling EscapeHtml }
-  return ConvertTo-Json -InputObject (V-Normal $value) -Depth 80 -Compress
+  # Canonical JSON, byte-identical to Python json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")):
+  # every identity (candidate, package, snapshot, request) hashes the same bytes on both backends.
+  $out = New-Object Text.StringBuilder; V-JsonWrite (V-Normal $value) $out; return $out.ToString()
 }
 function V-Hash([byte[]]$bytes) {
   $h = [Security.Cryptography.SHA256]::Create()

@@ -3,14 +3,14 @@
 # C4 evidence, Orca observations, actual-model proof). Every decision lives in protocol-state.ps1.
 $PReview=@('plan-reviewer','review-primary','review-control','review-final')
 $PWrite=@('plan-writer','plan-reviser','implementer','frontend-implementer','quickfix','synthesizer')
-$PTokens=@{
+$PTokens=V-Map;foreach ($pair in @{
   'plan-writer'=@('PLAN_WRITTEN','REVISED','NEEDS_AUTHORIZATION','BLOCKED');'plan-reviser'=@('REVISED','NEEDS_AUTHORIZATION','BLOCKED')
   'plan-reviewer'=@('APPROVED','CHANGES_REQUESTED','BLOCKED');'implementer'=@('DONE','DONE_WITH_CONCERNS','NEEDS_CONTEXT','NEEDS_AUTHORIZATION','BLOCKED')
   'frontend-implementer'=@('DONE','DONE_WITH_CONCERNS','NEEDS_CONTEXT','NEEDS_AUTHORIZATION','BLOCKED');'quickfix'=@('DONE','DONE_WITH_CONCERNS','NEEDS_CONTEXT','BLOCKED')
   'gate'=@('GATE_OK','GATE_FAIL','NO_COMMANDS','NEEDS_JUDGMENT','BLOCKED');'review-primary'=@('REVIEW_OK','REVIEW_BLOCKING','BLOCKED')
   'review-control'=@('REVIEW_OK','REVIEW_BLOCKING','BLOCKED');'review-final'=@('REVIEW_OK','REVIEW_BLOCKING','BLOCKED')
   'synthesizer'=@('SYNTHESIS_DONE','BLOCKED');'diagnosis'=@('NEEDS_MORE_CONTEXT','NEEDS_MORE_REASONING','PHASE_TOO_LARGE','PLAN_WRONG','IMPASSE_SUMMARY','BLOCKED')
-}
+}.GetEnumerator()) { $PTokens[$pair.Key]=$pair.Value }  # ordinal: a role differing in case is unknown, as in Python
 function P-Require($ok,[string]$why,[int]$code=1) {
   if (-not $ok) { $e=New-Object InvalidOperationException($why);$e.Data['code']=$code;throw $e }
 }
@@ -39,7 +39,7 @@ function P-Line([string]$text,[string]$label,$default=$null) {
 function P-Report([string]$text,$a,$art,[string]$outcome,$modified) {
   $text=$text.Replace("`r`n","`n")
   $rows=@($text -split '\r?\n');$token=$rows[0];$role=$a.role
-  P-Require ($PTokens.ContainsKey($role) -and $token -cin $PTokens[$role]) 'format: role verdict'
+  P-Require ($PTokens.Contains($role) -and $token -cin $PTokens[$role]) 'format: role verdict'
   $failed=$token -ceq 'BLOCKED' -or ($role -cin $PWrite -and $token -cin @('NEEDS_CONTEXT','NEEDS_AUTHORIZATION'))
   $expected=if ($failed) { 'failed' } else { 'succeeded' };P-Require ($outcome -ceq $expected) 'format: subject/outcome conflict'
   $b=P-Line $text 'BINDING';$keys=@('schema_version','run_id','task_id','dispatch_id','role','phase','round','artifact_id','snapshot_id')
@@ -118,7 +118,7 @@ function P-PlanName($s) {
 }
 function P-Candidate($files,$s) {
   # Candidate identity: repository entries and their bytes; no HEAD, exclusions, index, declared inputs or plan file.
-  $skip=P-PlanName $s;$entries=@{}
+  $skip=P-PlanName $s;$entries=V-Map
   foreach ($k in @($files.Keys)) {
     if (-not $k.StartsWith('repo:',[StringComparison]::Ordinal)) { continue };$x=$files[$k];$name=$k.Substring(5)
     if ($x.type -ceq 'missing' -or $name -ceq $skip) { continue };$entries[$name]=if ($x.Contains('sha256')) { $x.sha256 } else { $x.type }
@@ -335,14 +335,14 @@ function P-Observation($r,$active) {
 function P-KnownFamilies() { return @(@(V-Values (P-RolesFact 'FAMILY_MODELS'))+@(V-Values (P-RolesFact 'FAMILY_PREFIXES')) | Select-Object -Unique) }
 function P-Authors($art,$provenance=@()) {
   # Actual author families per file of a complete package, from its write receipts.
-  $m=$art.manifest;P-Require ($null -ne $m) 'review requires a complete package' 2;$writers=@{}
+  $m=$art.manifest;P-Require ($null -ne $m) 'review requires a complete package' 2;$writers=V-Map
   foreach ($w in $m.provenance.writes) {
     $saved=P-Record @{path=$w.receipt_path;sha256=$w.receipt_sha256};$o=$saved.result;$d=$o.dispatch
     P-Require ($d.id -ceq $w.dispatch_id -and $d.taskId -ceq $w.task_id -and $d.runId -ceq $w.run_id) 'unknown write provenance' 2
     $ref=@($provenance | Where-Object { $_.path -ceq $w.receipt_path -and $_.sha256 -ceq $w.receipt_sha256 } | Select-Object -First 1)
     $source=if ($ref.Count) { $ref[0] } else { $null }
     $actual=P-Family $o $source;P-Require ($actual -ceq $w.family) 'claimed author family differs from launch'
-    foreach ($path in $w.files) { $writers[$path]=@($writers[$path])+$actual }
+    foreach ($path in $w.files) { $writers[$path]=@(@($writers[$path] | Where-Object { $null -ne $_ })+$actual) }
   };return $writers
 }
 function P-UtcSeconds($value) {
