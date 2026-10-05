@@ -523,9 +523,11 @@ class ProtocolFixture(VerificationFixture):
         return dict(run_id='fixture-run', task_id='fixture-task-' + str(self.serial), dispatch_id='fixture-dispatch-' + str(self.serial),
             role=role, phase=self.state['phase'], round=round, model=self.model(family), worktree_id='fixture-worktree')
 
-    def observation(self, assignment, status='completed', model=..., start=None):
+    def observation(self, assignment, status='completed', model=..., start=None, created=None):
+        # Orca records when the Dispatch was created (UTC); C6 maps a write receipt to the phase it was dispatched in.
+        created = created or datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         ref = self.save(dict(ok=True, result=dict(dispatch=dict(id=assignment['dispatch_id'], taskId=assignment['task_id'],
-            runId=assignment['run_id'], status=status, assigneeHandle='fixture-terminal', retryOfDispatchId=None),
+            runId=assignment['run_id'], status=status, assigneeHandle='fixture-terminal', retryOfDispatchId=None, createdAt=created),
             projection=dict(provider=dict(id='fixture-cli', model=assignment['model'] if model is ... else model),
                 workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='live')))))
         if start is not None: ref['start'] = start
@@ -686,14 +688,16 @@ class ProtocolFixture(VerificationFixture):
             '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', 'commit', '-qm', 'protocol fixture')
         return dict(sha=self.git.git('rev-parse', 'HEAD').strip(), base=base, artifact=artifact)
 
-    def package_ref(self, families=None, contracts=None, start_families=(), claims=None, unbound=False, base=None, head='WORKTREE'):
+    def package_ref(self, families=None, contracts=None, start_families=(), claims=None, unbound=False, base=None, head='WORKTREE', rows=None):
+        """rows: explicit write rows [(family, files, createdAt)], several per family allowed; otherwise one row per family."""
         # C6 binds a package to the step base: the phase base, or plan_base in the final steps.
         base = base or (self.state['plan_base'] if self.state['step'] in ('final-review', 'delivery', 'completion') else self.state['base'])
         files = self.git.git('-c', 'core.quotePath=false', 'diff', '--name-only', base, *([] if head == 'WORKTREE' else [head])).splitlines()
         writes = []
-        for family, names in (families or {'OpenAI': files}).items():
+        for family, names, created in rows or [(family, names, None) for family, names in (families or {'OpenAI': files}).items()]:
             a = self.assignment(family=family)
-            receipt = self.observation(a, model=None, start=self.start_receipt(a)) if family in start_families else self.observation(a)
+            receipt = (self.observation(a, model=None, start=self.start_receipt(a), created=created) if family in start_families
+                       else self.observation(a, created=created))
             if 'start' in receipt: self.state['provenance'].append(receipt)
             if unbound:  # The receipt names the declared Task/Run but another Dispatch.
                 raw = read_json(receipt['path']); raw['result']['dispatch']['id'] = 'another-dispatch'

@@ -651,7 +651,7 @@ class ReviewFindingTests(unittest.TestCase):
         self.write('tracked.txt', 'the reviser also fixed the example source\n')
         data = f.report_input('plan-reviser', 'Anthropic', token='REVISED', artifact=f.plan_artifact(), assignment=f.state['active'])
         data['plan'] = f.plan_ref()
-        self.no(1, 'plan author changed source outside the plan: revert it or re-dispatch the change to an implementer', data)
+        self.no(1, 'plan author changed source outside the plan: revert it or attribute it with record-author', data)
         self.write('tracked.txt', 'candidate\n')
         self.ok(data, barrier='awaiting_plan_review')
 
@@ -671,15 +671,16 @@ class ReviewFindingTests(unittest.TestCase):
         f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
         self.ok(plan=f.plan_ref())
         self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 2\n'), barrier='awaiting_gate')
-        art, coverage = f.package_ref(families={'Google': ['producer.ts', 'plan.md']})
+        art, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], '2100-01-01 00:00:00')])
         self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
         self.legacy('authors', 'plan_authors', 'authors_incomplete')
         self.ok()
-        self.assertEqual((f.state['authors'], f.state['authors_incomplete']), ({'producer.ts': ['Google']}, {'producer.ts': 2}))
+        self.assertEqual(f.state['authors'], {'producer.ts': ['Google']})
+        self.assertEqual([(k, len(v)) for k, v in f.state['authors_incomplete'].items()], [('producer.ts', 1)])  # F1's window
         astra = lambda a, c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
         self.no(2, 'unknown actual author: producer.ts', action='dispatch', proposed=astra(art, coverage), artifact=art, fleet=f.fleet())
         # Declaring the earlier phase's writer too makes the history complete, and then OpenAI is its author.
-        full, coverage = f.package_ref(families={'Google': ['producer.ts', 'plan.md'], 'OpenAI': ['producer.ts']})
+        full, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], '2100-01-01 00:00:00'), ('OpenAI', ['producer.ts'], '2000-01-01 00:00:00')])
         self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(full, coverage), artifact=full, fleet=f.fleet())
 
     def test_r3_3_upgrade_keeps_an_unreviewed_revision_pending(self):
@@ -729,6 +730,70 @@ class ReviewFindingTests(unittest.TestCase):
         self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref())
         self.no(1, 'substantive review needs a new round', action='dispatch', artifact=final, fleet=f.fleet(),
                 proposed=dict(self.assignment('review-final', 'Google', round=2), coverage=coverage))
+
+    # == Round-4 review (Astra xhigh) =============================================================================
+    def two_phase_producer(self, f2_rows):
+        """OpenAI writes producer.ts in F1 (committed); in F2 Google changes it; F2's package is reviewed, then the state
+        is written back in the live Runs' older shape. f2_rows: the F2 package's write rows."""
+        f = self.f; base = f.git.base; self.baseline_tracked()
+        f.plan.write_text(two_phases(base, f1=base), encoding='utf-8'); f.git.git('add', 'plan.md')
+        f.state['plan'] = f.plan_ref(); f.state['plan_approved'] = f.state['plan']['structure']
+        self.worker('implementer', 'OpenAI', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 1\n'), barrier='awaiting_gate')
+        art, coverage = f.package_ref(families={'OpenAI': ['producer.ts', 'plan.md']})
+        self.ok(action='record-gate', artifact=art, evidence=self.passing_evidence())
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.ok(f.report_input('review-control', 'Google', artifact=art, coverage=coverage, round=2), barrier='awaiting_commit')
+        f1 = f.git_commit('feat(F1): producer')
+        self.ok(action='confirm-commit', artifact=art, commit=dict(sha=f1, base=base), fleet=f.fleet())
+        self.ok(action='advance')
+        f.plan.write_text(two_phases(base, f1=base, f2=f1), encoding='utf-8'); f.git.git('add', 'plan.md')
+        self.ok(plan=f.plan_ref())
+        self.worker('implementer', 'Google', assigned=f.snapshot_ref(), deliver=self.writer('producer.ts', 'export const p = 2\n'), barrier='awaiting_gate')
+        art, coverage = f.package_ref(rows=f2_rows)
+        self.ok(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        self.legacy('authors', 'plan_authors', 'authors_incomplete')
+        self.ok()
+        return art, coverage
+
+    def test_r4_1_receipts_of_one_phase_never_stand_in_for_another(self):
+        """Google changed the producer twice in F2 (two receipts); F1's OpenAI writer left no surviving package row."""
+        f = self.f; later = ('2100-01-01 00:00:00', '2100-01-02 00:00:00')
+        art, coverage = self.two_phase_producer([('Google', ['producer.ts', 'plan.md'], later[0]), ('Google', ['producer.ts'], later[1])])
+        astra = lambda c: dict(self.assignment('review-control', 'OpenAI'), coverage=c)
+        self.no(2, 'unknown actual author: producer.ts', action='dispatch', proposed=astra(coverage), artifact=art, fleet=f.fleet())
+        # A row dispatched in F1's window accounts for that phase: OpenAI is then a known author.
+        full, coverage = f.package_ref(rows=[('Google', ['producer.ts', 'plan.md'], later[0]), ('OpenAI', ['producer.ts'], '2000-01-01 00:00:00')])
+        self.no(1, 'same-family review: producer.ts', action='dispatch', proposed=astra(coverage), artifact=full, fleet=f.fleet())
+
+    def test_r4_2_reconcile_keeps_a_plan_author_intent_that_edited_source(self):
+        f = self.f; reviser = self.assignment('plan-reviser', 'Anthropic')
+        self.ok(action='dispatch', proposed=reviser, artifact=f.plan_artifact(), fleet=f.fleet(), barrier='awaiting_writer')
+        self.write('tracked.txt', 'the reviser also edited source, then failed\n')
+        row = dict(dispatchId='D-plan', taskId=reviser['task_id'], dispatchStatus='failed', terminalState='released', resource=None,
+                   projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='exited')))
+        self.no(1, 'plan author changed source outside the plan', action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref())
+        self.assertEqual(f.state['write_ownership'], ['pending:' + reviser['task_id']])
+        # Attributed explicitly: its family joins the source authors and the plan authors, and the intent clears.
+        self.ok(action='record-author', observation=f.observation(dict(reviser, dispatch_id='D-plan'), 'failed'), artifact=f.snapshot_ref())
+        self.assertEqual((f.state['write_ownership'], f.state['authors'].get('tracked.txt')), ([], ['Anthropic']))
+        self.ok(action='dispatch', proposed=self.assignment('implementer', 'Google'), artifact=f.snapshot_ref(), fleet=f.fleet([row]))
+
+    def test_r4_3_an_already_reopened_legacy_state_keeps_its_consumed_rounds(self):
+        f = self.f; self.to_final_review()
+        final, coverage = f.package_ref()
+        for n in (1, 2): self.worker('review-final', 'Google', assigned=final, coverage=coverage, round=n)
+        self.ok(action='finish-checkpoint', artifact=final, fleet=f.fleet(), barrier='awaiting_delivery')
+        self.ok(action='record-gate', verdict='GATE_FAIL', artifact=f.snapshot_ref(), evidence=self.gate_failure())
+        self.ok(action='reopen-final', fleet=f.fleet(), artifact=f.snapshot_ref())
+        # Reopened under the older runtime: no attempts history and no reopen item survive.
+        self.legacy('attempts'); f.state['accepted'] = [r for r in f.state['accepted'] if r['role'] != 'reopen']
+        f.state['accepted'] = [r for r in f.state['accepted'] if r['role'] != 'gate']
+        again = lambda n: dict(self.assignment('review-final', 'Google', round=n), coverage=coverage)
+        self.no(1, 'substantive review needs a new round', action='dispatch', proposed=again(2), artifact=final, fleet=f.fleet())
+        self.ok(action='extend-cap', authorization=f.save(dict(schema_version=1, run_id='fixture-run', phase='F1', group='final_review',
+                extra_rounds=1, findings=['R2-REOPEN'], user_decision='One more final review after the reopening.')))
+        self.ok(action='dispatch', proposed=again(3), artifact=final, fleet=f.fleet())
+
 
 
 if __name__ == '__main__': unittest.main()

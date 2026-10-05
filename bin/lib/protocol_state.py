@@ -14,7 +14,7 @@ from posix_runtime import artifact_path
 from protocol_facts import (Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
                             plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
                             actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
-                            checked, entry, manifest_files, step_base, values, candidate)
+                            checked, entry, manifest_files, step_base, values, candidate, utc_seconds)
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["REVIEW_OK"], "review-control": ["REVIEW_OK"],
@@ -52,28 +52,47 @@ def plan_facts(state):
     return facts["phases"]
 
 
-def phase_changes(state, paths):
-    """How many phases of this Run changed each path: its confirmed phase/final-fix commits plus the uncommitted change."""
-    if not paths: return {}
-    count = {}
-    def touched(*rev):
-        out = v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", *rev, "--", *sorted(paths)).decode("utf-8")
-        return {x for x in out.split("\0") if x}
+def receipt_time(path, sha256):
+    """When Orca created a write receipt's Dispatch (UTC seconds), or None when the receipt does not say."""
+    try: return utc_seconds(record(dict(path=path, sha256=sha256))["result"]["dispatch"].get("createdAt"))
+    except (Rejected, OSError, ValueError, KeyError, TypeError): return None
+
+
+def within(t, window):
+    return t is not None and (window[0] is None or t > window[0]) and (window[1] is None or t <= window[1])
+
+
+def change_windows(state):
+    """This Run's change sets in order: each confirmed phase/final-fix/quickfix commit and the uncommitted change, with
+    the window its writers were dispatched in, (previous commit time, this commit time] (the plan commit opens it)."""
+    out = []; start = None
     for c in state["phase_commits"]:
-        if c["step"] in ("phase", "final-review", "quickfix"):
-            for x in touched(c["base"], c["sha"]): count[x] = count.get(x, 0) + 1
-    for x in touched("HEAD"): count[x] = count.get(x, 0) + 1
-    return count
+        t = int(v.text_git(state["worktree"], "log", "-1", "--format=%ct", c["sha"]))
+        if c["step"] in ("phase", "final-review", "quickfix"): out.append(((c["base"], c["sha"]), [start, t]))
+        start = t
+    return out + [(("HEAD",), [start, None])]
+
+
+def missing_phases(state, rows):
+    """For every rebuilt path, the change windows that changed it and that no surviving write row was dispatched in:
+    several receipts of one phase never stand in for another phase."""
+    if not rows: return {}
+    out = {}
+    for rev, window in change_windows(state):
+        diff = v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", *rev, "--", *sorted(rows)).decode("utf-8")
+        for x in (y for y in diff.split("\0") if y):
+            if not any(within(receipt_time(*r), window) for r in rows[x]): out.setdefault(x, []).append(window)
+    return {x: out[x] for x in sorted(out)}
 
 
 def upgrade(state):
     """A state written before authors/plan_authors existed rebuilds them once from what it holds: the validated write
     receipts of the C5 packages its accepted reviews used (a write touching the plan file is plan authorship) and its
     accepted plan writer/reviser entries. Nothing rebuilt stays unknown: an unknown author never makes a reviewer
-    independent (see independent and plan_independent). A rebuilt file whose distinct write receipts are fewer than
-    the phases that changed it lost earlier writers with their phase's packages: authors_incomplete keeps it unknown
-    until a package declares as many writes. Consumed final-review rounds and the approved plan structure are rebuilt
-    only from evidence the state holds."""
+    independent (see independent and plan_independent). A rebuilt file needs, for every phase that changed it, a
+    surviving write row dispatched in that phase's window; authors_incomplete keeps each missing window until a
+    reviewed package declares a writer from it. Consumed final-review rounds and the approved plan structure are
+    rebuilt only from evidence the state holds."""
     if "authors" not in state or state.get("plan_authors") is None:
         name = plan_name(state); rebuilt = {}; rows = {}; plan_refs = []; observed = {}
         for ref in state["provenance"]:
@@ -90,19 +109,25 @@ def upgrade(state):
             for path, families in writers.items():
                 if path != name: rebuilt.setdefault(path, set()).update(families)
             for w in m["provenance"].get("writes", []):
-                for path in w["files"]: rows.setdefault(path, set()).add(w["receipt_path"])
+                for path in w["files"]: rows.setdefault(path, set()).add((w["receipt_path"], w["receipt_sha256"]))
                 if name in w["files"]:
                     plan_author(next((x for x in state["provenance"] if x["path"] == w["receipt_path"] and x["sha256"] == w["receipt_sha256"]),
                                      dict(path=w["receipt_path"], sha256=w["receipt_sha256"])))
         if "authors" not in state:
             state["authors"] = {path: sorted(f) for path, f in sorted(rebuilt.items())}
-            needed = phase_changes(state, set(rebuilt))
-            state["authors_incomplete"] = {x: n for x, n in sorted(needed.items()) if len(rows.get(x, ())) < n}
+            state["authors_incomplete"] = missing_phases(state, {x: rows.get(x, set()) for x in rebuilt})
         if state.get("plan_authors") is None: state["plan_authors"] = plan_refs
     state.setdefault("authors_incomplete", {})
-    if "attempts" not in state:  # a checkpoint already consumed the final-review rounds counted so far
-        done = state["step"] in ("delivery", "completion")
-        state["attempts"] = [dict(role="review-final", round=n, family=None) for n in range(1, state["rounds"]["final_review"] + 1)] if done else []
+    if "attempts" not in state:
+        # The final-review rounds counted so far are consumed: after a checkpoint, and conservatively in final-review too
+        # (an older runtime may have reopened it). There the rebuilt R<round>-REOPEN identity lets the user extend the cap.
+        n = state["rounds"]["final_review"]; reopened = state["step"] == "final-review" and n > 0
+        consumed = state["step"] in ("delivery", "completion") or reopened
+        state["attempts"] = [dict(role="review-final", round=k, family=None) for k in range(1, n + 1)] if consumed else []
+        if reopened:
+            item = dict(id="R%d-REOPEN" % n, kind="blocking", location="final-review", issue="consumed final-review rounds rebuilt for an older state")
+            state["accepted"].append(dict(role="reopen", token="REOPENED", round=n, phase=state["phase"], step="final-review", candidate=None,
+                                          artifact=None, findings=[item], coverage={}, family=None, report=None, dispatch_id=None, evidence=[]))
     if "plan_approved" not in state: state["plan_approved"] = approved_structure(state)
 
 
@@ -136,7 +161,7 @@ def plan_lane(state, assignment):
     """A plan author edits the plan file only: the source candidate is still the one captured at its dispatch."""
     if assignment.get("source") is not None:
         require(source_candidate(state) == assignment["source"],
-                "plan author changed source outside the plan: revert it or re-dispatch the change to an implementer")
+                "plan author changed source outside the plan: revert it or attribute it with record-author (route further source work to an implementer)")
 
 
 def plan_reviewed(state):
@@ -235,10 +260,12 @@ def independent(art, coverage, reviewer, state):
     earlier = set(x for x in v.git(state["worktree"], "diff", "--no-ext-diff", "--name-only", "-z", state["plan_base"], "--", *sides).decode("utf-8").split("\0") if x) if sides else set()
     declared = {}
     for w in m["provenance"].get("writes", []):
-        for x in w["files"]: declared.setdefault(x, set()).add(w["receipt_path"])
+        t = receipt_time(w["receipt_path"], w["receipt_sha256"])
+        for x in w["files"]: declared.setdefault(x, []).append(t)
     for name in set(coverage.get("files", [])) | set(sides):
-        # An older state's rebuilt author set for this file misses earlier phases: the package must declare them.
-        require(len(declared.get(name, ())) >= state["authors_incomplete"].get(name, 0), "unknown actual author: " + name, 2)
+        # An older state's rebuilt author set misses these phases: the package declares a writer dispatched in each.
+        for window in state["authors_incomplete"].get(name, []):
+            require(any(within(t, window) for t in declared.get(name, [])), "unknown actual author: " + name, 2)
     for c in coverage.get("contracts", []):
         require(c.get("id") in contracts, "unknown coverage contract")
         for side in ("producer", "consumer"):
@@ -651,10 +678,14 @@ def validate(data):
         # another model and wrote): its dispatch-time capture bounds the attribution, and the intent is resolved by it.
         own = active if active.get("dispatch_id") == d.get("id") or (active.get("dispatch_id") is None and active.get("task_id") == d.get("taskId")) else {}
         planned = own.get("role") in PLAN_AUTHORS or (data.get("artifact") or {}).get("kind") == "plan"
-        if own.get("role") in PLAN_AUTHORS: plan_lane(state, own)
         art = artifact(data.get("artifact"), state, None if planned and data.get("artifact") is None else True)
         state["provenance"].append(data["observation"])
-        if planned: state["plan_authors"].append(data["observation"])  # a plan author wrote the plan file
+        if planned:
+            state["plan_authors"].append(data["observation"])  # a plan author wrote the plan file
+            if own.get("role") in PLAN_AUTHORS and own.get("source") is not None and source_candidate(state) != own["source"]:
+                # Out of its lane it also wrote source: registering it attributes every change since the step base.
+                require(art["files"] is not None, "plan author changed source outside the plan: record-author it with a current snapshot artifact", 2)
+                attribute(state, written(state, None, art), author_family)
         else: attribute(state, written(state, manifest_files(own.get("artifact")), art), author_family)
         state["write_ownership"] = [x for x in state["write_ownership"] if x not in (d.get("id"), "pending:" + str(d.get("taskId")))]
         if own and own.get("dispatch_id") is None: state["active"] = None
@@ -676,6 +707,7 @@ def validate(data):
         active = state["active"]
         require(active is not None and active["dispatch_id"] is None and state["write_ownership"] == ["pending:" + active["task_id"]],
                 "no pending dispatch intent")
+        if active["role"] in PLAN_AUTHORS: plan_lane(state, active)  # its source edits are reverted or attributed first
         state["write_ownership"] = []
         rows = [w for w in fleet_clear(data, state) if w.get("taskId") == active["task_id"]]
         require(all(settled(w) for w in rows), "live or unverifiable prior writer", 2)
