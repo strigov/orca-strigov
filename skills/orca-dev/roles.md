@@ -38,8 +38,8 @@ Only the coordinator dispatches; workers never delegate (orca-recipes.md §0–�
 |---|---|---|---|---|---|
 | `coordinator` | all | the main Codex or Claude Code session running this skill, on its actual model; a new Codex coordinator is recommended as `gpt-6-astra` `high` with explicit `-m` (never `chatgpt-web/pro`) | — | bookkeeping only (Rule 1) | one session |
 | `plan-writer` | 1 (all complexities) | **claude `opus` `xhigh`** | Opus availability failure: one retry in a fresh terminal, then stop and ask the user — no automatic downgrade | plan file only | fresh |
-| `plan-reviser` | 2 | **claude `opus` `high`** (reuse the author's terminal) | author context lost: claude `opus` `high` fresh with announced full handoff, no downgrade | plan file only | retained reviser; actual context loss → fresh full handoff |
-| `plan-reviewer` | 2 | codex `gpt-6-astra` `xhigh` (ordinary and complex plans) | Astra unavailable → stop and ask the user (the only other family, Gemini, is not a plan reviewer here); never Opus — it authored the plan | no | fresh every substantive round (cap 4) |
+| `plan-reviser` | 2 | **claude `opus` `high`** (reuse the author's terminal; a Run on the `astra` profile keeps its Astra author, see Planning profiles) | author context lost: claude `opus` `high` fresh with announced full handoff, no downgrade | plan file only | retained reviser; actual context loss → fresh full handoff |
+| `plan-reviewer` | 2 | codex `gpt-6-astra` `xhigh` (ordinary and complex plans; claude `opus` `xhigh` for a Run on the `astra` profile) | Astra unavailable → stop and ask the user (the only other family, Gemini, is not a plan reviewer here); never Opus — it authored the plan | no | fresh every substantive round (cap 4) |
 | `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.8-flash-high`** (level `high` in the id; no `--effort`) | availability fallback → codex `gpt-6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-6-astra` `high` in a FRESH terminal; justified hard implementation route: codex `gpt-6-astra` `xhigh` (explicit choice, announced) | yes | same terminal across fix rounds; a model change is always a new terminal |
 | `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `high` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → antigravity `gemini-3.8-flash-high` — announced | yes | same terminal across fix rounds |
 | `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.8-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
@@ -64,7 +64,8 @@ The defaults assume Gemini-written code. When the cascade or the frontend route 
 ## Planning profiles
 
 - **`opus` (the only profile, 2026-10-04):** Claude `opus` `xhigh` writes; Claude `opus` `high` revises in the author's terminal (context loss → fresh Opus `high`, announced full handoff); Codex `gpt-6-astra` `xhigh` reviews.
-- The former `astra` and `pro` profiles are retired: with Opus as the author, an OpenAI plan written by Pro would leave no independent reviewer. `--planner pro` is refused with that explanation; the bridge notes stay in `references/bridge-incidents.md` for history.
+- **Runs started before 2026-10-04 keep their `astra` profile to the end:** Codex `gpt-6-astra` `xhigh` writes and revises (retained author), Claude `opus` `xhigh` reviews. Switching an Astra-written plan to an Opus reviser would make it authored by both families, leaving no independent plan reviewer. Identify the profile from the accepted plan-writer's actual model in the Run's state (`protocol-state summary`), not from this date.
+- The `pro` profile is retired: with Opus as the author, an OpenAI plan written by Pro would leave no independent reviewer. `--planner pro` is refused with that explanation; the bridge notes stay in `references/bridge-incidents.md` for history.
 
 State the profile in the Step 1 status line.
 
