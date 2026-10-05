@@ -80,6 +80,22 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(rc, 0, result)
         return [self.f.reference(Path(result['run_dir']) / 'result.json')]
 
+    def test_contract_side_may_name_unchanged_producers(self):
+        f = self.f
+        # Ф3 consumes a producer that an earlier phase wrote and this package did not change.
+        contracts = [dict(id='C1', producer=['tracked.txt', 'lib/earlier-phase.ts'], consumer=['plan.md'])]
+        art, coverage = f.package_ref(contracts=contracts)
+        self.assertNotIn('lib/earlier-phase.ts', coverage['files'])
+        def review(**cov):
+            p = f.assignment('review-primary', 'Anthropic'); p.update(dispatch_id=None, coverage=dict(coverage, **cov)); return p
+        full = [dict(id='C1', producer=['tracked.txt', 'lib/earlier-phase.ts'], consumer=['plan.md'])]
+        # The unchanged file cannot be claimed as a reviewed changed file ...
+        self.no(1, 'unknown coverage file', action='dispatch', proposed=review(files=coverage['files'] + ['lib/earlier-phase.ts'], contracts=full), artifact=art, fleet=f.fleet())
+        # ... a changed file of a side still needs file review ...
+        self.no(1, 'contract side lacks file review', action='dispatch', proposed=review(files=['plan.md'], contracts=full), artifact=art, fleet=f.fleet())
+        # ... and the full truthful side with only changed files reviewed is accepted.
+        self.ok(action='dispatch', proposed=review(contracts=full), artifact=art, fleet=f.fleet())
+
     def test_record_author_registers_a_rejected_writer_for_c5_provenance(self):
         f = self.f
         # A writer whose report C6 rejected still authored the bytes; its receipt reports no model (Antigravity/Path A).

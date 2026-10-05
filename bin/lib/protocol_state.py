@@ -90,10 +90,10 @@ def fleet_clear(data, state):
 
 def independent(art, coverage, reviewer, state):
     """Invariant (c): the reviewer family authored no covered file, unless the user waived it for this step."""
-    m = art["manifest"]; writers = authors(art, state["provenance"])
+    m = art["manifest"]; writers = authors(art, state["provenance"]); changed = {f["path"] for f in m["files"]}
     waived = {(p, w["reviewer_family"]) for w in state["independence_waivers"]
               if (w["step"], w["phase"]) == (state["step"], state["phase"]) for p in w["files"]}
-    require(set(coverage.get("files", [])) <= {f["path"] for f in m["files"]}, "unknown coverage file")
+    require(set(coverage.get("files", [])) <= changed, "unknown coverage file")
     for name in coverage.get("files", []):
         require(writers.get(name), "unknown actual author: " + name, 2)
         require(reviewer not in writers[name] or (name, reviewer) in waived, "same-family review: " + name)
@@ -103,7 +103,9 @@ def independent(art, coverage, reviewer, state):
         require(c.get("id") in contracts, "unknown coverage contract")
         for side in ("producer", "consumer"):
             require(set(c.get(side, [])) <= set(contracts[c["id"]][side]), "unknown contract side")
-            require(set(c.get(side, [])) <= set(coverage.get("files", [])), "contract side lacks file review")
+            # A side may name a file this package did not change (an earlier phase's producer): it is inspected
+            # context with no author in this package, so only its changed files need file review.
+            require(set(c.get(side, [])) & changed <= set(coverage.get("files", [])), "contract side lacks file review")
 
 
 def plan_independent(state, reviewer):

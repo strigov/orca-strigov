@@ -47,7 +47,7 @@ current state in twenty lines.
 | `incomplete package`, `invalid snapshot`, `artifact worktree mismatch` | the manifest is not `complete:true` with a matching `package_id` / not `valid:true`, or was captured in another worktree |
 | `same-family review: <file>`, `same-family plan review`, `unknown plan authors` | choose a reviewer family outside every author of each covered file (plan: every recorded writer); when every family authored a file, record the user's `waive-independence` |
 | `unknown actual author: <file>`, `unknown write provenance`, `claimed author family differs from launch`, `review requires a complete package` | package provenance must list a saved write receipt per changed file whose observed model family matches `family`; a writer whose report was rejected is registered with `record-author` (its settled observation plus model proof) before the package is reviewed |
-| `unknown coverage …`, `unknown contract side`, `contract side lacks file review`, `incomplete file coverage`, `incomplete part coverage`, `incomplete contract …` | review `COVERAGE` lists exact manifest files, parts and contract sides; together the reviews cover every file (except the plan), part and side |
+| `unknown coverage …`, `unknown contract side`, `contract side lacks file review`, `incomplete file coverage`, `incomplete part coverage`, `incomplete contract …` | review `COVERAGE` lists exact manifest files, parts and contract sides; `files` holds only changed files, while contract sides may also name unchanged producers/consumers that were inspected; together the reviews cover every file (except the plan), part and side |
 | `required report is missing: <role>`, `required report is not positive: <role>` | the latest report of each required role on this candidate must be positive: gate (or `record-gate`) + both reviews in a phase, plan review in the plan step, review-final / delivery gate in the final steps |
 | `unresolved findings: …` | a finding resolves by a later-round review of the candidate that omits it, a ledger `DEFER`/`NIT`/`REJECTED_BY_SCOPE` decision (`ESCALATED_TO_HUMAN` keeps it open), or a cannot_verify `check` result with exit 0; supply the fresh `ledger` |
 | `missing executable evidence`, `stale or invalid runner evidence`, `evidence snapshot mismatch`, `zero passing checks`, `unproven inherited failure`, `required replay reused implementer evidence` | gate EVIDENCE / `record-gate` cites intact sealed C4 results of this candidate, at least one passing; a failure inherited from BASE needs its BASE baseline |
@@ -101,7 +101,10 @@ immediate risk escalation; nonblocking observations remain in DEFER/NITS.
 
 Primary/control/final add `COVERAGE: {"files":[],"parts":[],"contracts":[]}`;
 paths are exact manifest entries, each contract is `{id,producer:[],consumer:[]}`.
-Every covered contract-side file also needs file coverage. Complementary reports
+Every covered contract-side file that the package changed also needs file
+coverage. A side may name a file the package did not change (a producer from an
+earlier phase): list it in that contract side once it was inspected; it needs no
+file coverage and carries no authorship. Complementary reports
 cover all files, all parts and both sides, using actual reviewer families outside
 every recorded author family. CLI/provider identity alone does not prove family.
 Gate `GATE_OK` adds `EVIDENCE: <nonempty array of file references>` to sealed C4

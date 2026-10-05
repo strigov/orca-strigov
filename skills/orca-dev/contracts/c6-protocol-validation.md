@@ -195,7 +195,10 @@ and no finding of the step is unresolved:
 | `delivery` | `gate` (GATE_OK or record-gate) on `final_source` |
 
 The reviews' COVERAGE together covers every file (except the plan file), part
-and contract side of the first review's package. Reviews of earlier candidates
+and contract side of the first review's package. A contract side may name files
+the package did not change (earlier phases' producers); reviewers list them in the
+side after inspecting them, without file coverage or an independence check, since
+they have no author in this package. Reviews of earlier candidates
 stay in `accepted` only for their findings.
 
 ## Commits

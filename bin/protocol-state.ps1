@@ -63,12 +63,13 @@ function P-Independent($art,$coverage,$family,$s) {
   $m=$art.manifest;$writers=P-Authors $art @($s.provenance);if ($null -eq $coverage) { $coverage=@{} }
   $waived=@(foreach ($w in @($s.independence_waivers)) { if ($null -ne $w -and $w.step -ceq $s.step -and (P-Eq $w.phase $s.phase)) { foreach ($path in $w.files) { $path+'|'+$w.reviewer_family } } })
   $files=P-List $coverage 'files';$parts=P-List $coverage 'parts'
-  P-Require (P-Subset $files @($m.files | ForEach-Object { $_.path })) 'unknown coverage file'
+  $changed=@($m.files | ForEach-Object { $_.path })
+  P-Require (P-Subset $files $changed) 'unknown coverage file'
   foreach ($name in $files) { P-Require ($writers[$name]) ('unknown actual author: '+$name) 2;P-Require ($family -cnotin @($writers[$name]) -or (($name+'|'+$family) -cin $waived)) ('same-family review: '+$name) }
   P-Require (P-Subset $parts @($m.parts | ForEach-Object { $_.path })) 'unknown coverage part'
   foreach ($c in (P-List $coverage 'contracts')) {
     $match=@($m.coverage.contracts | Where-Object { $_.id -ceq (V-Get $c 'id') });P-Require ($match.Count -eq 1) 'unknown coverage contract'
-    foreach ($side in 'producer','consumer') { $list=P-List $c $side;P-Require (P-Subset $list $match[0][$side]) 'unknown contract side';P-Require (P-Subset $list $files) 'contract side lacks file review' }
+    foreach ($side in 'producer','consumer') { $list=P-List $c $side;P-Require (P-Subset $list $match[0][$side]) 'unknown contract side';P-Require (P-Subset @($list | Where-Object { $_ -cin $changed }) $files) 'contract side lacks file review' }
   }
 }
 function P-PlanIndependent($s,$family) {
