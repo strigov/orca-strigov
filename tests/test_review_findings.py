@@ -803,6 +803,20 @@ class ReviewFindingTests(unittest.TestCase):
         self.no(1, 'same-family review: producer.ts', action='dispatch', artifact=art, fleet=f.fleet(),
                 proposed=dict(self.assignment('review-control', 'OpenAI'), coverage=coverage))
 
+    def test_r5_3_plan_author_reversion_and_deletion_are_attributed(self):
+        """Review r5 finding 3: a plan reviser restores a file to the phase base and deletes another, then fails."""
+        f = self.f; self.write('extra.txt', 'written by the implementer\n')
+        self.ok(f.report_input('implementer', 'OpenAI', artifact=self.writer('tracked.txt', 'implemented\n')()))
+        reviser = self.assignment('plan-reviser', 'Anthropic')
+        self.ok(action='dispatch', proposed=reviser, artifact=f.plan_artifact(), fleet=f.fleet())
+        self.write('tracked.txt', 'baseline\n'); f.git.git('rm', '-q', '-f', 'extra.txt')  # back to the base; a deletion
+        row = dict(dispatchId='D-plan', taskId=reviser['task_id'], dispatchStatus='failed', terminalState='released', resource=None,
+                   projection=dict(workspace=dict(id='fixture-worktree'), evidence=dict(durable=True), liveness=dict(verdict='exited')))
+        self.no(1, 'plan author changed source outside the plan', action='reconcile-intent', fleet=f.fleet([row]), artifact=f.snapshot_ref())
+        self.ok(action='record-author', observation=f.observation(dict(reviser, dispatch_id='D-plan'), 'failed'), artifact=f.snapshot_ref())
+        self.assertIn('Anthropic', f.state['authors'].get('tracked.txt', []))
+        self.assertIn('Anthropic', f.state['authors'].get('extra.txt', []))
+
     def test_r5_4_a_stray_authors_incomplete_value_is_dropped(self):
         """Review r5 finding 4: a development build saved {'tracked.txt': 2}; the upgrade drops it, reviews still work."""
         f = self.f

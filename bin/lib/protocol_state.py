@@ -570,7 +570,8 @@ def dispatch(data, state):
     if proposed["role"] in REVIEW and proposed["role"] != "plan-reviewer": independent(art, proposed.get("coverage", {}), reviewer, state)
     # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
     proposed.update(artifact_id=art["id"], snapshot_id=art["snapshot_id"], artifact=data.get("artifact"), candidate=art["candidate"])
-    if proposed["role"] in PLAN_AUTHORS: proposed["source"] = source_candidate(state)  # its lane is the plan file
+    if proposed["role"] in PLAN_AUTHORS:  # its lane is the plan file: keep the source it starts from
+        proposed["source"], proposed["source_files"] = source_capture(state)
     state["active"] = proposed
     if proposed["role"] in WRITE: state["write_ownership"] = ["pending:" + proposed["task_id"]]
 
@@ -697,9 +698,14 @@ def validate(data):
         if planned:
             state["plan_authors"].append(data["observation"])  # a plan author wrote the plan file
             if own.get("role") in PLAN_AUTHORS and own.get("source") is not None and source_candidate(state) != own["source"]:
-                # Out of its lane it also wrote source: registering it attributes every change since the step base.
-                require(art["files"] is not None, "plan author changed source outside the plan: record-author it with a current snapshot artifact", 2)
-                attribute(state, written(state, None, art), author_family)
+                # Out of its lane it also wrote source: its family authors exactly the delta against the source captured at
+                # its dispatch, reversions and deletions included (an assignment without that capture: everything since base).
+                if own.get("source_files") is not None:
+                    before = own["source_files"]; now = source_capture(state)[1]
+                    attribute(state, {x for x in before.keys() | now.keys() if before.get(x) != now.get(x)}, author_family)
+                else:
+                    require(art["files"] is not None, "plan author changed source outside the plan: record-author it with a current snapshot artifact", 2)
+                    attribute(state, written(state, None, art), author_family)
         else: attribute(state, written(state, manifest_files(own.get("artifact")), art), author_family)
         state["write_ownership"] = [x for x in state["write_ownership"] if x not in (d.get("id"), "pending:" + str(d.get("taskId")))]
         if own and own.get("dispatch_id") is None: state["active"] = None

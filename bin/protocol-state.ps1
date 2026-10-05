@@ -468,7 +468,7 @@ function P-Dispatch($data,$s) {
   if ($p.role -cin $PReview -and $p.role -cne 'plan-reviewer') { P-Independent $art (V-Get $p 'coverage' @{}) $family $s }
   # The dispatch-time capture bounds what a writer authored and proves an unbound launch wrote nothing.
   $p['artifact_id']=$art.id;$p['snapshot_id']=$art.snapshot_id;$p['artifact']=V-Get $data 'artifact';$p['candidate']=$art.candidate
-  if ($p.role -cin $PPlanAuthors) { $p['source']=P-SourceCandidate $s }  # its lane is the plan file
+  if ($p.role -cin $PPlanAuthors) { $capture=P-SourceCapture $s;$p['source']=$capture.candidate;$p['source_files']=$capture.entries }  # its lane is the plan file
   $s.active=$p
   if ($p.role -cin $PWrite) { $s.write_ownership=@('pending:'+$p.task_id) }
 }
@@ -583,9 +583,17 @@ function P-Validate($data) {
         $s.plan_authors=@(@($s.plan_authors)+,$data.observation)  # a plan author wrote the plan file
         $source=V-Get $own 'source'
         if ((V-Get $own 'role') -cin $PPlanAuthors -and $null -ne $source -and (P-SourceCandidate $s) -cne $source) {
-          # Out of its lane it also wrote source: registering it attributes every change since the step base.
-          P-Require ($null -ne $art.files) 'plan author changed source outside the plan: record-author it with a current snapshot artifact' 2
-          P-Attribute $s (P-Written $s $null $art) $authorFamily
+          # Out of its lane it also wrote source: its family authors exactly the delta against the source captured at its
+          # dispatch, reversions and deletions included (an assignment without that capture: everything since the base).
+          $before=V-Get $own 'source_files'
+          if ($null -ne $before) {
+            $now=(P-SourceCapture $s).entries
+            $delta=@(@(@($before.Keys)+@($now.Keys)) | Select-Object -Unique | Where-Object { -not ($before.Contains($_) -and $now.Contains($_) -and $before[$_] -ceq $now[$_]) })
+            P-Attribute $s $delta $authorFamily
+          } else {
+            P-Require ($null -ne $art.files) 'plan author changed source outside the plan: record-author it with a current snapshot artifact' 2
+            P-Attribute $s (P-Written $s $null $art) $authorFamily
+          }
         }
       }
       else { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $own 'artifact')) $art) $authorFamily }
