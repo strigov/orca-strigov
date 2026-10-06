@@ -202,5 +202,11 @@
     "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 input_loop.go:106] {INVALID}HandleUserInput: text\n",
     "code": 2,
     "reason": "malformed UTF-8 in Antigravity fact record"
+  },
+  {
+    "name": "damaged-source-location-before-model-switch",
+    "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 model_resolver.g{INVALID}:93] Resolving model gemini-3.7-flash-high\n",
+    "code": 2,
+    "reason": "malformed UTF-8 in Antigravity log header"
   }
 ]

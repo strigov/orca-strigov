@@ -577,7 +577,7 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   noise only when (a) its header up to the **first `] `** is valid and the
   readable start of its message is not a fact marker or a prefix of one, or (b)
   it has no intact header and does not look like a glog record at all (no
-  `file.go:<n>`). Otherwise it is UNVERIFIABLE: `malformed UTF-8 in Antigravity
+  `file.go:<n>` and no `] ` followed by a fact marker). Otherwise it is UNVERIFIABLE: `malformed UTF-8 in Antigravity
   log header` when the header or its `] ` boundary is damaged (a damaged boundary
   must not make a `Resolving model` row disappear), `malformed UTF-8 in
   Antigravity fact record` when the marker or its value is damaged. Markers

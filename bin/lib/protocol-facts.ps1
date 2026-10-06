@@ -365,7 +365,7 @@ function P-AgyLogModel([byte[]]$bytes,[string]$conversation) {
       $line=$lenient.GetString($seg)
       if ($null -eq $header) {
         # No intact glog header: noise only if it does not look like a glog record (file.go:line) at all.
-        P-Require (-not [regex]::IsMatch($line,'\.go:\d')) 'malformed UTF-8 in Antigravity log header' 2
+        P-Require (-not [regex]::IsMatch($line,'\.go:\d|\] (?:Created conversation|Resolving model)')) 'malformed UTF-8 in Antigravity log header' 2
       } else {
         $head=$line.Substring($header.Length).Split($replacement)[0]
         foreach ($m in $markers) { P-Require (-not ($head.StartsWith($m,[StringComparison]::Ordinal) -or $m.StartsWith($head,[StringComparison]::Ordinal))) 'malformed UTF-8 in Antigravity fact record' 2 }

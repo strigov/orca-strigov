@@ -494,7 +494,7 @@ def agy_log_model(data, conversation):
             line = raw.decode("utf-8", "replace")
             if header is None:
                 # No intact glog header: noise only if it does not look like a glog record (file.go:line) at all.
-                require(not re.search(r"\.go:\d", line), "malformed UTF-8 in Antigravity log header", 2)
+                require(not re.search(r"\.go:\d|\] (?:Created conversation|Resolving model)", line), "malformed UTF-8 in Antigravity log header", 2)
             else:
                 head = line[len(header):].split("\ufffd", 1)[0]
                 require(not any(head.startswith(m) or m.startswith(head) for m in AGY_MARKERS), "malformed UTF-8 in Antigravity fact record", 2)
