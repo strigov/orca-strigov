@@ -9,7 +9,7 @@ Read one file when its situation applies; do not preload all of them.
 | C3 — one local command owner (`run-check`) | [contracts/c3-command-owner.md](contracts/c3-command-owner.md) | executing a CHECK or gate command, capability errors |
 | C4 — exact inputs and verification evidence (`verify-gate`, snapshots) | [contracts/c4-verification-evidence.md](contracts/c4-verification-evidence.md) | gate runs, sealed results, snapshot reuse |
 | C5 — complete frozen review package (`review-package`) | [contracts/c5-review-package.md](contracts/c5-review-package.md) | freezing a review package, provenance, coverage |
-| C6 — transition validation (`protocol-state`: validate, summary, migrate, model evidence) and the fleet collector | [contracts/c6-protocol-validation.md](contracts/c6-protocol-validation.md) | composing a proposal; after an INVALID/UNVERIFIABLE the table below usually suffices |
+| C6 — transition validation (`protocol-state`: validate, summary, migrate, model evidence) and the fleet collector | [contracts/c6-protocol-validation.md](contracts/c6-protocol-validation.md) | composing a proposal, or recovering missing restart observations on `accept-report`; after an INVALID/UNVERIFIABLE the table below usually suffices |
 | C7 — worker event waiter (`wait-worker-event`) | [contracts/c7-worker-event-waiter.md](contracts/c7-worker-event-waiter.md) | waiting for worker_done, acknowledging deliveries |
 | C8 — coordinator session continuity (`coordinator-session`, hooks) | [contracts/c8-session-continuity.md](contracts/c8-session-continuity.md) | binding, checkpoints, holds, stop guard behaviour |
 
@@ -22,6 +22,13 @@ The two sections kept below are the ones a dispatched worker reads through its
 `UNVERIFIABLE` (missing facts, exit 2) with a `reason`. Resolve the reason from
 this table before re-reading the contract; `protocol-state summary` shows the
 current state in twenty lines.
+
+After an Orca restart, `accept-report` may explicitly supply hashed
+`bound_observation` and, for older bound states, `bound_dispatch` to recover
+missing facts of the same already bound, durable completed Dispatch. Read
+[explicit observation recovery](contracts/c6-protocol-validation.md#explicit-observation-recovery-after-restart)
+for exact identity, original-bind and full completion-model-proof requirements;
+the current receipt stays authoritative and original artifacts stay immutable.
 
 | Reason | Meaning → what to supply |
 | --- | --- |
@@ -36,6 +43,12 @@ current state in twenty lines.
 | `no pending dispatch intent`, `dispatch does not bind pending fresh Task` | `bind-dispatch` / `reconcile-intent` need a prior VALID writer `dispatch` still unbound, and `bind-dispatch` the observation of that Task's Dispatch (not a `--retry-of`) |
 | `missing launch failure evidence`, `the failed launch changed the candidate: bind it or record-author its writer` | `reconcile-intent` needs every fleet row of the Task positively settled, or (no Dispatch was created) the saved `ok:false` launch receipt naming the Task. A launch that changed the tree is a writer: bind it, or (it started another model) run `record-author` with its settled observation and the current artifact, which records its files and clears the intent without reverting them |
 | `actual launch differs from proposal`, `unknown actual model family`, `conflicting actual model facts` | observed model ≠ proposed, or no provider model: add `start`/`origin_start` (Path A) or `model_evidence` (`claude-model-evidence` / `antigravity-model-evidence`) to the observation reference |
+| `observation worktree mismatch` | supply a current observation of the active Dispatch in its worktree; if a restart lost projection facts for that same durable completed Dispatch, use the explicit `accept-report` recovery above, retaining the current receipt and hashed original bound facts |
+| `observation recovery is accept-report only`, `bound-dispatch recovery without bound observation`, `recovery requires an already bound Dispatch`, `recovery requires original bind-dispatch` | recovery cannot launch or bind a worker: use only `accept-report` of the existing bound Dispatch, with `bound_observation`; older states also need hashed `bound_dispatch` from the original bind proposal or fragment |
+| `bound observation differs from original bind-dispatch`, `conflicting original bind-dispatch`, `bound observation identity mismatch: …`, `bound terminal incarnation mismatch`, `bound observation worktree mismatch`, `conflicting current …`, `conflicting worker …` | facts conflict: retain all original bytes and inspect the exact Task/Dispatch/Run/assignee/process incarnation, terminal and worktree receipts; do not overwrite current facts or substitute a historical Dispatch |
+| `missing recovery identity: …`, `incomplete bound terminal/provider facts`, `incomplete bound workspace facts`, `incomplete bound model facts`, `malformed current …`, `malformed recovery worker` | recovery is UNVERIFIABLE until authentic receipts provide the missing or well-formed facts; never fill them from memory or edit saved receipts |
+| `bound observation is not a launched Dispatch`, `failed launch cannot use observation recovery` | failed launch evidence cannot be recovered into completion; keep the refusal and resolve the actual lifecycle, without hiding an unsupervised or failed worker |
+| `missing Dispatch completion time`, `model proof does not cover Dispatch completion`, `recovery requires completion-covering Claude transcript`, `actual completion differs from proposal` | explicit restart recovery requires current completion time and fresh full frozen Claude transcript proof through settlement; its full model id must agree with the original bound model and active proposal, allowing launch aliases but rejecting different full ids; initial partial proof cannot establish recovery, while ordinary `accept-report` keeps its existing proof behavior |
 | `missing fresh fleet`, `fleet observation already used`, `incomplete fleet`, `fleet must cover all local runs` | run `collect-worker-fleet` again and copy its manifest `fleet` array; each proposal needs an unused complete `scope:all` collection |
 | `live or unverifiable prior writer`, `unresolved release/external ownership`, `unknown fleet workspace` | another writer in this worktree is live, unsettled, unknown or externally owned; settle, release or inspect it with real receipts first |
 | `recorded writer missing from fleet: <id>` | the fleet predates a writer the state records (an unused but old inventory proves nothing about it): collect a fresh fleet, which lists every Dispatch |

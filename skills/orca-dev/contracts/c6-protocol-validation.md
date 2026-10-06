@@ -169,6 +169,8 @@ only the ledger path.
   never independent or approved.
 - `active` also keeps the dispatch-time `artifact` reference and `candidate`:
   they bound what that writer authored and prove an unbound launch wrote nothing.
+  New `bind-dispatch` transitions also keep `active.bound_observation`, the exact
+  original hashed observation reference including its actual-model proof.
 - `final_source`: the candidate the final review accepted (set by
   `finish-checkpoint`); delivery and the completion commit must match it.
 
@@ -264,7 +266,7 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 | `resume` | Structure only: state shape, plan, bases, caps; returns the barrier. Optional `prior_plan_approval_state` (`{path,sha256}` of an earlier saved state or proposal of this Run): when its latest accepted `plan-reviewer` `APPROVED` entry has no plan author's entry after it, its report hash and BINDING (run, role, dispatch, round, artifact) match the entry, its reviewer family is outside every current `plan_authors` family, the state shares the Run, worktree, plan path and `plan_base`, its processed message ids are all in the current state, and the approved artifact's plan structure equals the current one, `plan_approved` is restored and `plan_approval_evidence` records the reference. Nothing else is taken from it (rounds, findings, ownership and source acceptances stay); otherwise `prior plan approval does not apply: <why>`. |
 | `dispatch` | `fleet`, `proposed` (`run_id,task_id,dispatch_id:null,role,phase,round,worktree_id,model`, review `coverage`, optional `fix:true`, `gate_fix:true`), `artifact` (omitted only for the first plan-writer before the plan exists). Freezes the assignment, the artifact reference and its candidate in `active`; a writer becomes `pending:<task>` in `write_ownership`. Reviewer and gate-fix rounds go `count` or `count+1` within the cap; repeating a review role/round with the same family needs a new round unless that attempt was `BLOCKED` (a fresh retry keeps the round); review coverage must be independent. |
 | `bind-dispatch` | `observation` of the pending fresh Task (not a `--retry-of`); the actual model must match the proposal (a roles.md `MODEL_ALIASES` alias matches its full-id prefix). A writer then owns the worktree. |
-| `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). See Accepting a report. Clears `active`. |
+| `accept-report` | `event`, `message_id`, settled `observation`, `report`, `artifact` (omitted only when the assignment had none). Optional explicit `bound_observation` and legacy `bound_dispatch` recover missing observation facts after restart (see Observations). Clears `active`. |
 | `record-gate` | Current `artifact`, `evidence` (sealed C4 `result.json` references of one verify-gate run) and optional `verdict` (`GATE_OK` default, or `GATE_FAIL`) in the phase, final-review or delivery step with no writer. GATE_OK: at least one pass, every failure a proven BASE inheritance; it resets the consecutive gate-fix count. GATE_FAIL: at least one failure BASE does not explain; the entry carries the finding `G<r>-B1` (r = `rounds.gate_fix + 1`) that a gate-fix cap extension can name. |
 | `record-author` | `observation` (with `start`/`model_evidence` when the receipt reports no model) of a durably settled writer Dispatch of this Run and worktree whose report C6 rejected or that never reported, and the current `artifact` (a plan author may omit it before the plan exists): its bytes still carry its family. Required before anything replaces a bound writer that settled without an accepted report. Appends the reference to `provenance`; a plan author (the active plan-writer/reviser, or any author given with a `kind:plan` artifact) goes to `plan_authors`, any other writer's family is recorded in `authors` for the paths it changed (its own window when it is the active assignment or the Dispatch of its still unbound Task, else everything changed since the step base). The Dispatch of the active unbound Task (a launch that started with another model and wrote) also clears that intent. More author families only make reviews stricter; approvals that lose independence stop counting at readiness. |
 | `reconcile-intent` | `fleet`, the current `artifact`, optional `launch_failure` (saved Orca receipt with `ok:false` naming the Task). Clears an unbound writer intent whose launch failed without writing: every fleet row of the intent's Task is positively settled (durably completed/failed, or released and exited), or no row exists and `launch_failure` is supplied; the tree is still the dispatch-time candidate — for a plan author, the source candidate captured at its dispatch (the plan file may differ; any source change keeps the intent with the plan-lane reason). A launch that wrote is registered with `record-author` instead, which clears the intent without reverting its changes. |
@@ -457,6 +459,66 @@ family. Keep this reference on accepted observations and author entries in
 `state.provenance`; C5 write receipts match those entries by path and raw hash.
 Neither original receipt is rewritten or enriched on disk.
 
+### Explicit observation recovery after restart
+
+Only `accept-report` of an **already bound, same durable completed Dispatch**
+may supply `bound_observation`, the hashed earlier full `worker-show` reference
+with its original actual-model proof (`start`/`origin_start` or `model_evidence`).
+It must equal `active.bound_observation`. For older states without that field,
+also supply `bound_dispatch:{path,sha256}` of the original saved `bind-dispatch`
+proposal or action fragment; its `action` must be `bind-dispatch` and its
+`observation` must exactly equal `bound_observation`. This is explicit evidence
+from the original bind, under C6's cooperating-agent threat model, not a claim
+that C6 cryptographically authenticates an accepted historical transition.
+
+The **current** `observation` stays primary: its Task, Dispatch, Run, assignee,
+nonempty `processIncarnation`, `status:completed`, `completedAt` and boolean
+durable evidence remain authoritative. The earlier receipt must share that
+exact identity; its terminal needs nonempty `handle,ptyId,incarnationId,
+worktreeId,worktreePath`, with `handle=assigneeHandle`,
+`ptyId+":"+incarnationId=processIncarnation` and the exact active worktree id
+and state worktree path. Provider id and actual model must be known. Missing,
+malformed or incomplete facts are UNVERIFIABLE; differing identities or
+conflicting non-null current provider/workspace/terminal/worker identity facts
+are INVALID. Failed launches are rejected; an authentic injected Path B worker
+may remain `unsupervised` in both receipts, and that fact is never hidden or
+upgraded into a supervised start. No historical facts enable `dispatch`,
+`bind-dispatch`, `record-author`, `resume` or any launch action.
+
+Only missing provider id/model, workspace id and terminal identity facts are
+filled in a validated **in-memory view**; dispatch, worker state, projection
+stage/outcome/liveness and settlement evidence are never filled from history.
+The current reference additionally carries fresh `model_evidence` proving the
+model through completion. The initial proof alone is insufficient. Currently
+the supported completion proof for recovery is a frozen `claude-transcript`:
+its same-session window after this exact Orca preamble and before any next
+Dispatch must include a timestamp at or after current `dispatch.completedAt`,
+and every assistant model in that whole window must agree with the original
+bound actual model and the active proposed model (including roles.md aliases).
+The verified in-memory effective model is the transcript's full id; a launch
+alias such as `opus` may agree with that id, but differing full model ids
+remain conflicting, including any non-null current model fact.
+A partial proof, absent completion time or unsupported completion proof is
+UNVERIFIABLE; a later model switch is INVALID. Freeze the actual full session
+using the existing builder and the original full observation; never synthesize
+timestamp/model rows or rewrite a receipt to satisfy this check.
+
+The accepted entry retains the current `observation`, `bound_observation` and,
+when supplied, `bound_dispatch` references. A recovered writer's provenance
+retains the original full observation path/hash; when its raw model was null,
+the reference metadata uses the fresh full completion proof instead of the
+initial proof (the original reference is retained on the accepted entry).
+C5 write rows for this recovered writer must cite that original bound
+`receipt_path` and `receipt_sha256`, matching `state.provenance`; citing the
+current null-facts receipt leaves authorship UNVERIFIABLE.
+Report bytes, verdict, findings, coverage,
+independence, artifact/candidate bindings, caps and rounds keep their ordinary
+checks and effects. Recovery of REVIEW_BLOCKING preserves its findings; VALID
+does not turn a blocking review into approval. No original file is rewritten,
+merged, or enriched on disk. Run candidate validation without `RESUME_OUT` for
+read-only reproductions; installing the candidate and applying a transition
+are separate coordinator actions after independent review.
+
 Orca reports `provider.model` for Codex but not for Claude, so two further model
 sources exist. Precedence: observed `provider.model`, then the one launch-derived
 fact below; any two facts that are present must agree (`conflicting actual model
@@ -491,7 +553,9 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   carry exactly one `message.model` (Claude Code's local `<synthetic>` stubs
   are not model output). Several models are conflicting; none is UNVERIFIABLE.
   Build it after the first assistant response; after settlement the copy also
-  proves no later model switch.
+  proves no later model switch. Ordinary `accept-report` keeps this existing
+  proof behavior. Only explicit restart recovery requires fresh full proof
+  covering current `dispatch.completedAt`, as described above.
 - **Antigravity log (`model_evidence` kind `antigravity-log`).** Only for
   `provider.id:"antigravity"` with a null `provider.model` and no `start`. Orca
   does not report the agy model and agy's conversation store is SQLite, which the

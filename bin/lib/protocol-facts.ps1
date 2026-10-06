@@ -312,26 +312,29 @@ function P-Within([string]$child,[string]$root) {
   $child=[IO.Path]::GetFullPath($child);$root=[IO.Path]::GetFullPath($root)
   return ($child.Equals($root,$mode) -or $child.StartsWith($root.TrimEnd($sep)+$sep,$mode))
 }
-function P-TranscriptModel($o,$rows) {
+function P-TranscriptModel($o,$rows,$completedAt=$null) {
   # B2: the only model that answered after this Dispatch's Orca preamble in one Claude session.
   $d=$o.dispatch;$terminal=V-Get $o 'terminal' @{};$root=V-Get $terminal 'worktreePath'
   P-Require ($root -is [string] -and [IO.Path]::IsPathRooted($root) -and (V-Get $terminal 'worktreeId') -ceq $o.projection.workspace.id) 'missing Dispatch worktree path' 2
   $first=-1
   for ($i=0;$i -lt $rows.Count;$i++) { $text=P-PreambleText $rows[$i];if ($null -ne $text -and (P-PreambleBinds $text $d)) { $first=$i;break } }
   P-Require ($first -ge 0) 'no Orca preamble for this Dispatch in Claude transcript' 2
-  $session=P-Field $rows[$first] 'sessionId';$models=New-Object 'Collections.Generic.HashSet[string]'
+  $session=P-Field $rows[$first] 'sessionId';$models=New-Object 'Collections.Generic.HashSet[string]';$throughCompletion=$false
   for ($i=$first;$i -lt $rows.Count;$i++) {
     $row=$rows[$i];$text=P-PreambleText $row
     if ($null -ne $text -and -not (P-PreambleBinds $text $d)) { break }  # the next Dispatch owns the rest
     P-Require ((P-Field $row 'sessionId' $session) -ceq $session) 'Claude transcript session changed'
     $cwd=P-Field $row 'cwd';if ($null -ne $cwd) { P-Require (P-Within $cwd $root) 'Claude transcript cwd outside Dispatch worktree' }
+    $stamp=P-Field $row 'timestamp'
+    if ($null -ne $completedAt -and -not $throughCompletion -and $null -ne $stamp) { $throughCompletion=(P-UtcSeconds $stamp) -ge (P-UtcSeconds $completedAt) }
     if ((P-Field $row 'type') -ceq 'assistant') {
       $model=P-Field (P-Field $row 'message' @{}) 'model'
       if ($model -cne '<synthetic>') { [void]$models.Add([string]$model) }  # local error/interrupt stubs have no author
     }
   }
   P-Require ($models.Count -le 1) 'conflicting actual model facts'
-  $model=@($models)[0];P-Require ($model -is [string] -and $model) 'no model response after Orca preamble' 2;return $model
+  $model=@($models)[0];P-Require ($model -is [string] -and $model) 'no model response after Orca preamble' 2
+  P-Require ($null -eq $completedAt -or $throughCompletion) 'model proof does not cover Dispatch completion' 2;return $model
 }
 function P-AgyPreambleText($row) {
   $content=if ((P-Field $row 'type') -ceq 'USER_INPUT') { P-Field $row 'content' } else { $null }
@@ -392,13 +395,89 @@ function P-Family($o,$source=$null) {
     P-Require ($found.Count -eq 1) ('unknown actual model family: '+$model) 2;return $found[0]
   };return $mapping[$model]
 }
-function P-Observation($r,$active) {
+function P-RecoveredObservation($current,$active,$bound,$binding=$null) {
+  # An accept-only view. Current settlement/identity are never imported from history.
+  $d=$current.dispatch;$projection=$current.projection
+  $durable=V-Get $projection.evidence 'durable'
+  P-Require ($d.status -ceq 'completed' -and $durable -is [bool] -and $durable -eq $true) 'missing durable settlement' 2
+  P-Require $active.dispatch_id 'recovery requires an already bound Dispatch' 2
+  $original=V-Get $active 'bound_observation'
+  if ($null -eq $original) {
+    $saved=P-Record $binding;P-Need $saved @('action','observation')
+    P-Require ($saved.action -ceq 'bind-dispatch') 'recovery requires original bind-dispatch';$original=$saved.observation
+  } elseif ($null -ne $binding) {
+    $saved=P-Record $binding;P-Need $saved @('action','observation')
+    P-Require ($saved.action -ceq 'bind-dispatch' -and (P-Eq $saved.observation $original)) 'conflicting original bind-dispatch'
+  }
+  P-Require (P-Eq $original $bound) 'bound observation differs from original bind-dispatch'
+  $old=P-Record $bound;P-Require ($old.ok -eq $true) 'unsuccessful bound observation' 2
+  $prior=V-Get $old 'result';P-Need $prior @('dispatch','projection','terminal');$previous=$prior.dispatch
+  P-Need $previous @('id','taskId','runId','assigneeHandle','processIncarnation')
+  foreach ($key in 'id','taskId','runId','assigneeHandle','processIncarnation') {
+    $now=V-Get $d $key;$then=V-Get $previous $key
+    P-Require ($now -is [string] -and $now -and $then -is [string] -and $then) ('missing recovery identity: '+$key) 2
+    P-Require ($now -ceq $then) ('bound observation identity mismatch: '+$key)
+  }
+  P-Require ($previous.status -cin @('dispatched','running','completed')) 'bound observation is not a launched Dispatch'
+  foreach ($receipt in $current,$prior) {
+    $dispatch=$receipt.dispatch;$worker=V-Get $receipt 'worker' @{}
+    P-Require ($null -eq $worker -or $worker -is [Collections.IDictionary]) 'malformed recovery worker' 2
+    P-Require (-not (V-Get $dispatch 'failureCount') -and -not (V-Get $dispatch 'lastFailure') -and -not (V-Get $dispatch 'terminationReason') -and
+      (V-Get $worker 'state') -cne 'failed' -and -not (V-Get $worker 'lastError')) 'failed launch cannot use observation recovery'
+  }
+  $terminal=$prior.terminal;P-Need $terminal @('handle','ptyId','incarnationId','worktreeId','worktreePath')
+  $provider=V-Get $prior.projection 'provider';$workspace=V-Get $prior.projection 'workspace';P-Need $provider @('id');P-Need $workspace @('id')
+  P-Require ($workspace.id -is [string] -and $workspace.id) 'incomplete bound workspace facts' 2
+  foreach ($key in 'handle','ptyId','incarnationId','worktreeId','worktreePath') { P-Require ($terminal[$key] -is [string] -and $terminal[$key]) 'incomplete bound terminal/provider facts' 2 }
+  P-Require ($provider.id -is [string] -and $provider.id) 'incomplete bound terminal/provider facts' 2
+  P-Require ($terminal.handle -ceq $d.assigneeHandle -and ($terminal.ptyId+':'+$terminal.incarnationId) -ceq $d.processIncarnation) 'bound terminal incarnation mismatch'
+  P-Require ($terminal.worktreeId -ceq $workspace.id -and $workspace.id -ceq $active.worktree_id -and $terminal.worktreePath -ceq $active.worktree) 'bound observation worktree mismatch'
+  $oldModel=P-Model $prior $bound;P-Require ($oldModel -is [string] -and $oldModel) 'incomplete bound model facts' 2
+  $result=P-Decode (V-Json $current)
+  # Fill identity facts only; stage, outcome, worker state and evidence remain current.
+  $groups=@(@{target=$result.projection;historic=$provider;keys=@('id','model');label='provider'},
+    @{target=$result.projection;historic=$workspace;keys=@('id');label='workspace'},
+    @{target=$result;historic=$terminal;keys=@('handle','ptyId','incarnationId','worktreeId','worktreePath');label='terminal'})
+  foreach ($group in $groups) {
+    $facts=V-Get $group.target $group.label
+    P-Require ($null -eq $facts -or $facts -is [Collections.IDictionary]) ('malformed current '+$group.label) 2
+    if ($null -eq $facts) { $facts=V-Map };$group.target[$group.label]=$facts
+    foreach ($key in $group.keys) {
+      $value=if ($group.label -ceq 'provider' -and $key -ceq 'model') { $oldModel } else { V-Get $group.historic $key }
+      $now=V-Get $facts $key
+      $agrees=if ($group.label -ceq 'provider' -and $key -ceq 'model' -and $null -ne $now) { P-ModelMatches $value $now } else { $now -ceq $value }
+      P-Require ($null -eq $now -or $agrees) ('conflicting current '+$group.label+': '+$key)
+      if ($null -eq $now) { $facts[$key]=$value }
+    }
+  }
+  foreach ($receipt in $current,$prior) {
+    $worker=V-Get $receipt 'worker' @{}
+    foreach ($pair in @(@{key='agentTerminalHandle';value=$d.assigneeHandle},@{key='worktreeId';value=$active.worktree_id})) {
+      $value=V-Get $worker $pair.key;P-Require ($null -eq $value -or $value -ceq $pair.value) ('conflicting worker '+$pair.key)
+    }
+  }
+  return ,@{result=$result;model=$oldModel}
+}
+function P-Observation($r,$active,$recovery=$null,$binding=$null) {
   $raw=P-Record $r;P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2;$o=$raw.result
   P-Need $o @('dispatch','projection');$d=$o.dispatch;P-Need $d @('id','taskId','runId','status','assigneeHandle')
   P-Require ($d.taskId -ceq $active.task_id -and $d.runId -ceq $active.run_id) 'Task/Run observation mismatch'
   P-Require ($d.id -ceq $active.dispatch_id) 'Dispatch observation mismatch'
-  P-Require ($o.projection.workspace.id -ceq $active.worktree_id) 'observation worktree mismatch' 2
-  $o.projection.provider.model=P-Model $o $r;return $o
+  if ($null -ne $recovery) {
+    $view=P-RecoveredObservation $o $active $recovery $binding;$o=$view.result
+    $proof=V-Get $r 'model_evidence';P-Need $proof @('kind','path','sha256')
+    P-Require ($proof.kind -ceq 'claude-transcript' -and $o.projection.provider.id -ceq 'claude') 'recovery requires completion-covering Claude transcript' 2
+    P-Require ($null -eq (V-Get $r 'start') -and $null -eq (V-Get $r 'origin_start')) 'model evidence with a launch receipt'
+    $completedAt=V-Get $o.dispatch 'completedAt';P-Require ($completedAt -is [string] -and $completedAt) 'missing Dispatch completion time' 2
+    $model=P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt
+    P-Require ((P-ModelMatches $view.model $model) -and (P-ModelMatches $o.projection.provider.model $model)) 'conflicting actual model facts'
+    P-Require (P-ModelMatches $active.model $model) 'actual completion differs from proposal'
+    $o.projection.provider.model=$model  # verified full id; original receipts stay unchanged
+    return ,$o
+  }
+  P-Require ((V-Get (V-Get $o.projection 'workspace' @{}) 'id') -ceq $active.worktree_id) 'observation worktree mismatch' 2
+  $o.projection.provider.model=P-Model $o $r
+  return ,$o
 }
 function P-KnownFamilies() { return @(@(V-Values (P-RolesFact 'FAMILY_MODELS'))+@(V-Values (P-RolesFact 'FAMILY_PREFIXES')) | Select-Object -Unique) }
 function P-Authors($art,$provenance=@()) {

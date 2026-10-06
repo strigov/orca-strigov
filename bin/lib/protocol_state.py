@@ -506,7 +506,8 @@ def accept_report(data, state):
     if msg.get("type") != "worker_done" or (msg.get("run_id"), payload.get("taskId"), payload.get("dispatchId")) != (state["orca_run"], active["task_id"], active["dispatch_id"]):
         state["processed_messages"].append(msg["id"])
         return "not-completion" if msg.get("type") != "worker_done" else "stale"
-    observed = observation(data.get("observation"), active)
+    observed = observation(data.get("observation"), dict(active, worktree=state["worktree"]),
+                           data.get("bound_observation"), data.get("bound_dispatch"))
     require(observed["dispatch"]["status"] == "completed" and observed["projection"].get("evidence", {}).get("durable") is True, "missing durable settlement", 2)
     require(msg.get("from_handle") == observed["dispatch"]["assigneeHandle"], "wrong report sender")
     report = data.get("report"); text = ref(report)
@@ -536,10 +537,16 @@ def accept_report(data, state):
         if re.fullmatch(r"docs/reviews/[^/]+\.md", path) and written(state, manifest_files(active.get("artifact")), art) == {path}:
             extra["synthesis"] = dict(path=path, entry=entry(item))
     if role == "plan-reviewer" and token == "APPROVED": state["plan_approved"] = state["plan"]["structure"]
+    if data.get("bound_observation") is not None:
+        extra.update(observation=data["observation"], bound_observation=data["bound_observation"])
+        if data.get("bound_dispatch") is not None: extra["bound_dispatch"] = data["bound_dispatch"]
+    provenance = data.get("bound_observation") or data["observation"]
+    if data.get("bound_observation") is not None and record(provenance)["result"]["projection"]["provider"].get("model") is None:
+        provenance = dict(path=provenance["path"], sha256=provenance["sha256"], model_evidence=data["observation"]["model_evidence"])
     if role in WRITE:
-        state["provenance"].append(data["observation"])
+        state["provenance"].append(provenance)
         if role in PLAN_AUTHORS:
-            if state["plan_authors"] is not None: state["plan_authors"].append(data["observation"])
+            if state["plan_authors"] is not None: state["plan_authors"].append(provenance)
         else: attribute(state, written(state, manifest_files(active.get("artifact")), art), actual)
     state["accepted"].append(dict(role=role, token=token, round=active["round"], phase=active["phase"], step=state["step"],
                                   candidate=art["candidate"], artifact=data.get("artifact"), findings=findings, coverage=coverage,
@@ -609,6 +616,10 @@ def validate(data):
     for sha in (state["plan_base"], state["base"]):
         require(isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha) and is_ancestor(state["worktree"], sha, sha), "missing recorded base", 2)
     action = data["action"]; decision = "accepted"
+    require(data.get("bound_dispatch") is None or data.get("bound_observation") is not None,
+            "bound-dispatch recovery without bound observation")
+    require(action == "accept-report" or (data.get("bound_observation") is None and data.get("bound_dispatch") is None),
+            "observation recovery is accept-report only")
     # While a plan author's attempt is current (pending, bound, or settled with a rejected report) the live plan is its
     # working draft: transitions of that attempt and a fresh author attempt read the accepted reference, not the file.
     draft = (state["active"] or {}).get("role") in PLAN_AUTHORS and (
@@ -634,6 +645,7 @@ def validate(data):
         require(d.get("id") and model_matches(active["model"], actual_model(result, data["observation"])), "actual launch differs from proposal")
         active["dispatch_id"] = d["id"]
         observation(data["observation"], active)
+        active["bound_observation"] = copy.deepcopy(data["observation"])
         if active["role"] in WRITE: state["write_ownership"] = [d["id"]]
     elif action in ("prepare-commit", "confirm-commit"):
         fleet_clear(data, state)

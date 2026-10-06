@@ -1,6 +1,7 @@
 """C6 facts: read-only parsers of hashed inputs (reports, plan, artifacts, fleet pages, C4 evidence,
 Orca observations and actual-model proof). Every protocol decision lives in protocol_state.py."""
 import json
+import copy
 import os
 from pathlib import Path
 import re
@@ -435,7 +436,7 @@ def within(child, root):
     return child == root or child.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def transcript_model(observed, rows):
+def transcript_model(observed, rows, completed_at=None):
     """B2: the only model that answered after this Dispatch's Orca preamble in one Claude session."""
     d = observed.get("dispatch", {}); terminal = observed.get("terminal") or {}
     root = terminal.get("worktreePath")
@@ -443,18 +444,21 @@ def transcript_model(observed, rows):
             terminal.get("worktreeId") == observed.get("projection", {}).get("workspace", {}).get("id"), "missing Dispatch worktree path", 2)
     starts = [i for i, row in enumerate(rows) if preamble_text(row) is not None and preamble_binds(preamble_text(row), d)]
     require(starts, "no Orca preamble for this Dispatch in Claude transcript", 2)
-    session = rows[starts[0]].get("sessionId"); models = set()
+    session = rows[starts[0]].get("sessionId"); models = set(); through_completion = False
     for row in rows[starts[0]:]:
         text = preamble_text(row)
         if text is not None and not preamble_binds(text, d): break  # the next Dispatch owns the rest
         require(row.get("sessionId", session) == session, "Claude transcript session changed")
         if row.get("cwd") is not None: require(within(row["cwd"], root), "Claude transcript cwd outside Dispatch worktree")
+        if completed_at is not None and not through_completion and row.get("timestamp") is not None:
+            through_completion = utc_seconds(row["timestamp"]) >= utc_seconds(completed_at)
         if row.get("type") == "assistant":
             model = (row.get("message") or {}).get("model")
             if model != "<synthetic>": models.add(model)  # local error/interrupt stubs have no author
     require(len(models) <= 1, "conflicting actual model facts")
     model = next(iter(models), None)
     require(isinstance(model, str) and model, "no model response after Orca preamble", 2)
+    require(completed_at is None or through_completion, "model proof does not cover Dispatch completion", 2)
     return model
 
 
@@ -523,14 +527,90 @@ def family(observation, source=None):
     return mapping[model]
 
 
-def observation(refspec, active):
+def recovered_observation(current, active, bound, binding=None):
+    """An accept-only view. Current settlement/identity are never imported from history."""
+    d = current["dispatch"]; projection = current["projection"]
+    require(d.get("status") == "completed" and (projection.get("evidence") or {}).get("durable") is True,
+            "missing durable settlement", 2)
+    require(active.get("dispatch_id"), "recovery requires an already bound Dispatch", 2)
+    original = active.get("bound_observation")
+    if original is None:
+        saved = record(binding); need(saved, ("action", "observation"))
+        require(saved["action"] == "bind-dispatch", "recovery requires original bind-dispatch")
+        original = saved["observation"]
+    elif binding is not None:
+        saved = record(binding); need(saved, ("action", "observation"))
+        require(saved["action"] == "bind-dispatch" and saved["observation"] == original, "conflicting original bind-dispatch")
+    require(original == bound, "bound observation differs from original bind-dispatch")
+    old = record(bound); require(old.get("ok") is True, "unsuccessful bound observation", 2)
+    prior = old.get("result"); need(prior, ("dispatch", "projection", "terminal"))
+    previous = prior["dispatch"]; need(previous, ("id", "taskId", "runId", "assigneeHandle", "processIncarnation"))
+    for key in ("id", "taskId", "runId", "assigneeHandle", "processIncarnation"):
+        require(isinstance(d.get(key), str) and d[key] and isinstance(previous.get(key), str) and previous[key],
+                "missing recovery identity: " + key, 2)
+        require(d[key] == previous[key], "bound observation identity mismatch: " + key)
+    require(previous.get("status") in ("dispatched", "running", "completed"), "bound observation is not a launched Dispatch")
+    for receipt in (current, prior):
+        dispatch = receipt["dispatch"]; worker = receipt.get("worker")
+        require(worker is None or isinstance(worker, dict), "malformed recovery worker", 2)
+        worker = {} if worker is None else worker
+        require(not dispatch.get("failureCount") and not dispatch.get("lastFailure") and not dispatch.get("terminationReason") and
+                worker.get("state") != "failed" and not worker.get("lastError"), "failed launch cannot use observation recovery")
+    terminal = prior["terminal"]; need(terminal, ("handle", "ptyId", "incarnationId", "worktreeId", "worktreePath"))
+    provider = prior["projection"].get("provider"); workspace = prior["projection"].get("workspace")
+    need(provider, ("id",)); need(workspace, ("id",))
+    require(isinstance(workspace["id"], str) and workspace["id"], "incomplete bound workspace facts", 2)
+    require(all(isinstance(terminal[k], str) and terminal[k] for k in ("handle", "ptyId", "incarnationId", "worktreeId", "worktreePath")) and
+            isinstance(provider["id"], str) and provider["id"], "incomplete bound terminal/provider facts", 2)
+    require(terminal["handle"] == d["assigneeHandle"] and terminal["ptyId"] + ":" + terminal["incarnationId"] == d["processIncarnation"],
+            "bound terminal incarnation mismatch")
+    require(terminal["worktreeId"] == workspace["id"] == active["worktree_id"] and terminal["worktreePath"] == active["worktree"],
+            "bound observation worktree mismatch")
+    old_model = actual_model(prior, bound)
+    require(isinstance(old_model, str) and old_model, "incomplete bound model facts", 2)
+    result = copy.deepcopy(current)
+    # Fill identity facts only; stage, outcome, worker state and evidence remain current.
+    for target, historic, keys, label in ((result["projection"], provider, ("id", "model"), "provider"),
+                                         (result["projection"], workspace, ("id",), "workspace"),
+                                         (result, terminal, ("handle", "ptyId", "incarnationId", "worktreeId", "worktreePath"), "terminal")):
+        facts = target.get(label)
+        require(facts is None or isinstance(facts, dict), "malformed current " + label, 2)
+        facts = {} if facts is None else facts; target[label] = facts
+        for key in keys:
+            value = old_model if label == "provider" and key == "model" else historic.get(key)
+            agrees = (isinstance(facts[key], str) and model_matches(value, facts[key])) if label == "provider" and key == "model" and facts.get(key) is not None else facts.get(key) == value
+            require(facts.get(key) is None or agrees, "conflicting current " + label + ": " + key)
+            if facts.get(key) is None: facts[key] = value
+    for receipt in (current, prior):
+        worker = receipt.get("worker") or {}
+        for key, value in (("agentTerminalHandle", d["assigneeHandle"]), ("worktreeId", active["worktree_id"])):
+            require(worker.get(key) is None or worker[key] == value, "conflicting worker " + key)
+    return result, old_model
+
+
+def observation(refspec, active, recovery=None, binding=None):
     raw = record(refspec)
     require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
     result = raw.get("result", {}); need(result, ("dispatch", "projection"))
     d = result["dispatch"]; need(d, ("id", "taskId", "runId", "status", "assigneeHandle"))
     require(d["taskId"] == active["task_id"] and d["runId"] == active["run_id"], "Task/Run observation mismatch")
     require(d["id"] == active["dispatch_id"], "Dispatch observation mismatch")
-    require(result["projection"].get("workspace", {}).get("id") == active["worktree_id"], "observation worktree mismatch", 2)
+    if recovery is not None:
+        result, old_model = recovered_observation(result, active, recovery, binding)
+        # A start-time model does not prove absence of later switches. Require a full frozen session.
+        proof = (refspec or {}).get("model_evidence"); need(proof, ("kind", "path", "sha256"))
+        require(proof["kind"] == "claude-transcript" and result["projection"]["provider"]["id"] == "claude",
+                "recovery requires completion-covering Claude transcript", 2)
+        require(refspec.get("start") is None and refspec.get("origin_start") is None, "model evidence with a launch receipt")
+        completed_at = result["dispatch"].get("completedAt")
+        require(isinstance(completed_at, str) and completed_at, "missing Dispatch completion time", 2)
+        model = transcript_model(result, transcript_rows(ref(proof)), completed_at)
+        require(model_matches(old_model, model) and model_matches(result["projection"]["provider"]["model"], model),
+                "conflicting actual model facts")
+        require(model_matches(active["model"], model), "actual completion differs from proposal")
+        result["projection"]["provider"]["model"] = model  # verified full id; original receipts stay unchanged
+        return result
+    require((result["projection"].get("workspace") or {}).get("id") == active["worktree_id"], "observation worktree mismatch", 2)
     result["projection"]["provider"]["model"] = actual_model(result, refspec)
     return result
 

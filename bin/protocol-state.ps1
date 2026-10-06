@@ -410,7 +410,8 @@ function P-AcceptReport($data,$s) {
   $a=$s.active;P-Require ($null -ne $a) 'no current Dispatch' 2
   $ignored=if ($msg.type -cne 'worker_done') { 'not-completion' } elseif ($msg.run_id -cne $s.orca_run -or $payload.taskId -cne $a.task_id -or $payload.dispatchId -cne $a.dispatch_id) { 'stale' } else { $null }
   if ($ignored) { $s.processed_messages=@(@($s.processed_messages)+@($msg.id));return $ignored }
-  $o=P-Observation $data.observation $a
+  $assignment=P-Decode (V-Json $a);$assignment['worktree']=$s.worktree
+  $o=P-Observation $data.observation $assignment (V-Get $data 'bound_observation') (V-Get $data 'bound_dispatch')
   P-Require ($o.dispatch.status -ceq 'completed' -and $o.projection.evidence.durable -eq $true) 'missing durable settlement' 2
   P-Require ($msg.from_handle -ceq $o.dispatch.assigneeHandle) 'wrong report sender'
   $report=V-Get $data 'report';$text=P-Ref $report
@@ -439,14 +440,22 @@ function P-AcceptReport($data,$s) {
     if ($path -cmatch '\Adocs/reviews/[^/]+\.md\z' -and $wrote.Count -eq 1 -and $wrote[0] -ceq $path) { $synthesis=[ordered]@{path=$path;entry=(P-Entry $item)} }
   }
   if ($role -ceq 'plan-reviewer' -and $fields.token -ceq 'APPROVED') { $s['plan_approved']=$s.plan.structure }
+  $provenance=if ($null -ne (V-Get $data 'bound_observation')) { $data.bound_observation } else { $data.observation }
+  if ($null -ne (V-Get $data 'bound_observation') -and $null -eq (V-Get (P-Record $provenance).result.projection.provider 'model')) {
+    $provenance=@{path=$provenance.path;sha256=$provenance.sha256;model_evidence=$data.observation.model_evidence}
+  }
   if ($role -cin $PWrite) {
-    $s.provenance=@(@($s.provenance)+,$data.observation)
-    if ($role -cin $PPlanAuthors) { if ($null -ne $s.plan_authors) { $s.plan_authors=@(@($s.plan_authors)+,$data.observation) } }
+    $s.provenance=@(@($s.provenance)+,$provenance)
+    if ($role -cin $PPlanAuthors) { if ($null -ne $s.plan_authors) { $s.plan_authors=@(@($s.plan_authors)+,$provenance) } }
     else { P-Attribute $s (P-Written $s (P-ManifestFiles (V-Get $a 'artifact')) $art) $family }
   }
   $entry=[ordered]@{role=$role;token=$fields.token;round=$a.round;phase=$a.phase;step=$s.step;candidate=$art.candidate;artifact=(V-Get $data 'artifact');findings=$findings
     coverage=$fields.coverage;family=$family;report=$report;dispatch_id=$a.dispatch_id;evidence=@($proofs)}
   if ($null -ne $synthesis) { $entry['synthesis']=$synthesis }
+  if ($null -ne (V-Get $data 'bound_observation')) {
+    $entry['observation']=$data.observation;$entry['bound_observation']=$data.bound_observation
+    if ($null -ne (V-Get $data 'bound_dispatch')) { $entry['bound_dispatch']=$data.bound_dispatch }
+  }
   $s.accepted=@(@($s.accepted)+,$entry);$s.processed_messages=@(@($s.processed_messages)+@($msg.id))
   if ($role -ceq 'gate' -and $fields.token -ceq 'GATE_OK') { $s.rounds.gate_fix=0 }  # the gate-fix cap counts consecutive rounds
   $s.write_ownership=@(@($s.write_ownership) | Where-Object { $_ -cne $a.dispatch_id });$s.active=$null
@@ -500,6 +509,8 @@ function P-Validate($data) {
   $action=$data.action;$decision='accepted'
   # While a plan author's attempt is current (pending, bound, or settled with a rejected report) the live plan is its
   # working draft: transitions of that attempt and a fresh author attempt read the accepted reference, not the file.
+  P-Require ($null -eq (V-Get $data 'bound_dispatch') -or $null -ne (V-Get $data 'bound_observation')) 'bound-dispatch recovery without bound observation'
+  P-Require ($action -ceq 'accept-report' -or ($null -eq (V-Get $data 'bound_observation') -and $null -eq (V-Get $data 'bound_dispatch'))) 'observation recovery is accept-report only'
   $draft=(V-Get $s.active 'role') -cin $PPlanAuthors -and ($action -cin @('bind-dispatch','accept-report','record-author','reconcile-intent','resume') -or
     ($action -ceq 'dispatch' -and (V-Get (V-Get $data 'proposed') 'role') -cin $PPlanAuthors))
   P-UpdatePlan $data $s
@@ -518,7 +529,8 @@ function P-Validate($data) {
       $raw=P-Record $data.observation;P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2;$o=$raw.result;$d=$o.dispatch
       P-Require ($d.taskId -ceq $a.task_id -and $d.runId -ceq $s.orca_run -and $null -eq $d.retryOfDispatchId) 'dispatch does not bind pending fresh Task'
       P-Require ($d.id -and (P-ModelMatches $a.model (P-Model $o $data.observation))) 'actual launch differs from proposal';$a.dispatch_id=$d.id
-      [void](P-Observation $data.observation $a);if ($a.role -cin $PWrite) { $s.write_ownership=@($d.id) }
+      [void](P-Observation $data.observation $a);$a['bound_observation']=P-Decode (V-Json $data.observation)
+      if ($a.role -cin $PWrite) { $s.write_ownership=@($d.id) }
     }
     { $_ -cin @('prepare-commit','confirm-commit') } {
       [void](P-Fleet $data $s);P-Require ($s.step -cin @('plan','phase','quickfix','final-review')) 'not a commit step'
