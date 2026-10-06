@@ -570,6 +570,29 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   and exactly one distinct `Resolving model <id>` in that process log. The
   conversation-to-transcript link is the directory name recorded by the builder,
   weaker than Claude's single transcript; a per-process model switch is conflicting.
+  Only this raw CLI console log permits malformed UTF-8 in ordinary noise. Both
+  builders and validators read the complete bytes, hash/copy those original bytes
+  unchanged, and decode noise with replacement. For encoding/malformed-row
+  classification, a fact record begins immediately after the **first `] `** of
+  each console line (the glog header's message boundary). Intact or damaged
+  markers quoted later inside ordinary `HandleUserInput` text do not trigger this
+  classification. A boundary `Created conversation` or `Resolving model` record
+  must be intact and complete, including
+  its prefix and value: replacement characters anywhere on that line are
+  UNVERIFIABLE (`malformed UTF-8 in Antigravity fact record`), even when inserted
+  or substituted in the marker. An incomplete/malformed fact row is also
+  UNVERIFIABLE; a clean earlier row never masks a damaged or switched later row.
+  Damaged markers are recognized only at that first `] ` message boundary
+  using bounded marker-position sets over at most twice the ASCII marker length
+  (plus one lookahead character), allowing replacement spans and one residual
+  ASCII recovery byte. This guard never reconstructs a marker by backtracking
+  over a long human-message row. Existing end-anchored fact extraction and the
+  complete-log ownership/one-model/no-switch checks retain their semantics.
+  LF and CRLF delimit records identically. Absolute unlinked paths, original-byte
+  hashes, conversation ownership, the exact Task/Dispatch/assignee preamble and
+  the single distinct model remain required. Generic references, observation
+  JSON and all transcripts retain strict UTF-8 decoding. Never sanitize the saved
+  log, change its hash or rewrite model facts/start receipts to obtain acceptance.
 
 Actual model-to-family mapping lives only in roles.md. C5 write provenance points
 to these hashed observations; unknown or mixed authors need independent coverage.

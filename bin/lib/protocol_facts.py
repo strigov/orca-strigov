@@ -24,7 +24,7 @@ def need(obj, keys):
     require(isinstance(obj, dict) and all(k in obj for k in keys), "missing facts: " + ", ".join(keys), 2)
 
 
-def ref(refspec):
+def ref_bytes(refspec):
     need(refspec, ("path", "sha256"))
     p = artifact_path(refspec["path"])
     require(Path(refspec["path"]).is_absolute(), "artifact path must be absolute")
@@ -33,8 +33,12 @@ def ref(refspec):
     require(p.is_file(), "missing artifact: " + str(p), 2)
     data = p.read_bytes()
     require(v.digest(data) == refspec["sha256"], "artifact hash mismatch: " + str(p))
+    return data
+
+
+def ref(refspec):
     # Hash the original bytes, then parse LF and CRLF identically on both backends.
-    return data.decode("utf-8-sig").replace("\r\n", "\n")
+    return ref_bytes(refspec).decode("utf-8-sig").replace("\r\n", "\n")
 
 
 def record(refspec):
@@ -467,8 +471,46 @@ def agy_preamble_text(row):
     return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
 
 
-def agy_log_model(text, conversation):
+def agy_damaged_marker(head, marker):
+    """Bounded prefix matching: replacement spans missing text, plus one recovery byte.
+
+    Keep only positions in the fixed ASCII marker, never backtrack over console
+    text. Two marker lengths bound inserted damage; ordinary message prefixes
+    stop on their first mismatch.
+    """
+    positions, skip = {0}, set()
+    for i, c in enumerate(head[:2 * len(marker)]):
+        if c == "\ufffd":
+            positions = set(range(min(positions), len(marker) + 1))
+            skip = positions.copy()  # a bad continuation may leave one ASCII byte
+        else:
+            positions = {j + 1 for j in positions if j < len(marker) and marker[j] == c} | skip
+            skip = set()
+        if len(marker) in positions and (i + 1 == len(head) or head[i + 1] in " \t\r"):
+            return True
+        if not positions: return False
+    return False
+
+
+def agy_log_model(data, conversation):
     """One Antigravity CLI process log: it created this conversation and resolved exactly one model."""
+    # Replacement is ONLY for ordinary console noise. Recognize fact markers even
+    # when a replacement character was inserted or substituted in the marker, so
+    # a damaged later model row cannot disappear behind an earlier valid row.
+    markers = ("Created conversation", "Resolving model")
+    lines = []
+    for raw in data.split(b"\n"):
+        line = raw.decode("utf-8", "replace").rstrip("\r")
+        boundary = line.find("] ")  # only the glog header, never quoted later markers
+        start = boundary + 2
+        damaged = boundary >= 0 and "\ufffd" in line and any(
+            agy_damaged_marker(line[start:start + 2 * len(marker) + 1], marker) for marker in markers)
+        if (boundary >= 0 and any(line.startswith(marker, start) for marker in markers)) or damaged:
+            require("\ufffd" not in line, "malformed UTF-8 in Antigravity fact record", 2)
+            require(re.search(r"\] (?:Created conversation [0-9a-f-]+|Resolving model \S+)[ \t]*$", line),
+                    "malformed Antigravity fact record", 2)
+        lines.append(line)
+    text = "\n".join(lines)
     require(conversation in re.findall(r"\] Created conversation ([0-9a-f-]+)[ \t]*$", text, re.M),
             "Antigravity log does not own this conversation", 2)
     models = set(re.findall(r"\] Resolving model (\S+)[ \t]*$", text, re.M))
@@ -490,7 +532,7 @@ def evidence_model(observed, proof):
     rows = transcript_rows(ref(proof))
     require(any(agy_preamble_text(r) is not None and preamble_binds(agy_preamble_text(r), observed.get("dispatch", {})) for r in rows),
             "no Orca preamble for this Dispatch in Antigravity transcript", 2)
-    return agy_log_model(ref(proof["log"]).replace("\r", ""), proof["conversation_id"])
+    return agy_log_model(ref_bytes(proof["log"]), proof["conversation_id"])
 
 
 def actual_model(observed, source=None):
@@ -693,7 +735,7 @@ def antigravity_model_evidence(args):
     logs = [(p, p.read_bytes()) for p in sorted((home / "log").glob("*.log")) if not p.is_symlink() and p.stat().st_mtime >= since]
     logs = [(p, b) for p, b in logs if ("] Created conversation " + conversation).encode() in b]
     require(len(logs) == 1, "expected exactly one Antigravity process log for conversation " + conversation, 2)
-    model = agy_log_model(logs[0][1].decode("utf-8", "replace").replace("\r", ""), conversation)
+    model = agy_log_model(logs[0][1], conversation)
     proof = dict(kind="antigravity-log", conversation_id=conversation, **frozen(out, transcript))
     proof["log"] = frozen(log_out, logs[0][1])
     print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(logs[0][0])), ensure_ascii=True))

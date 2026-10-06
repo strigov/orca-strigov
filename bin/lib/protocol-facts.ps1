@@ -17,11 +17,15 @@ function P-Require($ok,[string]$why,[int]$code=1) {
 function P-Need($obj,[string[]]$keys) { P-Require ($obj -is [Collections.IDictionary] -and @($keys | Where-Object { -not $obj.Contains($_) }).Count -eq 0) ('missing facts: '+($keys -join ', ')) 2 }
 function P-Eq($a,$b) { return (V-Json $a) -ceq (V-Json $b) }
 function P-Subset($a,$b) { return @(@($a) | Where-Object { $_ -cnotin @($b) }).Count -eq 0 }
-function P-Ref($r) {
+function P-RefBytes($r) {
   P-Need $r @('path','sha256');P-Require ([IO.Path]::IsPathRooted($r.path)) 'artifact path must be absolute'
   try { V-Safe $r.path } catch { P-Require $false 'linked artifact path' 2 }
   P-Require ([IO.File]::Exists($r.path)) ('missing artifact: '+$r.path) 2
   $bytes=[IO.File]::ReadAllBytes($r.path);P-Require ((V-Hash $bytes) -ceq $r.sha256) ('artifact hash mismatch: '+$r.path)
+  return ,$bytes
+}
+function P-Ref($r) {
+  $bytes=P-RefBytes $r
   return $VUtf8.GetString($bytes).TrimStart([char]0xfeff).Replace("`r`n","`n")
 }
 function P-List($obj,[string]$key) {
@@ -340,8 +344,50 @@ function P-AgyPreambleText($row) {
   $content=if ((P-Field $row 'type') -ceq 'USER_INPUT') { P-Field $row 'content' } else { $null }
   if ($content -is [string] -and $content.Contains($POrcaPreamble)) { return $content };return $null
 }
-function P-AgyLogModel([string]$text,[string]$conversation) {
+function P-AgyDamagedMarker([string]$head,[string]$marker) {
+  # Same bounded marker-position sets as Python; no console-text backtracking.
+  $positions=@(0);$skip=@();$end=$marker.Length
+  for ($i=0;$i -lt [Math]::Min($head.Length,2*$end);$i++) {
+    $c=$head[$i]
+    if ($c -eq [char]0xfffd) {
+      $first=($positions | Measure-Object -Minimum).Minimum
+      $positions=@(([int]$first)..$end);$skip=@($positions)
+    } else {
+      $next=@($skip)
+      foreach ($j in $positions) { if ($j -lt $end -and $marker[$j] -ceq $c) { $next+=,($j+1) } }
+      $positions=@($next | Sort-Object -Unique);$skip=@()
+    }
+    if ($end -in $positions -and ($i+1 -eq $head.Length -or $head[$i+1] -cin @([char]32,[char]9,[char]13))) { return $true }
+    if (-not $positions.Count) { return $false }
+  }
+  return $false
+}
+function P-AgyLogModel([byte[]]$bytes,[string]$conversation) {
   # One Antigravity CLI process log: it created this conversation and resolved exactly one model.
+  # Replacement is ONLY for ordinary console noise; a damaged marker must not
+  # hide a later conflicting fact. Keep the same marker rule as Python.
+  $replacement=[string][char]0xfffd;$markers=@('Created conversation','Resolving model')
+  $lines=foreach ($line0 in [Text.Encoding]::UTF8.GetString($bytes).Split("`n")) {
+    $line=$line0.TrimEnd([char]13)
+    $boundary=$line.IndexOf('] ',[StringComparison]::Ordinal) # header only, never quoted later markers
+    $intact=$false;$damaged=$false
+    if ($boundary -ge 0) {
+      $start=$boundary+2;$head=$line.Substring($start,[Math]::Min($line.Length-$start,$markers[0].Length))
+      $intact=$head.StartsWith($markers[0],[StringComparison]::Ordinal) -or $head.StartsWith($markers[1],[StringComparison]::Ordinal)
+      if ($line.Contains($replacement)) {
+        foreach ($marker in $markers) {
+          $length=[Math]::Min($line.Length-$start,2*$marker.Length+1)
+          if (P-AgyDamagedMarker ($line.Substring($start,$length)) $marker) { $damaged=$true;break }
+        }
+      }
+    }
+    if ($intact -or $damaged) {
+      P-Require (-not $line.Contains($replacement)) 'malformed UTF-8 in Antigravity fact record' 2
+      P-Require ([regex]::IsMatch($line,'\] (?:Created conversation [0-9a-f-]+|Resolving model \S+)[ \t]*$')) 'malformed Antigravity fact record' 2
+    }
+    $line
+  }
+  $text=$lines -join "`n"
   $created=@([regex]::Matches($text,'(?m)\] Created conversation ([0-9a-f-]+)[ \t]*$') | ForEach-Object { $_.Groups[1].Value })
   P-Require ($conversation -cin $created) 'Antigravity log does not own this conversation' 2
   $models=New-Object 'Collections.Generic.HashSet[string]'
@@ -364,7 +410,7 @@ function P-EvidenceModel($o,$proof) {
   P-Require ((V-Get $provider 'id') -ceq 'antigravity') 'model evidence kind does not match provider'
   P-Need $proof @('log','conversation_id')
   P-Require (P-AgyBinds $o (P-TranscriptRows (P-Ref $proof))) 'no Orca preamble for this Dispatch in Antigravity transcript' 2
-  return P-AgyLogModel ((P-Ref $proof.log).Replace("`r",'')) $proof.conversation_id
+  return P-AgyLogModel (P-RefBytes $proof.log) $proof.conversation_id
 }
 function P-Model($o,$source=$null) {
   $model=V-Get (V-Get $o.projection 'provider' @{}) 'model'
@@ -569,7 +615,7 @@ function P-AgyEvidence($cli) {
     }
   }
   P-Require ($logs.Count -eq 1) ('expected exactly one Antigravity process log for conversation '+$conversation) 2
-  $model=P-AgyLogModel ([Text.Encoding]::UTF8.GetString($logs[0].bytes).Replace("`r",'')) $conversation
+  $model=P-AgyLogModel $logs[0].bytes $conversation
   $proof=[ordered]@{kind='antigravity-log';conversation_id=$conversation}
   $t=P-Frozen $out $found[0].bytes;$proof['path']=$t.path;$proof['sha256']=$t.sha256;$proof['log']=P-Frozen $logOut $logs[0].bytes
   [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$logs[0].path}));exit 0
