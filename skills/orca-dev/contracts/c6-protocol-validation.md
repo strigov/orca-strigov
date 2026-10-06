@@ -570,24 +570,22 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   and exactly one distinct `Resolving model <id>` in that process log. The
   conversation-to-transcript link is the directory name recorded by the builder,
   weaker than Claude's single transcript; a per-process model switch is conflicting.
-  Only this raw CLI console log permits malformed UTF-8 in ordinary noise. Both
+  Only this raw CLI console log permits malformed UTF-8, and only in ordinary
+  noise (glog truncates long lines and can cut a multi-byte character). Both
   builders and validators read the complete bytes, hash/copy those original bytes
-  unchanged, and decode noise with replacement. For encoding/malformed-row
-  classification, a fact record begins immediately after the **first `] `** of
-  each console line (the glog header's message boundary). Intact or damaged
-  markers quoted later inside ordinary `HandleUserInput` text do not trigger this
-  classification. A boundary `Created conversation` or `Resolving model` record
-  must be intact and complete, including
-  its prefix and value: replacement characters anywhere on that line are
-  UNVERIFIABLE (`malformed UTF-8 in Antigravity fact record`), even when inserted
-  or substituted in the marker. An incomplete/malformed fact row is also
-  UNVERIFIABLE; a clean earlier row never masks a damaged or switched later row.
-  Damaged markers are recognized only at that first `] ` message boundary
-  using bounded marker-position sets over at most twice the ASCII marker length
-  (plus one lookahead character), allowing replacement spans and one residual
-  ASCII recovery byte. This guard never reconstructs a marker by backtracking
-  over a long human-message row. Existing end-anchored fact extraction and the
-  complete-log ownership/one-model/no-switch checks retain their semantics.
+  unchanged, and decode noise with replacement. A line that is not valid UTF-8 is
+  noise only when (a) its header up to the **first `] `** is valid and the
+  readable start of its message is not a fact marker or a prefix of one, or (b)
+  it has no intact header and does not look like a glog record at all (no
+  `file.go:<n>`). Otherwise it is UNVERIFIABLE: `malformed UTF-8 in Antigravity
+  log header` when the header or its `] ` boundary is damaged (a damaged boundary
+  must not make a `Resolving model` row disappear), `malformed UTF-8 in
+  Antigravity fact record` when the marker or its value is damaged. Markers
+  quoted later inside ordinary `HandleUserInput` text do not count. A
+  `Created conversation` or `Resolving model` record at the boundary must be
+  intact and complete; an incomplete/malformed fact row is also UNVERIFIABLE.
+  End-anchored fact extraction and the complete-log ownership/one-model/no-switch
+  checks are unchanged.
   LF and CRLF delimit records identically. Absolute unlinked paths, original-byte
   hashes, conversation ownership, the exact Task/Dispatch/assignee preamble and
   the single distinct model remain required. Generic references, observation

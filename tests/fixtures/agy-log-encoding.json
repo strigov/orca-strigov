@@ -57,13 +57,13 @@
     "name": "malformed-model-prefix",
     "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI12{BAD}34 model_resolver.go:93] Resolving model {MODEL}\n",
     "code": 2,
-    "reason": "malformed UTF-8 in Antigravity fact record"
+    "reason": "malformed UTF-8 in Antigravity log header"
   },
   {
     "name": "malformed-conversation-prefix",
     "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI12{BAD}34 server.go:1239] Created conversation {CONVERSATION}\n",
     "code": 2,
-    "reason": "malformed UTF-8 in Antigravity fact record"
+    "reason": "malformed UTF-8 in Antigravity log header"
   },
   {
     "name": "malformed-model-marker-insert",
@@ -172,5 +172,35 @@
     "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 input_loop.go:106] HandleUserInput called with text: \"model_resolver.go:93] Reso{BAD}lving model {MODEL} in the log; server.go:1239] Creat{INVALID}d conversation {CONVERSATION}; ordinary noise {BAD}\"\n",
     "code": 0,
     "reason": ""
+  },
+  {
+    "name": "damaged-boundary-space-hides-model-switch",
+    "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 model_resolver.go:93]{INVALID}Resolving model gemini-3.7-flash-high\n",
+    "code": 2,
+    "reason": "malformed UTF-8 in Antigravity log header"
+  },
+  {
+    "name": "damaged-boundary-bracket-hides-model-switch",
+    "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 model_resolver.go:93{INVALID} Resolving model gemini-3.7-flash-high\n",
+    "code": 2,
+    "reason": "malformed UTF-8 in Antigravity log header"
+  },
+  {
+    "name": "damaged-header-before-boundary",
+    "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI12{INVALID}34 input_loop.go:106] HandleUserInput: text\n",
+    "code": 2,
+    "reason": "malformed UTF-8 in Antigravity log header"
+  },
+  {
+    "name": "glog-truncated-multibyte-at-line-end",
+    "log": "I1234 input_loop.go:106] HandleUserInput called with text: \"Пожалуйста{TRUNCATED}\nI1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\n",
+    "code": 0,
+    "reason": ""
+  },
+  {
+    "name": "damaged-byte-right-after-boundary",
+    "log": "I1234 model_resolver.go:93] Resolving model {MODEL}\nI1234 server.go:1239] Created conversation {CONVERSATION}\nI1234 input_loop.go:106] {INVALID}HandleUserInput: text\n",
+    "code": 2,
+    "reason": "malformed UTF-8 in Antigravity fact record"
   }
 ]

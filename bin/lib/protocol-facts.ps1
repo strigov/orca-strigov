@@ -344,45 +344,36 @@ function P-AgyPreambleText($row) {
   $content=if ((P-Field $row 'type') -ceq 'USER_INPUT') { P-Field $row 'content' } else { $null }
   if ($content -is [string] -and $content.Contains($POrcaPreamble)) { return $content };return $null
 }
-function P-AgyDamagedMarker([string]$head,[string]$marker) {
-  # Same bounded marker-position sets as Python; no console-text backtracking.
-  $positions=@(0);$skip=@();$end=$marker.Length
-  for ($i=0;$i -lt [Math]::Min($head.Length,2*$end);$i++) {
-    $c=$head[$i]
-    if ($c -eq [char]0xfffd) {
-      $first=($positions | Measure-Object -Minimum).Minimum
-      $positions=@(([int]$first)..$end);$skip=@($positions)
-    } else {
-      $next=@($skip)
-      foreach ($j in $positions) { if ($j -lt $end -and $marker[$j] -ceq $c) { $next+=,($j+1) } }
-      $positions=@($next | Sort-Object -Unique);$skip=@()
-    }
-    if ($end -in $positions -and ($i+1 -eq $head.Length -or $head[$i+1] -cin @([char]32,[char]9,[char]13))) { return $true }
-    if (-not $positions.Count) { return $false }
-  }
-  return $false
-}
 function P-AgyLogModel([byte[]]$bytes,[string]$conversation) {
   # One Antigravity CLI process log: it created this conversation and resolved exactly one model.
-  # Replacement is ONLY for ordinary console noise; a damaged marker must not
-  # hide a later conflicting fact. Keep the same marker rule as Python.
-  $replacement=[string][char]0xfffd;$markers=@('Created conversation','Resolving model')
-  $lines=foreach ($line0 in [Text.Encoding]::UTF8.GetString($bytes).Split("`n")) {
-    $line=$line0.TrimEnd([char]13)
-    $boundary=$line.IndexOf('] ',[StringComparison]::Ordinal) # header only, never quoted later markers
-    $intact=$false;$damaged=$false
-    if ($boundary -ge 0) {
-      $start=$boundary+2;$head=$line.Substring($start,[Math]::Min($line.Length-$start,$markers[0].Length))
-      $intact=$head.StartsWith($markers[0],[StringComparison]::Ordinal) -or $head.StartsWith($markers[1],[StringComparison]::Ordinal)
-      if ($line.Contains($replacement)) {
-        foreach ($marker in $markers) {
-          $length=[Math]::Min($line.Length-$start,2*$marker.Length+1)
-          if (P-AgyDamagedMarker ($line.Substring($start,$length)) $marker) { $damaged=$true;break }
-        }
+  # Same rule as Python: a line that is not valid UTF-8 is noise only when its header up to the first "] " is valid and
+  # the readable start of its message cannot be (a damaged form of) a fact marker; anything else refuses, so a
+  # corrupted fact row never drops out of the model/conversation checks.
+  $markers=@('Created conversation','Resolving model');$replacement=[char]0xfffd
+  $strict=New-Object Text.UTF8Encoding($false,$true);$lenient=New-Object Text.UTF8Encoding($false,$false)
+  $segments=New-Object 'Collections.Generic.List[byte[]]';$from=0
+  for ($i=0;$i -le $bytes.Length;$i++) {
+    if ($i -eq $bytes.Length -or $bytes[$i] -eq 10) {
+      $end=$i;if ($end -gt $from -and $bytes[$end-1] -eq 13) { $end-- }
+      $seg=New-Object byte[] ($end-$from);if ($seg.Length) { [Array]::Copy($bytes,$from,$seg,0,$seg.Length) };$segments.Add($seg);$from=$i+1
+    }
+  }
+  $lines=foreach ($seg in $segments) {
+    try { $line=$strict.GetString($seg) } catch {
+      $cut=-1;for ($k=0;$k -lt $seg.Length-1;$k++) { if ($seg[$k] -eq 93 -and $seg[$k+1] -eq 32) { $cut=$k;break } }
+      $header=$null;if ($cut -ge 0) { try { $header=$strict.GetString($seg,0,$cut+2) } catch { $header=$null } }
+      $line=$lenient.GetString($seg)
+      if ($null -eq $header) {
+        # No intact glog header: noise only if it does not look like a glog record (file.go:line) at all.
+        P-Require (-not [regex]::IsMatch($line,'\.go:\d')) 'malformed UTF-8 in Antigravity log header' 2
+      } else {
+        $head=$line.Substring($header.Length).Split($replacement)[0]
+        foreach ($m in $markers) { P-Require (-not ($head.StartsWith($m,[StringComparison]::Ordinal) -or $m.StartsWith($head,[StringComparison]::Ordinal))) 'malformed UTF-8 in Antigravity fact record' 2 }
       }
     }
-    if ($intact -or $damaged) {
-      P-Require (-not $line.Contains($replacement)) 'malformed UTF-8 in Antigravity fact record' 2
+    $cut=$line.IndexOf('] ',[StringComparison]::Ordinal)
+    if ($cut -ge 0 -and @($markers | Where-Object { [string]::CompareOrdinal($line,$cut+2,$_,0,$_.Length) -eq 0 -and $line.Length -ge $cut+2+$_.Length }).Count) {
+      P-Require (-not $line.Contains([string]$replacement)) 'malformed UTF-8 in Antigravity fact record' 2
       P-Require ([regex]::IsMatch($line,'\] (?:Created conversation [0-9a-f-]+|Resolving model \S+)[ \t]*$')) 'malformed Antigravity fact record' 2
     }
     $line

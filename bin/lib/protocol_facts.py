@@ -471,44 +471,37 @@ def agy_preamble_text(row):
     return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
 
 
-def agy_damaged_marker(head, marker):
-    """Bounded prefix matching: replacement spans missing text, plus one recovery byte.
-
-    Keep only positions in the fixed ASCII marker, never backtrack over console
-    text. Two marker lengths bound inserted damage; ordinary message prefixes
-    stop on their first mismatch.
-    """
-    positions, skip = {0}, set()
-    for i, c in enumerate(head[:2 * len(marker)]):
-        if c == "\ufffd":
-            positions = set(range(min(positions), len(marker) + 1))
-            skip = positions.copy()  # a bad continuation may leave one ASCII byte
-        else:
-            positions = {j + 1 for j in positions if j < len(marker) and marker[j] == c} | skip
-            skip = set()
-        if len(marker) in positions and (i + 1 == len(head) or head[i + 1] in " \t\r"):
-            return True
-        if not positions: return False
-    return False
+AGY_MARKERS = ("Created conversation", "Resolving model")
 
 
 def agy_log_model(data, conversation):
-    """One Antigravity CLI process log: it created this conversation and resolved exactly one model."""
-    # Replacement is ONLY for ordinary console noise. Recognize fact markers even
-    # when a replacement character was inserted or substituted in the marker, so
-    # a damaged later model row cannot disappear behind an earlier valid row.
-    markers = ("Created conversation", "Resolving model")
+    """One Antigravity CLI process log: it created this conversation and resolved exactly one model.
+
+    The log is console output; glog truncates long lines and may cut a multi-byte character in ordinary text. A line
+    that is not valid UTF-8 is accepted as noise only when its header up to the first "] " is valid and the readable
+    start of its message cannot be (a damaged form of) a fact marker, or when it has no intact header and does not look
+    like a glog record (no `file.go:<n>`) at all. Anything else — a damaged header or "] " boundary of a record, a
+    damaged or partial marker, a damaged fact value — refuses, so a corrupted fact row can never drop out
+    of the model/conversation checks."""
     lines = []
     for raw in data.split(b"\n"):
-        line = raw.decode("utf-8", "replace").rstrip("\r")
-        boundary = line.find("] ")  # only the glog header, never quoted later markers
-        start = boundary + 2
-        damaged = boundary >= 0 and "\ufffd" in line and any(
-            agy_damaged_marker(line[start:start + 2 * len(marker) + 1], marker) for marker in markers)
-        if (boundary >= 0 and any(line.startswith(marker, start) for marker in markers)) or damaged:
+        if raw.endswith(b"\r"): raw = raw[:-1]
+        try: line = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            cut = raw.find(b"] ")
+            try: header = raw[:cut + 2].decode("utf-8") if cut >= 0 else None
+            except UnicodeDecodeError: header = None
+            line = raw.decode("utf-8", "replace")
+            if header is None:
+                # No intact glog header: noise only if it does not look like a glog record (file.go:line) at all.
+                require(not re.search(r"\.go:\d", line), "malformed UTF-8 in Antigravity log header", 2)
+            else:
+                head = line[len(header):].split("\ufffd", 1)[0]
+                require(not any(head.startswith(m) or m.startswith(head) for m in AGY_MARKERS), "malformed UTF-8 in Antigravity fact record", 2)
+        cut = line.find("] ")
+        if cut >= 0 and any(line.startswith(m, cut + 2) for m in AGY_MARKERS):
             require("\ufffd" not in line, "malformed UTF-8 in Antigravity fact record", 2)
-            require(re.search(r"\] (?:Created conversation [0-9a-f-]+|Resolving model \S+)[ \t]*$", line),
-                    "malformed Antigravity fact record", 2)
+            require(re.search(r"\] (?:Created conversation [0-9a-f-]+|Resolving model \S+)[ \t]*$", line), "malformed Antigravity fact record", 2)
         lines.append(line)
     text = "\n".join(lines)
     require(conversation in re.findall(r"\] Created conversation ([0-9a-f-]+)[ \t]*$", text, re.M),
