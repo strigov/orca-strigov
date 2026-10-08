@@ -275,11 +275,14 @@ class ProviderRecoveryTests(unittest.TestCase):
     def setUp(self): self.f = ProtocolFixture()
     def tearDown(self): self.f.close()
 
-    def agy_proof(self, models=('gemini-3.8-flash-high',), dispatch='ctx_recovery', created_at='2026-10-05T05:01:00Z', after=None):
+    def agy_proof(self, models=('gemini-3.8-flash-high',), dispatch='ctx_recovery', created_at='2026-10-05T05:01:00Z', after=None,
+                  captured_at='2026-10-05T05:20:00.000000Z'):
         f = self.f; f.serial += 1
         t, l = f.agy_home(f.workspace / ('agy-' + str(f.serial)), self.CONVERSATION, 'task_recovery', dispatch, models=models,
                           created_at=created_at, after=[self.LATE_AGY] if after is None else after)
-        return dict(f.reference(t), kind='antigravity-log', conversation_id=self.CONVERSATION, log=f.reference(l))
+        proof = dict(f.reference(t), kind='antigravity-log', conversation_id=self.CONVERSATION, log=f.reference(l))
+        if captured_at is not None: proof['capture'] = f.agy_capture(proof, captured_at)
+        return proof
 
     def codex_proof(self, models=('gpt-6-luna',), cwd=None, after=None, dispatch='ctx_recovery'):
         f = self.f; f.serial += 1
@@ -287,9 +290,9 @@ class ProviderRecoveryTests(unittest.TestCase):
                                after=[self.LATE_CODEX] if after is None else after)
         return dict(f.reference(path), kind='codex-rollout')
 
-    def preamble(self, dispatch):
-        return ('You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\nYour task ID is: task_next\n'
-                '  orca orchestration send --from ' + self.f.CLAUDE_HANDLE + ' --type worker_done --task-id task_next --dispatch-id ' + dispatch + '\n')
+    def preamble(self, dispatch, task='task_next'):
+        return ('You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\nYour task ID is: ' + task + '\n'
+                '  orca orchestration send --from ' + self.f.CLAUDE_HANDLE + ' --type worker_done --task-id ' + task + ' --dispatch-id ' + dispatch + '\n')
 
     def codex_next(self, model='gpt-6-astra', timestamp='2026-10-05T05:30:00.000Z'):
         """The next Dispatch injected into the same Codex terminal: its own turn context, then its preamble."""
@@ -314,7 +317,7 @@ class ProviderRecoveryTests(unittest.TestCase):
         old['result']['worker']['state'] = 'unsupervised'  # legitimate injected Path B, never rewritten
         bound = f.save(old)
         if provider == 'antigravity':  # the original bind proof: no completion facts needed then
-            bound = dict(bound, model_evidence=self.agy_proof(created_at=None, after=()))
+            bound = dict(bound, model_evidence=self.agy_proof(created_at=None, after=(), captured_at=None))
         current = copy.deepcopy(old)
         current['result']['dispatch'].update(status='completed', completedAt='2026-10-05T05:18:06.701Z')
         current['result']['projection'].update(provider=None, workspace=None)
@@ -379,7 +382,7 @@ class ProviderRecoveryTests(unittest.TestCase):
         foreign = dict(step_index=5, source='USER_EXPLICIT', type='USER_INPUT', status='DONE', created_at='2026-10-05T05:10:00Z',
                        content='<USER_REQUEST>\n' + self.preamble('ctx_next') + '</USER_REQUEST>')
         cases = [(self.agy_proof(after=()), 2, 'model proof does not cover Dispatch completion'),
-                 (data['bound_observation']['model_evidence'], 2, 'model proof does not cover Dispatch completion'),
+                 (data['bound_observation']['model_evidence'], 2, 'recovery requires the Antigravity capture record'),
                  (self.agy_proof(after=[foreign, self.LATE_AGY]), 2, 'model proof does not cover Dispatch completion'),
                  (self.agy_proof(models=('gemini-3.8-flash-high', 'gemini-3.7-flash-high')), 1, 'conflicting actual model facts'),
                  (self.agy_proof(models=('gemini-3.7-flash-high',)), 1, 'conflicting actual model facts'),
@@ -396,15 +399,54 @@ class ProviderRecoveryTests(unittest.TestCase):
             proposal = copy.deepcopy(data); proposal['action'] = action
             self.result(proposal, 1, 'accept-report only')
 
+    def shared(self, name):
+        return read_json(ROOT / 'tests/fixtures/provider-recovery.json')[name]
+
+    def window(self, tokens):
+        """A Codex rollout from the shared window vocabulary (see tests/fixtures/provider-recovery.json)."""
+        f = self.f; early = '2026-10-05T05:01:00.000Z'
+        def message(role, text):
+            kind = 'output_text' if role == 'assistant' else 'input_text'
+            return dict(timestamp=early, type='response_item', payload=dict(type='message', role=role, content=[dict(type=kind, text=text)]))
+        rows = [dict(timestamp=early, type='session_meta', payload=dict(id='fixture-codex-session', cwd=str(f.git.root)))]
+        for token in tokens:
+            name, _, value = token.partition(':')
+            if name in ('ctx', 'ctx-outside'):
+                cwd = str(f.git.other if name == 'ctx-outside' else f.git.root)
+                rows.append(dict(timestamp=early, type='turn_context', payload=dict(turn_id='turn-' + str(len(rows)), cwd=cwd, model=value)))
+            elif name == 'preamble':
+                rows.append(message('user', self.preamble(value) if value else self.preamble('ctx_recovery', 'task_recovery')))
+            elif name in ('user', 'assistant'): rows.append(message(name, 'continue' if name == 'user' else 'ok'))
+            elif name == 'work': rows.append(dict(timestamp=early, type='response_item', payload=dict(type='function_call', name='exec', arguments='{}')))
+            else:
+                self.assertEqual(name, 'late'); rows.append(self.LATE_CODEX)
+        return dict(self.f.save(''.join(json.dumps(r) + '\n' for r in rows), '.jsonl'), kind='codex-rollout')
+
+    def test_shared_codex_windows(self):
+        data, _, _ = self.provider_fixture('codex')
+        for case in self.shared('codex_windows'):
+            with self.subTest(case['name']):
+                self.result(self.proposal(data, self.window(case['rows'])), case['code'], case['reason'])
+
+    def test_shared_antigravity_captures(self):
+        data, _, _ = self.provider_fixture('antigravity')
+        bound_log = data['bound_observation']['model_evidence']['log']
+        for case in self.shared('antigravity_captures'):
+            with self.subTest(case['name']):
+                # The live log may have resolved another model after bind; only the fresh capture shows it.
+                proof = self.agy_proof(models=tuple(case.get('models', ['gemini-3.8-flash-high'])), captured_at=None)
+                if case['capture'] is not None: proof['capture'] = self.f.agy_capture(proof, **case['capture'])
+                if case['log'] == 'bound':
+                    self.assertNotEqual(proof['log']['sha256'], bound_log['sha256'])
+                    proof['log'] = bound_log  # a fresh transcript paired with the original bind-time log
+                self.result(self.proposal(data, proof), case['code'], case['reason'])
+
     def test_codex_completion_span_and_cwd(self):
         data, _, _ = self.provider_fixture('codex')
         # The next Dispatch's own turn context lies outside this Dispatch's window, after its completion.
         self.result(self.proposal(data, self.codex_proof(after=[self.LATE_CODEX] + self.codex_next())))
         cases = [(self.codex_proof(after=()), 2, 'model proof does not cover Dispatch completion'),
-                 (self.codex_proof(after=self.codex_next('gpt-6-luna') + [self.LATE_CODEX]), 2, 'model proof does not cover Dispatch completion'),
-                 (self.codex_proof(models=('gpt-6-luna', 'gpt-6-astra')), 1, 'conflicting actual model facts'),
                  (self.codex_proof(models=('gpt-6-astra',)), 1, 'conflicting actual model facts'),
-                 (self.codex_proof(cwd=str(self.f.git.other)), 1, 'Codex rollout cwd outside Dispatch worktree'),
                  (self.codex_proof(models=()), 2, 'no Orca preamble for this Dispatch in Codex rollout'),
                  (self.codex_proof(dispatch='ctx_other'), 2, 'no Orca preamble for this Dispatch in Codex rollout'),
                  (dict(self.codex_proof(), kind='claude-transcript'), 1, 'model evidence kind does not match provider'),
@@ -491,8 +533,21 @@ class ProviderRecoveryTests(unittest.TestCase):
         self.assertEqual((rc, result['reason']), (1, 'model evidence only for an unreported model'))
         rc, token, result = self.build('antigravity', env, current, f.workspace / 'agy.jsonl', bound)
         self.assertEqual((rc, token, result['model']), (0, 'VALID', 'gemini-3.8-flash-high'), result)
-        self.assertEqual(result['model_evidence']['conversation_id'], self.CONVERSATION)
-        self.result(self.proposal(data, result['model_evidence']))
+        proof = result['model_evidence']
+        self.assertEqual(proof['conversation_id'], self.CONVERSATION)
+        # The capture record binds both frozen copies and is taken after them (here: after the fixture completion).
+        capture = read_json(proof['capture']['path'])
+        self.assertEqual(proof['capture']['path'], str(f.workspace / 'agy.jsonl') + '.capture.json')
+        self.assertEqual({k: capture[k] for k in ('kind', 'conversation_id', 'transcript_sha256', 'log_sha256')},
+                         dict(kind='antigravity-capture', conversation_id=self.CONVERSATION, transcript_sha256=proof['sha256'],
+                              log_sha256=proof['log']['sha256']))
+        self.assertRegex(capture['captured_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$')
+        self.assertGreater(capture['captured_at'], '2026-10-05T05:18:07')
+        self.result(self.proposal(data, proof))
+        (f.workspace / 'taken.jsonl.capture.json').write_text('{}', encoding='utf-8')
+        rc, _, result = self.build('antigravity', env, current, f.workspace / 'taken.jsonl', bound)
+        self.assertEqual((rc, result['reason']), (2, 'snapshot output must be a new absolute file'))
+        self.assertFalse((f.workspace / 'taken.jsonl').exists())
         other = copy.deepcopy(old); other['result']['dispatch']['taskId'] = 'other-task'
         rc, _, result = self.build('antigravity', env, current, f.workspace / 'x.jsonl', f.save(other)['path'])
         self.assertEqual((rc, result['reason']), (1, 'bound observation identity mismatch: taskId'))

@@ -596,6 +596,13 @@ class ProtocolFixture(VerificationFixture):
         Path(path).write_text(''.join(json.dumps(r) + '\n' for r in list(rows) + list(after)), encoding='utf-8')
         return Path(path)
 
+    def agy_capture(self, proof, captured_at='2026-10-05T05:20:00.000000Z', **override):
+        """The capture record antigravity-model-evidence writes after freezing the transcript and log of `proof`."""
+        capture = dict(kind='antigravity-capture', conversation_id=proof['conversation_id'], transcript_sha256=proof['sha256'],
+                       log_sha256=proof['log']['sha256'], captured_at=captured_at)
+        capture.update(override)
+        return self.save(capture)
+
     def codex_observation(self, dispatch_id, task_id, model='gpt-6-luna'):
         """Orca worker-show for a Codex Path B worker: Orca reports provider.model."""
         ref = self.claude_observation(dispatch_id, task_id, model=model)

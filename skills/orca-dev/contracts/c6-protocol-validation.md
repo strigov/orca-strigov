@@ -505,9 +505,16 @@ another Dispatch; it must contain a timestamp at or after current
 - `antigravity-log`: the `USER_INPUT` window of the frozen conversation
   transcript; row `created_at` (UTC). The model is the single model of the
   whole frozen CLI process log, as below, so the window needs no model rows.
-- `codex-rollout`: the window of one frozen Codex rollout (see below); row
-  `timestamp`; every `turn_context` in it names one model and a `cwd` inside
-  the Dispatch worktree.
+  Because that log is a separate file, recovery also requires the builder's
+  `capture` record (below): it must name this `conversation_id`, the
+  reference's transcript `sha256` and log `sha256`, and a `captured_at` at or
+  after `completedAt`. A missing, mismatching or earlier capture is
+  UNVERIFIABLE, so a fresh transcript paired with the bind-time log (which
+  cannot show a later model switch) is refused.
+- `codex-rollout`: the window of one frozen Codex rollout (see below), which
+  starts one row earlier, at the `turn_context` that must directly precede the
+  preamble message (otherwise UNVERIFIABLE); row `timestamp`; every
+  `turn_context` in it names one model and a `cwd` inside the Dispatch worktree.
 
 The proof's model must agree with the original bound actual model, any
 non-null current model fact and the active proposed model (including roles.md
@@ -588,7 +595,14 @@ launch-derived fact below; any two facts that are present must agree
   `SNAPSHOT_OUT` copies `brain/<conversation>/.system_generated/logs/transcript.jsonl`
   and `SNAPSHOT_OUT.cli.log` copies the one `log/*.log` CLI process log that
   created that conversation (under `$ORCA_AGY_HOME` or `~/.gemini/antigravity-cli`).
-  The reference is `{kind,path,sha256,conversation_id,log:{path,sha256}}`. C6
+  After both copies are durable it writes `SNAPSHOT_OUT.capture.json`, the
+  canonical JSON `{kind:"antigravity-capture",conversation_id,transcript_sha256,
+  log_sha256,captured_at}` (`captured_at` = UTC time of that capture; all three
+  outputs must be new). The reference is
+  `{kind,path,sha256,conversation_id,log:{path,sha256},capture:{path,sha256}}`;
+  ordinary binds ignore and do not require `capture`, restart recovery requires
+  it (above). `captured_at` is the builder's own record of when the copies were
+  taken, not a fact inside the agy log. C6
   requires a `USER_INPUT` transcript row with this Dispatch's Orca preamble (same
   task/dispatch/`--from` rule), a log line `Created conversation <conversation_id>`
   and exactly one distinct `Resolving model <id>` in that process log. The
@@ -630,10 +644,14 @@ launch-derived fact below; any two facts that are present must agree
   absolute unlinked `SNAPSHOT_OUT` and prints `{model_evidence, model, source}`
   with the reference `{kind:"codex-rollout",path,sha256}`. C6 binds the copy:
   Codex writes each turn's `type:"turn_context"` row (`payload.model`,
-  `payload.cwd`) just before that turn's user message, so the window starts at
-  the `turn_context` directly preceding the preamble message (no message
-  between them) and ends before the `turn_context` that opens the next
-  Dispatch's preamble turn (or before that preamble itself). Every
+  `payload.cwd`) immediately before the user message that opens the turn, so
+  the window starts at the `turn_context` row directly before this Dispatch's
+  first preamble message. Any other row there (input steered into a running
+  turn, work of an earlier turn) leaves the governing model unresolved:
+  UNVERIFIABLE `unresolved Codex turn context for the Orca preamble`, and a
+  later `turn_context` never repairs that gap. The window ends before the
+  `turn_context` directly before the next Dispatch's preamble message, or
+  before that preamble itself when none is there. Every
   `turn_context` in the window needs a nonempty model and a `cwd` inside
   `terminal.worktreePath` (whose `terminal.worktreeId` equals the workspace);
   exactly one distinct model is the proof's model, several are conflicting,

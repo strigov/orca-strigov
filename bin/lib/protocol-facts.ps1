@@ -32,7 +32,11 @@ function P-List($obj,[string]$key) {
   # An optional JSON array as one flat array (V-Get keeps an array as one pipeline object).
   $v=V-Get $obj $key $null;if ($null -eq $v) { return ,@() };return ,@($v)
 }
-function P-Decode([string]$text) { return ,(V-Normal ((ConvertFrom-Json -InputObject ('{"data":'+$text+'}')).data)) }
+# JSON timestamps stay strings, as in Python and Windows PowerShell 5.1: PowerShell 7.5+ supports -DateKind String;
+# earlier 7.x versions decode ISO strings as DateTime, which P-UtcSeconds/P-IsTime accept.
+$PJsonArgs=@{};if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) { $PJsonArgs['DateKind']='String' }
+function P-IsTime($value) { return (($value -is [string] -and $value) -or $value -is [DateTime] -or $value -is [DateTimeOffset]) }
+function P-Decode([string]$text) { return ,(V-Normal ((ConvertFrom-Json -InputObject ('{"data":'+$text+'}') @PJsonArgs).data)) }
 function P-Record($r) { return ,(P-Decode (P-Ref $r)) }
 function P-Line([string]$text,[string]$label,$default=$null) {
   $rows=[regex]::Matches($text,'(?m)^'+[regex]::Escape($label)+': (.+)\r?$')
@@ -288,7 +292,7 @@ function P-Field($obj,[string]$key,$default=$null) {
   if ($obj -is [Collections.IDictionary] -and ([Collections.IDictionary]$obj).Contains($key)) { return ,$obj[$key] };return $default
 }
 function P-JsonLine([string]$line) {
-  if ($PSVersionTable.PSVersion.Major -ge 7) { return ,(ConvertFrom-Json -InputObject $line -AsHashtable -Depth 1024) }
+  if ($PSVersionTable.PSVersion.Major -ge 7) { return ,(ConvertFrom-Json -InputObject $line -AsHashtable -Depth 1024 @PJsonArgs) }
   if (-not $script:PJson) {
     Add-Type -AssemblyName System.Web.Extensions
     $script:PJson=New-Object Web.Script.Serialization.JavaScriptSerializer;$script:PJson.MaxJsonLength=[int]::MaxValue;$script:PJson.RecursionLimit=1024
@@ -391,12 +395,23 @@ function P-AgyLogModel([byte[]]$bytes,[string]$conversation) {
 function P-AgyBinds($o,$rows) {
   foreach ($row in $rows) { $text=P-AgyPreambleText $row;if ($null -ne $text -and (P-PreambleBinds $text $o.dispatch)) { return $true } };return $false
 }
+function P-AgyCapture($proof,$completedAt) {
+  # Recovery: the builder's capture record binds this transcript and process log and was taken after completion,
+  # so neither copy can be an earlier (bind-time) snapshot of a log that later resolved another model.
+  $capture=V-Get $proof 'capture'
+  P-Require ($capture -is [Collections.IDictionary]) 'recovery requires the Antigravity capture record' 2
+  $held=P-Record $capture;P-Need $held @('kind','conversation_id','transcript_sha256','log_sha256','captured_at')
+  P-Require ($held.kind -ceq 'antigravity-capture' -and $held.conversation_id -ceq $proof.conversation_id -and
+    $held.transcript_sha256 -ceq $proof.sha256 -and $held.log_sha256 -ceq $proof.log.sha256) 'Antigravity capture does not bind this transcript and log' 2
+  P-Require (P-IsTime $held.captured_at) 'Antigravity capture without capture time' 2
+  P-Require ((P-UtcSeconds $held.captured_at) -ge (P-UtcSeconds $completedAt)) 'Antigravity capture predates Dispatch completion' 2
+}
 function P-AgyCompletionModel($o,$proof,$completedAt) {
   # Recovery: this Dispatch's transcript window reaches completion; the process log resolved one model.
   P-Need $proof @('log','conversation_id');$d=$o.dispatch;$rows=P-TranscriptRows (P-Ref $proof);$first=-1
   for ($i=0;$i -lt $rows.Count;$i++) { $text=P-AgyPreambleText $rows[$i];if ($null -ne $text -and (P-PreambleBinds $text $d)) { $first=$i;break } }
   P-Require ($first -ge 0) 'no Orca preamble for this Dispatch in Antigravity transcript' 2
-  $model=P-AgyLogModel (P-RefBytes $proof.log) $proof.conversation_id;$throughCompletion=$false
+  $model=P-AgyLogModel (P-RefBytes $proof.log) $proof.conversation_id;P-AgyCapture $proof $completedAt;$throughCompletion=$false
   for ($i=$first;$i -lt $rows.Count;$i++) {
     $text=P-AgyPreambleText $rows[$i]
     if ($null -ne $text -and -not (P-PreambleBinds $text $d)) { break }  # the next Dispatch owns the rest
@@ -413,13 +428,10 @@ function P-CodexPreambleText($row) {
   if ($content -is [Collections.IList]) { $content=(@($content | Where-Object { (P-Field $_ 'type') -ceq 'input_text' } | ForEach-Object { [string](P-Field $_ 'text' '') }) -join "`n") }
   if ($content -is [string] -and $content.Contains($POrcaPreamble)) { return $content };return $null
 }
-function P-CodexTurnStart($rows,[int]$i) {
-  # The turn_context Codex wrote just before the user message at i (no message between them), else i.
-  for ($j=$i-1;$j -ge 0;$j--) {
-    $type=P-Field $rows[$j] 'type'
-    if ($type -ceq 'turn_context') { return $j }
-    if ($type -ceq 'response_item' -and (P-Field (P-CodexPayload $rows[$j]) 'type') -ceq 'message') { break }
-  };return $i
+function P-CodexTurnContext($rows,[int]$i) {
+  # Index of the turn_context Codex writes immediately before the user message that opens a turn, else -1.
+  # Input steered into a running turn has no row of its own context there; its governing context is ambiguous.
+  if ($i -gt 0 -and (P-Field $rows[$i-1] 'type') -ceq 'turn_context') { return $i-1 };return -1
 }
 function P-CodexRolloutModel($o,$rows,$completedAt=$null) {
   # The one model of every Codex turn from this Dispatch's Orca preamble until the next Dispatch's, in one rollout.
@@ -432,10 +444,14 @@ function P-CodexRolloutModel($o,$rows,$completedAt=$null) {
   $end=$rows.Count
   for ($i=$first+1;$i -lt $rows.Count;$i++) {
     $text=P-CodexPreambleText $rows[$i]
-    if ($null -ne $text -and -not (P-PreambleBinds $text $d)) { $end=P-CodexTurnStart $rows $i;break }  # the next Dispatch owns its own turn context
+    if ($null -ne $text -and -not (P-PreambleBinds $text $d)) {
+      $end=$i;if ((P-CodexTurnContext $rows $i) -ge 0) { $end=$i-1 };break  # the next Dispatch owns its own turn context
+    }
   }
+  # The context governing the preamble must be resolved; a later turn context never repairs that gap.
+  $context=P-CodexTurnContext $rows $first;P-Require ($context -ge 0) 'unresolved Codex turn context for the Orca preamble' 2
   $models=New-Object 'Collections.Generic.HashSet[string]';$throughCompletion=$false
-  for ($i=(P-CodexTurnStart $rows $first);$i -lt $end;$i++) {
+  for ($i=$context;$i -lt $end;$i++) {
     $row=$rows[$i];$stamp=P-Field $row 'timestamp'
     if ($null -ne $completedAt -and -not $throughCompletion -and $null -ne $stamp) { $throughCompletion=(P-UtcSeconds $stamp) -ge (P-UtcSeconds $completedAt) }
     if ((P-Field $row 'type') -ceq 'turn_context') {
@@ -569,7 +585,7 @@ function P-Observation($r,$active,$recovery=$null,$binding=$null) {
     P-Require ($proof.kind -is [string] -and $PRecoveryProofs.Contains($proof.kind)) 'recovery requires a completion-covering model proof' 2
     P-Require ($PRecoveryProofs[$proof.kind] -ceq $o.projection.provider.id) 'model evidence kind does not match provider'
     P-Require ($null -eq (V-Get $r 'start') -and $null -eq (V-Get $r 'origin_start')) 'model evidence with a launch receipt'
-    $completedAt=V-Get $o.dispatch 'completedAt';P-Require ($completedAt -is [string] -and $completedAt) 'missing Dispatch completion time' 2
+    $completedAt=V-Get $o.dispatch 'completedAt';P-Require (P-IsTime $completedAt) 'missing Dispatch completion time' 2
     if ($proof.kind -ceq 'claude-transcript') { $model=P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt }
     elseif ($proof.kind -ceq 'antigravity-log') { $model=P-AgyCompletionModel $o $proof $completedAt }
     else { $model=P-CodexRolloutModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt }
@@ -596,6 +612,12 @@ function P-Authors($art,$provenance=@()) {
   };return $writers
 }
 function P-UtcSeconds($value) {
+  # PowerShell 7 before 7.5 decodes ISO strings as DateTime; zone-less (Unspecified) stays UTC, as in Python.
+  if ($value -is [DateTimeOffset]) { return $value.ToUnixTimeMilliseconds()/1000.0 }
+  if ($value -is [DateTime]) {
+    $utc=if ($value.Kind -eq [DateTimeKind]::Unspecified) { [DateTime]::SpecifyKind($value,[DateTimeKind]::Utc) } else { $value.ToUniversalTime() }
+    return ([DateTimeOffset]$utc).ToUnixTimeMilliseconds()/1000.0
+  }
   P-Require ($value -is [string] -and $value) 'missing Dispatch creation time' 2
   $text=$value.Replace(' ','T');if ($text -notmatch '(Z|[+-]\d\d:\d\d)$') { $text+='Z' }  # Orca SQL timestamps are UTC
   return [DateTimeOffset]::Parse($text,[Globalization.CultureInfo]::InvariantCulture).ToUnixTimeMilliseconds()/1000.0
@@ -645,8 +667,8 @@ function P-AgyEvidence($cli) {
   P-Require ($cli.Count -in @(3,4)) 'usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]'
   $o=P-BuilderObservation $cli 3;$provider=V-Get $o.projection 'provider' @{}
   P-Require ((V-Get $provider 'id') -ceq 'antigravity' -and $null -eq (V-Get $provider 'model')) 'model evidence only for an unreported model'
-  $out=$cli[2];$logOut=$out+'.cli.log'
-  P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out) -and -not [IO.File]::Exists($logOut)) 'snapshot output must be a new absolute file' 2
+  $out=$cli[2];$logOut=$out+'.cli.log';$captureOut=$out+'.capture.json'
+  P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out) -and -not [IO.File]::Exists($logOut) -and -not [IO.File]::Exists($captureOut)) 'snapshot output must be a new absolute file' 2
   try { V-Safe $out } catch { P-Require $false 'linked snapshot output' 2 }
   $home2=if ($env:ORCA_AGY_HOME) { $env:ORCA_AGY_HOME } else { Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.gemini') 'antigravity-cli' }
   $since=(P-UtcSeconds (V-Get $o.dispatch 'createdAt'))-300
@@ -674,6 +696,11 @@ function P-AgyEvidence($cli) {
   $model=P-AgyLogModel $logs[0].bytes $conversation
   $proof=[ordered]@{kind='antigravity-log';conversation_id=$conversation}
   $t=P-Frozen $out $found[0].bytes;$proof['path']=$t.path;$proof['sha256']=$t.sha256;$proof['log']=P-Frozen $logOut $logs[0].bytes
+  # Taken after both copies are durable: restart recovery needs it at or after Dispatch completion.
+  $captured=[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.ffffffZ',[Globalization.CultureInfo]::InvariantCulture)
+  $capture=V-Map;$capture['kind']='antigravity-capture';$capture['conversation_id']=$conversation;$capture['transcript_sha256']=$t.sha256
+  $capture['log_sha256']=$proof['log'].sha256;$capture['captured_at']=$captured
+  $proof['capture']=P-Frozen $captureOut ($VUtf8.GetBytes((V-Json $capture)))
   [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$logs[0].path}));exit 0
 }
 function P-BuilderObservation($cli,[int]$boundAt) {

@@ -2,6 +2,7 @@
 Orca observations and actual-model proof). Every protocol decision lives in protocol_state.py."""
 import json
 import copy
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
@@ -512,6 +513,20 @@ def agy_log_model(data, conversation):
     return next(iter(models))
 
 
+def agy_capture(proof, completed_at):
+    """Recovery: the builder's capture record binds this transcript and process log and was taken after completion,
+    so neither copy can be an earlier (bind-time) snapshot of a log that later resolved another model."""
+    capture = proof.get("capture")
+    require(isinstance(capture, dict), "recovery requires the Antigravity capture record", 2)
+    held = record(capture)
+    need(held, ("kind", "conversation_id", "transcript_sha256", "log_sha256", "captured_at"))
+    require(held["kind"] == "antigravity-capture" and held["conversation_id"] == proof["conversation_id"] and
+            held["transcript_sha256"] == proof["sha256"] and held["log_sha256"] == proof["log"]["sha256"],
+            "Antigravity capture does not bind this transcript and log", 2)
+    require(isinstance(held["captured_at"], str) and held["captured_at"], "Antigravity capture without capture time", 2)
+    require(utc_seconds(held["captured_at"]) >= utc_seconds(completed_at), "Antigravity capture predates Dispatch completion", 2)
+
+
 def agy_completion_model(observed, proof, completed_at):
     """Recovery: this Dispatch's transcript window reaches completion; the process log resolved one model."""
     need(proof, ("log", "conversation_id"))
@@ -519,6 +534,7 @@ def agy_completion_model(observed, proof, completed_at):
     starts = [i for i, row in enumerate(rows) if agy_preamble_text(row) is not None and preamble_binds(agy_preamble_text(row), d)]
     require(starts, "no Orca preamble for this Dispatch in Antigravity transcript", 2)
     model = agy_log_model(ref_bytes(proof["log"]), proof["conversation_id"])
+    agy_capture(proof, completed_at)
     through_completion = False
     for row in rows[starts[0]:]:
         text = agy_preamble_text(row)
@@ -543,12 +559,11 @@ def codex_preamble_text(row):
     return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
 
 
-def codex_turn_start(rows, i):
-    """The turn_context Codex wrote just before the user message at i (no message between them), else i."""
-    for j in range(i - 1, -1, -1):
-        if rows[j].get("type") == "turn_context": return j
-        if rows[j].get("type") == "response_item" and codex_payload(rows[j]).get("type") == "message": break
-    return i
+def codex_turn_context(rows, i):
+    """Index of the turn_context Codex writes immediately before the user message that opens a turn, else None.
+
+    Input steered into a running turn has no row of its own context there; its governing context is ambiguous."""
+    return i - 1 if i > 0 and rows[i - 1].get("type") == "turn_context" else None
 
 
 def codex_rollout_model(observed, rows, completed_at=None):
@@ -561,9 +576,13 @@ def codex_rollout_model(observed, rows, completed_at=None):
     require(starts, "no Orca preamble for this Dispatch in Codex rollout", 2)
     end = next((i for i in range(starts[0] + 1, len(rows))
                 if codex_preamble_text(rows[i]) is not None and not preamble_binds(codex_preamble_text(rows[i]), d)), None)
-    end = len(rows) if end is None else codex_turn_start(rows, end)  # the next Dispatch owns its own turn context
+    if end is None: end = len(rows)
+    elif codex_turn_context(rows, end) is not None: end -= 1  # the next Dispatch owns its own turn context
+    # The context governing the preamble must be resolved; a later turn context never repairs that gap.
+    first = codex_turn_context(rows, starts[0])
+    require(first is not None, "unresolved Codex turn context for the Orca preamble", 2)
     models = set(); through_completion = False
-    for row in rows[codex_turn_start(rows, starts[0]):end]:
+    for row in rows[first:end]:
         if completed_at is not None and not through_completion and row.get("timestamp") is not None:
             through_completion = utc_seconds(row["timestamp"]) >= utc_seconds(completed_at)
         if row.get("type") == "turn_context":
@@ -816,8 +835,8 @@ def antigravity_model_evidence(args):
     observed = builder_observation(args, 3)
     provider = observed["projection"].get("provider") or {}
     require(provider.get("id") == "antigravity" and provider.get("model") is None, "model evidence only for an unreported model")
-    out = artifact_path(args[2]); log_out = Path(str(out) + ".cli.log")
-    require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists() and not log_out.exists(),
+    out = artifact_path(args[2]); log_out = Path(str(out) + ".cli.log"); capture_out = Path(str(out) + ".capture.json")
+    require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists() and not log_out.exists() and not capture_out.exists(),
             "snapshot output must be a new absolute file", 2)
     require(not any(x.is_symlink() for x in (out, *out.parents)), "linked snapshot output", 2)
     home = Path(os.environ.get("ORCA_AGY_HOME") or Path.home() / ".gemini" / "antigravity-cli")
@@ -837,6 +856,11 @@ def antigravity_model_evidence(args):
     model = agy_log_model(logs[0][1], conversation)
     proof = dict(kind="antigravity-log", conversation_id=conversation, **frozen(out, transcript))
     proof["log"] = frozen(log_out, logs[0][1])
+    # Taken after both copies are durable: restart recovery needs it at or after Dispatch completion.
+    captured = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    capture = dict(kind="antigravity-capture", conversation_id=conversation, transcript_sha256=proof["sha256"],
+                   log_sha256=proof["log"]["sha256"], captured_at=captured)
+    proof["capture"] = frozen(capture_out, json.dumps(capture, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode())
     print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(logs[0][0])), ensure_ascii=True))
     return 0
 
