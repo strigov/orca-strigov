@@ -674,6 +674,7 @@ try {
   if ($args.Count -and $args[0] -cin @('summary','migrate')) { . (Join-Path $PSScriptRoot 'lib/protocol-tools.ps1');if ($args[0] -ceq 'summary') { P-Summary $args } else { P-Migrate $args } }
   if ($args.Count -and $args[0] -ceq 'claude-model-evidence') { P-ClaudeEvidence $args }
   if ($args.Count -and $args[0] -ceq 'antigravity-model-evidence') { P-AgyEvidence $args }
+  if ($args.Count -and $args[0] -ceq 'codex-model-evidence') { P-CodexEvidence $args }
   P-Require ($args.Count -in @(2,3) -and $args[0] -ceq 'validate') 'usage: protocol-state validate INPUT_JSON [RESUME_OUT]'
   $data=P-Decode ([IO.File]::ReadAllText($args[1],$VUtf8).TrimStart([char]0xfeff));$result=P-Validate $data
   if ($args.Count -eq 3) {

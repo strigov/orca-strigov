@@ -140,6 +140,12 @@ Argv per agent:
 
 Native Windows: `& "$BIN\protocol-state.ps1" claude-model-evidence …`. On `VALID` copy the printed `model_evidence` object into that observation reference; `UNVERIFIABLE` (no or several sessions claim the Dispatch) stays a protocol blocker. Never hand-write the object or point it at the live transcript.
 
+**Restart recovery of a settled Dispatch** (C6 explicit observation recovery, `accept-report` only): when an Orca restart left the completed Dispatch's current `worker-show` without provider/terminal facts, the current observation reference needs a fresh proof frozen after settlement that covers completion, by the worker's provider: `claude-model-evidence`, `antigravity-model-evidence`, or for Codex the recovery-only `codex-model-evidence` (ordinary Codex binds keep Orca's reported model). Give the builder the original bind-time `worker-show` JSON; the Antigravity and Codex builders also accept the current one plus the original as third argument:
+
+```bash
+"$BIN/protocol-state" codex-model-evidence "$dir/worker-show-<ATTEMPT>-current.json" "$dir/codex-rollout-<ATTEMPT>.jsonl" "$dir/worker-show-<ATTEMPT>.json"
+```
+
 Path B differences: `worker_done`, `ask`, heartbeat all work identically, but the terminal is operator-created/unsupervised. `worker-release` may be a no-op and `worker-stop` does not thereby own its process: follow the actual settlement/release receipts in §5, leaving external or uncertain terminals open. Neither Task completion nor a no-op release authorizes `terminal close`. After durable settlement, a follow-up can reuse the same terminal with `dispatch --task <next> --to $H --inject`, subject to the boundary check, a current `terminal show` without `orphaned: true` (an Orca restart orphans it: use a fresh terminal, §2 lost injection) and, for Codex, proof that its original launch disabled native multi-agent. Unknown launch settings require a supported custom launch after resolving the old write task per §6, not assumptions about defaults.
 
 ## 3. Startup blockers and how `install.sh` clears them

@@ -96,8 +96,9 @@ content for the user to read.
 Other subcommands: `protocol-state summary STATE_OR_PROPOSAL_JSON` prints the
 compact facts of a saved state or proposal (read-only; the coordinator's only
 way to inspect one). `protocol-state migrate STATE_V1_JSON OUT_JSON` converts a
-schema 1 state once (see Migration). `claude-model-evidence` and
-`antigravity-model-evidence` freeze model proof (see Observations).
+schema 1 state once (see Migration). `claude-model-evidence`,
+`antigravity-model-evidence` and the recovery-only `codex-model-evidence`
+freeze model proof (see Observations).
 
 ## Proposal and references
 
@@ -489,18 +490,40 @@ Only missing provider id/model, workspace id and terminal identity facts are
 filled in a validated **in-memory view**; dispatch, worker state, projection
 stage/outcome/liveness and settlement evidence are never filled from history.
 The current reference additionally carries fresh `model_evidence` proving the
-model through completion. The initial proof alone is insufficient. Currently
-the supported completion proof for recovery is a frozen `claude-transcript`:
-its same-session window after this exact Orca preamble and before any next
-Dispatch must include a timestamp at or after current `dispatch.completedAt`,
-and every assistant model in that whole window must agree with the original
-bound actual model and the active proposed model (including roles.md aliases).
-The verified in-memory effective model is the transcript's full id; a launch
-alias such as `opus` may agree with that id, but differing full model ids
-remain conflicting, including any non-null current model fact.
+model through completion, of the kind that matches the recovered provider id:
+`claude-transcript` for `claude`, `antigravity-log` for `antigravity`,
+`codex-rollout` for `codex`. Any other kind is UNVERIFIABLE (`recovery requires
+a completion-covering model proof`); a kind of another provider is INVALID
+(`model evidence kind does not match provider`). The initial proof alone is
+insufficient. The window of a proof starts at this exact Orca preamble (same
+task/dispatch/`--from` rule as below) and ends before the next preamble of
+another Dispatch; it must contain a timestamp at or after current
+`dispatch.completedAt`:
+
+- `claude-transcript`: the same-session window as below; record `timestamp`;
+  every assistant model in that whole window is the proof's model.
+- `antigravity-log`: the `USER_INPUT` window of the frozen conversation
+  transcript; row `created_at` (UTC). The model is the single model of the
+  whole frozen CLI process log, as below, so the window needs no model rows.
+- `codex-rollout`: the window of one frozen Codex rollout (see below); row
+  `timestamp`; every `turn_context` in it names one model and a `cwd` inside
+  the Dispatch worktree.
+
+The proof's model must agree with the original bound actual model, any
+non-null current model fact and the active proposed model (including roles.md
+aliases). The verified in-memory effective model is the proof's full id; a
+launch alias such as `opus` may agree with that id, but differing full model
+ids remain conflicting.
 A partial proof, absent completion time or unsupported completion proof is
-UNVERIFIABLE; a later model switch is INVALID. Freeze the actual full session
-using the existing builder and the original full observation; never synthesize
+UNVERIFIABLE; a model switch inside the window is INVALID. Freeze the actual
+full session after settlement with the provider's builder, given the original
+full bind-time observation as `OBSERVATION_JSON`. `antigravity-model-evidence`
+and `codex-model-evidence` alternatively take the restart-damaged current
+observation plus the original one as optional third argument
+`BOUND_OBSERVATION_JSON`: the builder then takes only missing provider id,
+workspace id and terminal facts from it, after the same Dispatch identity
+check as above, and any present conflicting fact refuses (`claude-model-evidence`
+keeps its optional third `TRANSCRIPT` argument). Never synthesize
 timestamp/model rows or rewrite a receipt to satisfy this check.
 
 The accepted entry retains the current `observation`, `bound_observation` and,
@@ -519,10 +542,10 @@ merged, or enriched on disk. Run candidate validation without `RESUME_OUT` for
 read-only reproductions; installing the candidate and applying a transition
 are separate coordinator actions after independent review.
 
-Orca reports `provider.model` for Codex but not for Claude, so two further model
-sources exist. Precedence: observed `provider.model`, then the one launch-derived
-fact below; any two facts that are present must agree (`conflicting actual model
-facts`). No source is the coordinator's word, saved argv, a comment or a message.
+Orca reports `provider.model` for Codex but not for Claude or Antigravity, so
+further model sources exist. Precedence: observed `provider.model`, then the one
+launch-derived fact below; any two facts that are present must agree
+(`conflicting actual model facts`). No source is the coordinator's word, saved argv, a comment or a message.
 
 - **Reuse chain (`origin_start`).** A `worker-start --terminal` reuse has a
   `start` receipt with an empty `launch.effective`. The reference may then add
@@ -560,7 +583,8 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   `provider.id:"antigravity"` with a null `provider.model` and no `start`. Orca
   does not report the agy model and agy's conversation store is SQLite, which the
   native Windows validator cannot read; two text files are frozen instead by
-  `protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT`:
+  `protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]`
+  (the third argument only for restart recovery, see above):
   `SNAPSHOT_OUT` copies `brain/<conversation>/.system_generated/logs/transcript.jsonl`
   and `SNAPSHOT_OUT.cli.log` copies the one `log/*.log` CLI process log that
   created that conversation (under `$ORCA_AGY_HOME` or `~/.gemini/antigravity-cli`).
@@ -591,6 +615,30 @@ facts`). No source is the coordinator's word, saved argv, a comment or a message
   the single distinct model remain required. Generic references, observation
   JSON and all transcripts retain strict UTF-8 decoding. Never sanitize the saved
   log, change its hash or rewrite model facts/start receipts to obtain acceptance.
+- **Codex rollout (`model_evidence` kind `codex-rollout`), restart recovery
+  only.** An ordinary Codex observation keeps Orca's reported `provider.model`;
+  this kind on any non-recovery observation, and on the bound observation of a
+  recovery, is INVALID (`codex-rollout model evidence only in observation
+  recovery`). `protocol-state codex-model-evidence OBSERVATION_JSON SNAPSHOT_OUT
+  [BOUND_OBSERVATION_JSON]` requires provider id `codex` (after the optional
+  bound fill) and searches `$CODEX_HOME` or `~/.codex`,
+  `sessions/*/*/*/rollout-*.jsonl` (unlinked files changed since
+  `dispatch.createdAt` minus five minutes); exactly one rollout must contain a
+  user message (`type:"response_item"`, `payload.type:"message"`,
+  `payload.role:"user"`, `input_text` content) with this Dispatch's Orca
+  preamble; none or several are UNVERIFIABLE. It copies that file to the new
+  absolute unlinked `SNAPSHOT_OUT` and prints `{model_evidence, model, source}`
+  with the reference `{kind:"codex-rollout",path,sha256}`. C6 binds the copy:
+  Codex writes each turn's `type:"turn_context"` row (`payload.model`,
+  `payload.cwd`) just before that turn's user message, so the window starts at
+  the `turn_context` directly preceding the preamble message (no message
+  between them) and ends before the `turn_context` that opens the next
+  Dispatch's preamble turn (or before that preamble itself). Every
+  `turn_context` in the window needs a nonempty model and a `cwd` inside
+  `terminal.worktreePath` (whose `terminal.worktreeId` equals the workspace);
+  exactly one distinct model is the proof's model, several are conflicting,
+  none is UNVERIFIABLE. One rollout file is one Codex session; the copy does
+  not prove which model generated each output beyond these per-turn records.
 
 Actual model-to-family mapping lives only in roles.md. C5 write provenance points
 to these hashed observations; unknown or mixed authors need independent coverage.

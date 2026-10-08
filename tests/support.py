@@ -564,7 +564,7 @@ class ProtocolFixture(VerificationFixture):
         data = read_json(ref['path']); data['result']['projection']['provider']['id'] = 'antigravity'
         return self.save(data)
 
-    def agy_home(self, root, conversation, task_id, dispatch_id, models=('gemini-3.8-flash-high',), created=None):
+    def agy_home(self, root, conversation, task_id, dispatch_id, models=('gemini-3.8-flash-high',), created=None, created_at=None, after=()):
         """Antigravity CLI data dir: brain/<conversation>/.../transcript.jsonl plus one process log."""
         logs = Path(root) / 'brain' / conversation / '.system_generated' / 'logs'; logs.mkdir(parents=True, exist_ok=True)
         preamble = ('<USER_REQUEST>\nYou are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n'
@@ -572,6 +572,9 @@ class ProtocolFixture(VerificationFixture):
                     ' --type worker_done --task-id ' + task_id + ' --dispatch-id ' + dispatch_id + '\n</USER_REQUEST>')
         rows = [dict(step_index=0, source='USER_EXPLICIT', type='USER_INPUT', status='DONE', content=preamble),
                 dict(step_index=1, source='MODEL', type='PLANNER_RESPONSE', status='DONE', content='ok')]
+        if created_at is not None:  # real transcripts stamp every step in UTC seconds
+            for row in rows: row['created_at'] = created_at
+        rows += list(after)
         (logs / 'transcript.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows), encoding='utf-8')
         (Path(root) / 'log').mkdir(exist_ok=True)
         lines = ['I0927 02:04:47.302640       1 model_resolver.go:93] Resolving model ' + m for m in models]
@@ -591,6 +594,31 @@ class ProtocolFixture(VerificationFixture):
         rows += [dict(type='assistant', sessionId='fixture-session', cwd=cwd, message=dict(role='assistant', model=m, content=[]))
                  for m in models]
         Path(path).write_text(''.join(json.dumps(r) + '\n' for r in list(rows) + list(after)), encoding='utf-8')
+        return Path(path)
+
+    def codex_observation(self, dispatch_id, task_id, model='gpt-6-luna'):
+        """Orca worker-show for a Codex Path B worker: Orca reports provider.model."""
+        ref = self.claude_observation(dispatch_id, task_id, model=model)
+        data = read_json(ref['path']); data['result']['projection']['provider']['id'] = 'codex'
+        return self.save(data)
+
+    def codex_rollout(self, path, task_id, dispatch_id, models=('gpt-6-luna',), cwd=None, timestamp='2026-10-05T05:01:00.000Z', after=()):
+        """Codex rollout JSONL: each turn writes turn_context (model, cwd) just before its user message; the
+        first turn delivers the Orca preamble, later turns are follow-ups of the same Dispatch."""
+        preamble = ('You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n'
+                    'Your task ID is: ' + task_id + '\n  orca orchestration send --from ' + self.CLAUDE_HANDLE +
+                    ' --type worker_done --task-id ' + task_id + ' --dispatch-id ' + dispatch_id + ' --outcome succeeded\n')
+        cwd = cwd or str(self.git.root)
+        def message(role, text):
+            kind = 'output_text' if role == 'assistant' else 'input_text'
+            return dict(timestamp=timestamp, type='response_item', payload=dict(type='message', role=role, content=[dict(type=kind, text=text)]))
+        rows = [dict(timestamp=timestamp, type='session_meta', payload=dict(id='fixture-codex-session', cwd=cwd, source='cli')),
+                message('user', '# AGENTS.md instructions for the fixture')]
+        for i, model in enumerate(models):
+            rows.append(dict(timestamp=timestamp, type='turn_context', payload=dict(turn_id='fixture-turn-' + str(i), cwd=cwd, model=model)))
+            rows += [message('user', preamble if i == 0 else 'continue'), message('assistant', 'ok')]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(''.join(json.dumps(r) + '\n' for r in rows + list(after)), encoding='utf-8')
         return Path(path)
 
     def fleet(self, workers=(), **paging):

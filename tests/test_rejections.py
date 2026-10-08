@@ -273,6 +273,7 @@ class RejectionTests(unittest.TestCase):
         run('migrate', proposal, code=1, reason='usage: protocol-state migrate')
         run('claude-model-evidence', proposal, code=1, reason='usage: protocol-state claude-model-evidence')
         run('antigravity-model-evidence', proposal, code=1, reason='usage: protocol-state antigravity-model-evidence')
+        run('codex-model-evidence', proposal, code=1, reason='usage: protocol-state codex-model-evidence')
         run('migrate', proposal, f.workspace / 'migrated.json', code=2, reason='not a schema 1 state')
 
     def test_model_evidence_builder_rejections(self):

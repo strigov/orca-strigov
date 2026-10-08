@@ -14,7 +14,7 @@ from posix_runtime import artifact_path
 from protocol_facts import (ran, Rejected, require, need, ref, record, line_json, REVIEW, WRITE, TOKENS, report_fields, plan_read,
                             plan_name, artifact, fresh, fleet_workers, authors, evidence_records, failure_records, model_matches,
                             actual_model, family, known_families, observation, claude_model_evidence, antigravity_model_evidence,
-                            checked, entry, manifest_files, step_base, values, candidate, synthesis)
+                            codex_model_evidence, checked, entry, manifest_files, step_base, values, candidate, synthesis)
 
 CAPS = {"plan_review": 4, "fused_review": 4, "final_review": 2, "gate_fix": 2}
 GOOD = {"plan-reviewer": ["APPROVED"], "gate": ["GATE_OK"], "review-primary": ["REVIEW_OK"], "review-control": ["REVIEW_OK"],
@@ -786,7 +786,8 @@ def main(args):
         if args and args[0] in ("summary", "migrate"):
             import protocol_tools
             return getattr(protocol_tools, args[0])(args)
-        commands = {"claude-model-evidence": claude_model_evidence, "antigravity-model-evidence": antigravity_model_evidence}
+        commands = {"claude-model-evidence": claude_model_evidence, "antigravity-model-evidence": antigravity_model_evidence,
+                    "codex-model-evidence": codex_model_evidence}
         if args and args[0] in commands: return commands[args[0]](args)
         require(len(args) in (2, 3) and args[0] == "validate", "usage: protocol-state validate INPUT_JSON [RESUME_OUT]")
         data = v.load(args[1]); state, decision = validate(data)

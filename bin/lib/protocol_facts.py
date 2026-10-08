@@ -512,7 +512,75 @@ def agy_log_model(data, conversation):
     return next(iter(models))
 
 
+def agy_completion_model(observed, proof, completed_at):
+    """Recovery: this Dispatch's transcript window reaches completion; the process log resolved one model."""
+    need(proof, ("log", "conversation_id"))
+    d = observed.get("dispatch", {}); rows = transcript_rows(ref(proof))
+    starts = [i for i, row in enumerate(rows) if agy_preamble_text(row) is not None and preamble_binds(agy_preamble_text(row), d)]
+    require(starts, "no Orca preamble for this Dispatch in Antigravity transcript", 2)
+    model = agy_log_model(ref_bytes(proof["log"]), proof["conversation_id"])
+    through_completion = False
+    for row in rows[starts[0]:]:
+        text = agy_preamble_text(row)
+        if text is not None and not preamble_binds(text, d): break  # the next Dispatch owns the rest
+        if row.get("created_at") is not None and utc_seconds(row["created_at"]) >= utc_seconds(completed_at):
+            through_completion = True; break
+    require(through_completion, "model proof does not cover Dispatch completion", 2)
+    return model
+
+
+def codex_payload(row):
+    payload = row.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def codex_preamble_text(row):
+    payload = codex_payload(row)
+    if row.get("type") != "response_item" or payload.get("type") != "message" or payload.get("role") != "user": return None
+    content = payload.get("content")
+    if isinstance(content, list):
+        content = "\n".join(x.get("text", "") for x in content if isinstance(x, dict) and x.get("type") == "input_text")
+    return content if isinstance(content, str) and ORCA_PREAMBLE in content else None
+
+
+def codex_turn_start(rows, i):
+    """The turn_context Codex wrote just before the user message at i (no message between them), else i."""
+    for j in range(i - 1, -1, -1):
+        if rows[j].get("type") == "turn_context": return j
+        if rows[j].get("type") == "response_item" and codex_payload(rows[j]).get("type") == "message": break
+    return i
+
+
+def codex_rollout_model(observed, rows, completed_at=None):
+    """The one model of every Codex turn from this Dispatch's Orca preamble until the next Dispatch's, in one rollout."""
+    d = observed.get("dispatch", {}); terminal = observed.get("terminal") or {}
+    root = terminal.get("worktreePath")
+    require(isinstance(root, str) and os.path.isabs(root) and
+            terminal.get("worktreeId") == (observed.get("projection", {}).get("workspace") or {}).get("id"), "missing Dispatch worktree path", 2)
+    starts = [i for i, row in enumerate(rows) if codex_preamble_text(row) is not None and preamble_binds(codex_preamble_text(row), d)]
+    require(starts, "no Orca preamble for this Dispatch in Codex rollout", 2)
+    end = next((i for i in range(starts[0] + 1, len(rows))
+                if codex_preamble_text(rows[i]) is not None and not preamble_binds(codex_preamble_text(rows[i]), d)), None)
+    end = len(rows) if end is None else codex_turn_start(rows, end)  # the next Dispatch owns its own turn context
+    models = set(); through_completion = False
+    for row in rows[codex_turn_start(rows, starts[0]):end]:
+        if completed_at is not None and not through_completion and row.get("timestamp") is not None:
+            through_completion = utc_seconds(row["timestamp"]) >= utc_seconds(completed_at)
+        if row.get("type") == "turn_context":
+            payload = codex_payload(row)
+            require(isinstance(payload.get("model"), str) and payload["model"], "missing Codex turn model", 2)
+            require(isinstance(payload.get("cwd"), str) and payload["cwd"], "missing Codex turn cwd", 2)
+            require(within(payload["cwd"], root), "Codex rollout cwd outside Dispatch worktree")
+            models.add(payload["model"])
+    require(len(models) <= 1, "conflicting actual model facts")
+    require(models, "no model turn after Orca preamble", 2)
+    require(completed_at is None or through_completion, "model proof does not cover Dispatch completion", 2)
+    return next(iter(models))
+
+
 def evidence_model(observed, proof):
+    # A Codex rollout proves completion only in explicit recovery; ordinary binds keep Orca's reported model.
+    require(proof.get("kind") != "codex-rollout", "codex-rollout model evidence only in observation recovery")
     provider = observed.get("projection", {}).get("provider") or {}
     require(provider.get("model") is None, "model evidence only for an unreported model")
     kind = proof.get("kind")
@@ -623,6 +691,10 @@ def recovered_observation(current, active, bound, binding=None):
     return result, old_model
 
 
+# Each provider's frozen proof that can cover a Dispatch through its completion (explicit recovery only).
+RECOVERY_PROOFS = {"claude-transcript": "claude", "antigravity-log": "antigravity", "codex-rollout": "codex"}
+
+
 def observation(refspec, active, recovery=None, binding=None):
     raw = record(refspec)
     require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
@@ -632,14 +704,16 @@ def observation(refspec, active, recovery=None, binding=None):
     require(d["id"] == active["dispatch_id"], "Dispatch observation mismatch")
     if recovery is not None:
         result, old_model = recovered_observation(result, active, recovery, binding)
-        # A start-time model does not prove absence of later switches. Require a full frozen session.
+        # A start-time model does not prove absence of later switches. Require a frozen proof through completion.
         proof = (refspec or {}).get("model_evidence"); need(proof, ("kind", "path", "sha256"))
-        require(proof["kind"] == "claude-transcript" and result["projection"]["provider"]["id"] == "claude",
-                "recovery requires completion-covering Claude transcript", 2)
+        require(isinstance(proof["kind"], str) and proof["kind"] in RECOVERY_PROOFS, "recovery requires a completion-covering model proof", 2)
+        require(RECOVERY_PROOFS[proof["kind"]] == result["projection"]["provider"]["id"], "model evidence kind does not match provider")
         require(refspec.get("start") is None and refspec.get("origin_start") is None, "model evidence with a launch receipt")
         completed_at = result["dispatch"].get("completedAt")
         require(isinstance(completed_at, str) and completed_at, "missing Dispatch completion time", 2)
-        model = transcript_model(result, transcript_rows(ref(proof)), completed_at)
+        if proof["kind"] == "claude-transcript": model = transcript_model(result, transcript_rows(ref(proof)), completed_at)
+        elif proof["kind"] == "antigravity-log": model = agy_completion_model(result, proof, completed_at)
+        else: model = codex_rollout_model(result, transcript_rows(ref(proof)), completed_at)
         require(model_matches(old_model, model) and model_matches(result["projection"]["provider"]["model"], model),
                 "conflicting actual model facts")
         require(model_matches(active["model"], model), "actual completion differs from proposal")
@@ -703,11 +777,43 @@ def frozen(path, data):
     return dict(path=str(path), sha256=v.digest(data))
 
 
-def antigravity_model_evidence(args):
-    """Freeze the Antigravity conversation transcript bound to this Dispatch and its CLI process log."""
-    require(len(args) == 3, "usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT")
+RECOVERY_IDENTITY = ("id", "taskId", "runId", "assigneeHandle", "processIncarnation")
+
+
+def builder_observation(args, bound_at):
+    """The observation a builder locates proof for. With a bound observation JSON (restart recovery), its provider id,
+    workspace id and terminal facts fill only what the current receipt lost; the Dispatch identity must be the same
+    and present current facts must agree. Validation repeats every recovery check on the hashed receipts."""
     raw = v.load(args[1]); require(raw.get("ok") is True, "unsuccessful Orca observation", 2)
     observed = raw.get("result", {}); need(observed, ("dispatch", "projection"))
+    if len(args) <= bound_at: return observed
+    old = v.load(args[bound_at]); require(old.get("ok") is True, "unsuccessful bound observation", 2)
+    prior = old.get("result", {}); need(prior, ("dispatch", "projection"))
+    require(isinstance(prior["dispatch"], dict) and isinstance(prior["projection"], dict), "malformed bound observation", 2)
+    for key in RECOVERY_IDENTITY:
+        now, then = observed["dispatch"].get(key), prior["dispatch"].get(key)
+        require(isinstance(now, str) and now and isinstance(then, str) and then, "missing recovery identity: " + key, 2)
+        require(now == then, "bound observation identity mismatch: " + key)
+    view = copy.deepcopy(observed)
+    for target, historic, keys, label in ((view["projection"], prior["projection"].get("provider"), ("id",), "provider"),
+                                         (view["projection"], prior["projection"].get("workspace"), ("id",), "workspace"),
+                                         (view, prior.get("terminal"), ("handle", "ptyId", "incarnationId", "worktreeId", "worktreePath"), "terminal")):
+        facts = target.get(label)
+        require(facts is None or isinstance(facts, dict), "malformed current " + label, 2)
+        require(historic is None or isinstance(historic, dict), "malformed bound " + label, 2)
+        facts = {} if facts is None else facts; target[label] = facts
+        for key in keys:
+            value = (historic or {}).get(key)
+            if value is None: continue
+            require(facts.get(key) is None or facts[key] == value, "conflicting current " + label + ": " + key)
+            facts[key] = value
+    return view
+
+
+def antigravity_model_evidence(args):
+    """Freeze the Antigravity conversation transcript bound to this Dispatch and its CLI process log."""
+    require(len(args) in (3, 4), "usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]")
+    observed = builder_observation(args, 3)
     provider = observed["projection"].get("provider") or {}
     require(provider.get("id") == "antigravity" and provider.get("model") is None, "model evidence only for an unreported model")
     out = artifact_path(args[2]); log_out = Path(str(out) + ".cli.log")
@@ -732,4 +838,34 @@ def antigravity_model_evidence(args):
     proof = dict(kind="antigravity-log", conversation_id=conversation, **frozen(out, transcript))
     proof["log"] = frozen(log_out, logs[0][1])
     print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(logs[0][0])), ensure_ascii=True))
+    return 0
+
+
+def codex_model_evidence(args):
+    """Freeze the one Codex rollout that received this Dispatch's preamble (explicit restart recovery only)."""
+    require(len(args) in (3, 4), "usage: protocol-state codex-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]")
+    observed = builder_observation(args, 3); d = observed["dispatch"]
+    require((observed["projection"].get("provider") or {}).get("id") == "codex", "model evidence kind does not match provider")
+    need(d, ("id", "taskId", "assigneeHandle"))
+    require(isinstance(d["id"], str) and d["id"], "missing recovery identity: id", 2)
+    out = artifact_path(args[2])
+    require(Path(args[2]).is_absolute() and out.parent.is_dir() and not out.exists(), "snapshot output must be a new absolute file", 2)
+    require(not any(x.is_symlink() for x in (out, *out.parents)), "linked snapshot output", 2)
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    since = utc_seconds(d.get("createdAt")) - 300
+    found = []
+    for path in sorted((home / "sessions").glob("*/*/*/rollout-*.jsonl")):
+        if path.is_symlink() or not path.is_file() or path.stat().st_mtime < since: continue
+        data = path.read_bytes()
+        # Live rollouts of other sessions keep growing; parse only those naming this Dispatch next to an Orca preamble.
+        if ORCA_PREAMBLE.encode() not in data or d["id"].encode() not in data: continue
+        rows = transcript_rows(data.decode("utf-8-sig").replace("\r\n", "\n"))
+        if any(codex_preamble_text(r) is not None and preamble_binds(codex_preamble_text(r), d) for r in rows):
+            found.append((path, data, rows))
+    require(found, "no Codex rollout with this Dispatch preamble", 2)
+    require(len(found) == 1, "several Codex rollouts claim this Dispatch: " + ", ".join(str(x[0]) for x in found), 2)
+    path, data, rows = found[0]
+    model = codex_rollout_model(observed, rows)
+    proof = dict(kind="codex-rollout", **frozen(out, data))
+    print("VALID"); print(json.dumps(dict(model_evidence=proof, model=model, source=str(path)), ensure_ascii=True))
     return 0

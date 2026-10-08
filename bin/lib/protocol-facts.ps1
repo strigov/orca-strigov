@@ -244,6 +244,8 @@ function P-Checked($item,$finding,[string]$key='check') {
   if ($stdout.Groups[1].Value -ceq 'exactly') { return $out.TrimEnd([char]10) -ceq $stdout.Groups[2].Value };return $out.Contains($stdout.Groups[2].Value)
 }
 $POrcaPreamble='You are working inside Orca, a multi-agent IDE. You are a dispatched worker.'
+# Each provider's frozen proof that can cover a Dispatch through its completion (explicit recovery only).
+$PRecoveryProofs=V-Map;$PRecoveryProofs['claude-transcript']='claude';$PRecoveryProofs['antigravity-log']='antigravity';$PRecoveryProofs['codex-rollout']='codex'
 function P-RolesFact([string]$label) { return ,(P-Line ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../skills/orca-dev/roles.md'),$VUtf8).TrimStart([char]0xfeff)) $label) }
 function P-ModelMatches($proposed,$actual) {
   # A Claude CLI alias names a model tier; the transcript records its full id.
@@ -389,7 +391,68 @@ function P-AgyLogModel([byte[]]$bytes,[string]$conversation) {
 function P-AgyBinds($o,$rows) {
   foreach ($row in $rows) { $text=P-AgyPreambleText $row;if ($null -ne $text -and (P-PreambleBinds $text $o.dispatch)) { return $true } };return $false
 }
+function P-AgyCompletionModel($o,$proof,$completedAt) {
+  # Recovery: this Dispatch's transcript window reaches completion; the process log resolved one model.
+  P-Need $proof @('log','conversation_id');$d=$o.dispatch;$rows=P-TranscriptRows (P-Ref $proof);$first=-1
+  for ($i=0;$i -lt $rows.Count;$i++) { $text=P-AgyPreambleText $rows[$i];if ($null -ne $text -and (P-PreambleBinds $text $d)) { $first=$i;break } }
+  P-Require ($first -ge 0) 'no Orca preamble for this Dispatch in Antigravity transcript' 2
+  $model=P-AgyLogModel (P-RefBytes $proof.log) $proof.conversation_id;$throughCompletion=$false
+  for ($i=$first;$i -lt $rows.Count;$i++) {
+    $text=P-AgyPreambleText $rows[$i]
+    if ($null -ne $text -and -not (P-PreambleBinds $text $d)) { break }  # the next Dispatch owns the rest
+    $stamp=P-Field $rows[$i] 'created_at'
+    if ($null -ne $stamp -and (P-UtcSeconds $stamp) -ge (P-UtcSeconds $completedAt)) { $throughCompletion=$true;break }
+  }
+  P-Require $throughCompletion 'model proof does not cover Dispatch completion' 2;return $model
+}
+function P-CodexPayload($row) { $payload=P-Field $row 'payload';if ($payload -is [Collections.IDictionary]) { return ,$payload };return ,(V-Map) }
+function P-CodexPreambleText($row) {
+  $payload=P-CodexPayload $row
+  if ((P-Field $row 'type') -cne 'response_item' -or (P-Field $payload 'type') -cne 'message' -or (P-Field $payload 'role') -cne 'user') { return $null }
+  $content=P-Field $payload 'content'
+  if ($content -is [Collections.IList]) { $content=(@($content | Where-Object { (P-Field $_ 'type') -ceq 'input_text' } | ForEach-Object { [string](P-Field $_ 'text' '') }) -join "`n") }
+  if ($content -is [string] -and $content.Contains($POrcaPreamble)) { return $content };return $null
+}
+function P-CodexTurnStart($rows,[int]$i) {
+  # The turn_context Codex wrote just before the user message at i (no message between them), else i.
+  for ($j=$i-1;$j -ge 0;$j--) {
+    $type=P-Field $rows[$j] 'type'
+    if ($type -ceq 'turn_context') { return $j }
+    if ($type -ceq 'response_item' -and (P-Field (P-CodexPayload $rows[$j]) 'type') -ceq 'message') { break }
+  };return $i
+}
+function P-CodexRolloutModel($o,$rows,$completedAt=$null) {
+  # The one model of every Codex turn from this Dispatch's Orca preamble until the next Dispatch's, in one rollout.
+  $d=$o.dispatch;$terminal=V-Get $o 'terminal';$root=V-Get $terminal 'worktreePath'
+  P-Require ($root -is [string] -and [IO.Path]::IsPathRooted($root) -and
+    (V-Get $terminal 'worktreeId') -ceq (V-Get (V-Get $o.projection 'workspace') 'id')) 'missing Dispatch worktree path' 2
+  $first=-1
+  for ($i=0;$i -lt $rows.Count;$i++) { $text=P-CodexPreambleText $rows[$i];if ($null -ne $text -and (P-PreambleBinds $text $d)) { $first=$i;break } }
+  P-Require ($first -ge 0) 'no Orca preamble for this Dispatch in Codex rollout' 2
+  $end=$rows.Count
+  for ($i=$first+1;$i -lt $rows.Count;$i++) {
+    $text=P-CodexPreambleText $rows[$i]
+    if ($null -ne $text -and -not (P-PreambleBinds $text $d)) { $end=P-CodexTurnStart $rows $i;break }  # the next Dispatch owns its own turn context
+  }
+  $models=New-Object 'Collections.Generic.HashSet[string]';$throughCompletion=$false
+  for ($i=(P-CodexTurnStart $rows $first);$i -lt $end;$i++) {
+    $row=$rows[$i];$stamp=P-Field $row 'timestamp'
+    if ($null -ne $completedAt -and -not $throughCompletion -and $null -ne $stamp) { $throughCompletion=(P-UtcSeconds $stamp) -ge (P-UtcSeconds $completedAt) }
+    if ((P-Field $row 'type') -ceq 'turn_context') {
+      $payload=P-CodexPayload $row;$model=P-Field $payload 'model';$cwd=P-Field $payload 'cwd'
+      P-Require ($model -is [string] -and $model) 'missing Codex turn model' 2
+      P-Require ($cwd -is [string] -and $cwd) 'missing Codex turn cwd' 2
+      P-Require (P-Within $cwd $root) 'Codex rollout cwd outside Dispatch worktree'
+      [void]$models.Add($model)
+    }
+  }
+  P-Require ($models.Count -le 1) 'conflicting actual model facts'
+  P-Require ($models.Count -eq 1) 'no model turn after Orca preamble' 2
+  P-Require ($null -eq $completedAt -or $throughCompletion) 'model proof does not cover Dispatch completion' 2;return @($models)[0]
+}
 function P-EvidenceModel($o,$proof) {
+  # A Codex rollout proves completion only in explicit recovery; ordinary binds keep Orca's reported model.
+  P-Require ((V-Get $proof 'kind') -cne 'codex-rollout') 'codex-rollout model evidence only in observation recovery'
   $provider=V-Get $o.projection 'provider' @{}
   P-Require ($null -eq (V-Get $provider 'model')) 'model evidence only for an unreported model'
   $kind=V-Get $proof 'kind'
@@ -503,10 +566,13 @@ function P-Observation($r,$active,$recovery=$null,$binding=$null) {
   if ($null -ne $recovery) {
     $view=P-RecoveredObservation $o $active $recovery $binding;$o=$view.result
     $proof=V-Get $r 'model_evidence';P-Need $proof @('kind','path','sha256')
-    P-Require ($proof.kind -ceq 'claude-transcript' -and $o.projection.provider.id -ceq 'claude') 'recovery requires completion-covering Claude transcript' 2
+    P-Require ($proof.kind -is [string] -and $PRecoveryProofs.Contains($proof.kind)) 'recovery requires a completion-covering model proof' 2
+    P-Require ($PRecoveryProofs[$proof.kind] -ceq $o.projection.provider.id) 'model evidence kind does not match provider'
     P-Require ($null -eq (V-Get $r 'start') -and $null -eq (V-Get $r 'origin_start')) 'model evidence with a launch receipt'
     $completedAt=V-Get $o.dispatch 'completedAt';P-Require ($completedAt -is [string] -and $completedAt) 'missing Dispatch completion time' 2
-    $model=P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt
+    if ($proof.kind -ceq 'claude-transcript') { $model=P-TranscriptModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt }
+    elseif ($proof.kind -ceq 'antigravity-log') { $model=P-AgyCompletionModel $o $proof $completedAt }
+    else { $model=P-CodexRolloutModel $o (P-TranscriptRows (P-Ref $proof)) $completedAt }
     P-Require ((P-ModelMatches $view.model $model) -and (P-ModelMatches $o.projection.provider.model $model)) 'conflicting actual model facts'
     P-Require (P-ModelMatches $active.model $model) 'actual completion differs from proposal'
     $o.projection.provider.model=$model  # verified full id; original receipts stay unchanged
@@ -576,9 +642,8 @@ function P-Frozen([string]$path,[byte[]]$bytes) {
 }
 function P-AgyEvidence($cli) {
   # Freeze the Antigravity conversation transcript bound to this Dispatch and its CLI process log.
-  P-Require ($cli.Count -eq 3) 'usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT'
-  $raw=P-Decode ([IO.File]::ReadAllText($cli[1],$VUtf8).TrimStart([char]0xfeff));P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2
-  $o=$raw.result;P-Need $o @('dispatch','projection');$provider=V-Get $o.projection 'provider' @{}
+  P-Require ($cli.Count -in @(3,4)) 'usage: protocol-state antigravity-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]'
+  $o=P-BuilderObservation $cli 3;$provider=V-Get $o.projection 'provider' @{}
   P-Require ((V-Get $provider 'id') -ceq 'antigravity' -and $null -eq (V-Get $provider 'model')) 'model evidence only for an unreported model'
   $out=$cli[2];$logOut=$out+'.cli.log'
   P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out) -and -not [IO.File]::Exists($logOut)) 'snapshot output must be a new absolute file' 2
@@ -610,4 +675,71 @@ function P-AgyEvidence($cli) {
   $proof=[ordered]@{kind='antigravity-log';conversation_id=$conversation}
   $t=P-Frozen $out $found[0].bytes;$proof['path']=$t.path;$proof['sha256']=$t.sha256;$proof['log']=P-Frozen $logOut $logs[0].bytes
   [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$logs[0].path}));exit 0
+}
+function P-BuilderObservation($cli,[int]$boundAt) {
+  # The observation a builder locates proof for. With a bound observation JSON (restart recovery), its provider id,
+  # workspace id and terminal facts fill only what the current receipt lost; the Dispatch identity must be the same
+  # and present current facts must agree. Validation repeats every recovery check on the hashed receipts.
+  $raw=P-Decode ([IO.File]::ReadAllText($cli[1],$VUtf8).TrimStart([char]0xfeff));P-Require ($raw.ok -eq $true) 'unsuccessful Orca observation' 2
+  $o=$raw.result;P-Need $o @('dispatch','projection')
+  if ($cli.Count -le $boundAt) { return ,$o }
+  $old=P-Decode ([IO.File]::ReadAllText($cli[$boundAt],$VUtf8).TrimStart([char]0xfeff));P-Require ($old.ok -eq $true) 'unsuccessful bound observation' 2
+  $prior=V-Get $old 'result' @{};P-Need $prior @('dispatch','projection')
+  P-Require ($prior.dispatch -is [Collections.IDictionary] -and $prior.projection -is [Collections.IDictionary]) 'malformed bound observation' 2
+  foreach ($key in 'id','taskId','runId','assigneeHandle','processIncarnation') {
+    $now=V-Get $o.dispatch $key;$then=V-Get $prior.dispatch $key
+    P-Require ($now -is [string] -and $now -and $then -is [string] -and $then) ('missing recovery identity: '+$key) 2
+    P-Require ($now -ceq $then) ('bound observation identity mismatch: '+$key)
+  }
+  $view=P-Decode (V-Json $o)
+  $groups=@(@{target=$view.projection;historic=(V-Get $prior.projection 'provider');keys=@('id');label='provider'},
+    @{target=$view.projection;historic=(V-Get $prior.projection 'workspace');keys=@('id');label='workspace'},
+    @{target=$view;historic=(V-Get $prior 'terminal');keys=@('handle','ptyId','incarnationId','worktreeId','worktreePath');label='terminal'})
+  foreach ($group in $groups) {
+    $facts=V-Get $group.target $group.label
+    P-Require ($null -eq $facts -or $facts -is [Collections.IDictionary]) ('malformed current '+$group.label) 2
+    P-Require ($null -eq $group.historic -or $group.historic -is [Collections.IDictionary]) ('malformed bound '+$group.label) 2
+    if ($null -eq $facts) { $facts=V-Map };$group.target[$group.label]=$facts
+    foreach ($key in $group.keys) {
+      $value=V-Get $group.historic $key;if ($null -eq $value) { continue }
+      $now=V-Get $facts $key
+      P-Require ($null -eq $now -or $now -ceq $value) ('conflicting current '+$group.label+': '+$key)
+      $facts[$key]=$value
+    }
+  };return ,$view
+}
+function P-CodexEvidence($cli) {
+  # Freeze the one Codex rollout that received this Dispatch's preamble (explicit restart recovery only).
+  P-Require ($cli.Count -in @(3,4)) 'usage: protocol-state codex-model-evidence OBSERVATION_JSON SNAPSHOT_OUT [BOUND_OBSERVATION_JSON]'
+  $o=P-BuilderObservation $cli 3;$d=$o.dispatch
+  P-Require ((V-Get (V-Get $o.projection 'provider') 'id') -ceq 'codex') 'model evidence kind does not match provider'
+  P-Need $d @('id','taskId','assigneeHandle')
+  P-Require ($d.id -is [string] -and $d.id) 'missing recovery identity: id' 2
+  $out=$cli[2]
+  P-Require ([IO.Path]::IsPathRooted($out) -and [IO.Directory]::Exists([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($out))) -and -not [IO.File]::Exists($out) -and -not [IO.Directory]::Exists($out)) 'snapshot output must be a new absolute file' 2
+  try { V-Safe $out } catch { P-Require $false 'linked snapshot output' 2 }
+  $home2=if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.codex' }
+  $since=(P-UtcSeconds (V-Get $d 'createdAt'))-300
+  $files=New-Object Collections.ArrayList;$sessions=Join-Path $home2 'sessions'
+  if ([IO.Directory]::Exists($sessions)) {
+    # sessions/YYYY/MM/DD/rollout-*.jsonl, as Python's */*/*/rollout-*.jsonl
+    foreach ($year in [IO.Directory]::GetDirectories($sessions)) { foreach ($month in [IO.Directory]::GetDirectories($year)) {
+      foreach ($day in [IO.Directory]::GetDirectories($month)) { foreach ($path in [IO.Directory]::GetFiles($day,'rollout-*.jsonl')) { [void]$files.Add($path) } } } }
+  }
+  $found=@()
+  foreach ($path in @($files | Sort-Object)) {
+    if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -or
+        ([DateTimeOffset]([IO.File]::GetLastWriteTimeUtc($path))).ToUnixTimeMilliseconds()/1000.0 -lt $since) { continue }
+    $bytes=[IO.File]::ReadAllBytes($path);$loose=[Text.Encoding]::UTF8.GetString($bytes)
+    # Live rollouts of other sessions keep growing; parse only those naming this Dispatch next to an Orca preamble.
+    if (-not $loose.Contains($POrcaPreamble) -or -not $loose.Contains($d.id)) { continue }
+    $rows=P-TranscriptRows ($VUtf8.GetString($bytes).TrimStart([char]0xfeff).Replace("`r`n","`n"))
+    $bound=@($rows | Where-Object { $text=P-CodexPreambleText $_;$null -ne $text -and (P-PreambleBinds $text $d) })
+    if ($bound.Count) { $found+=,@{path=$path;bytes=$bytes;rows=$rows} }
+  }
+  P-Require ($found.Count) 'no Codex rollout with this Dispatch preamble' 2
+  P-Require ($found.Count -eq 1) ('several Codex rollouts claim this Dispatch: '+(@($found | ForEach-Object { $_.path }) -join ', ')) 2
+  $model=P-CodexRolloutModel $o $found[0].rows
+  $proof=[ordered]@{kind='codex-rollout'};$t=P-Frozen $out $found[0].bytes;$proof['path']=$t.path;$proof['sha256']=$t.sha256
+  [Console]::WriteLine('VALID');[Console]::WriteLine((V-Json @{model_evidence=$proof;model=$model;source=$found[0].path}));exit 0
 }
