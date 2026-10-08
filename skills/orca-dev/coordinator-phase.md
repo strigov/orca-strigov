@@ -14,7 +14,7 @@ Before every implementer dispatch:
 
 Route by the phase's `Files`: frontend-only → `frontend-implementer`; else → `implementer` cascade (`roles.md`). `impl=` in the state line records which model is live. Fill `prompts/implementer-prompt.md` (first-round), `task-create`, attach per `orca-recipes.md` §2 (every fresh launch is Path B).
 
-**Implementer retention:** The implementer's terminal is retained across fix rounds until the phase is approved and committed; fix rounds re-inject into it (`dispatch --inject`). `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `fix round r<k>`) applies only to an Orca-owned terminal, i.e. a Path A reuse; a Path B terminal the coordinator created stays open per recipes §5 until its closing rule applies.
+**Implementer retention:** The implementer's terminal is retained across fix rounds until the phase is approved and committed; fix rounds re-inject into it (`dispatch --inject`) while `orca terminal show` does not report it `orphaned` (after an Orca restart a fix round starts a fresh terminal; recipes §2 lost injection). `orca orchestration worker-retain --dispatch <id> --json` (recording expected next action `fix round r<k>`) applies only to an Orca-owned terminal, i.e. a Path A reuse; a Path B terminal the coordinator created stays open per recipes §5 until its closing rule applies.
 
 Verdicts:
 - `DONE` → Step 3.5. `DONE_WITH_CONCERNS` → read the concerns in the report; correctness/scope → address before review; observations → note.
