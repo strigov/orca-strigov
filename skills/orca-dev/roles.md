@@ -42,14 +42,14 @@ Only the coordinator dispatches; workers never delegate (orca-recipes.md §0–�
 | `plan-reviewer` | 2 | codex `gpt-6-astra` `xhigh` (ordinary and complex plans; claude `opus` `xhigh` for a Run on the `astra` profile) | Astra unavailable → stop and ask the user (the only other family, Gemini, is not a plan reviewer here); never Opus — it authored the plan | no | fresh every substantive round (cap 4) |
 | `implementer` | 3, 4 fix rounds | **antigravity `gemini-3.8-flash-high`** (level `high` in the id; no `--effort`) | availability fallback → codex `gpt-6-luna` `max`; reasoning escalation (BLOCKED + diagnosis `NEEDS_MORE_REASONING`) → codex `gpt-6-astra` `high` in a FRESH terminal; justified hard implementation route: codex `gpt-6-astra` `xhigh` (explicit choice, announced) | yes | same terminal across fix rounds; a model change is always a new terminal |
 | `frontend-implementer` | 3, 4 fix rounds (frontend-only phases) | claude `opus` `high` for new UI / redesign; claude `sonnet` `medium` for simple tweaks | availability fallback → antigravity `gemini-3.8-flash-high` — announced | yes | same terminal across fix rounds |
-| `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.8-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker) | no | fresh |
+| `gate` | 3.5 | `bin/verify-gate` script (no model) | script `NO_COMMANDS` / `NEEDS_JUDGMENT` → antigravity `gemini-3.8-flash-high` `high` (a script `GATE_FAIL` goes back to the implementer, not to a worker); Gemini availability failure → codex `gpt-6-luna` `max`, announced | no | fresh |
 | `review-primary` | 4.1 | claude `opus` `high` | claude `opus` `xhigh` on `risk: SECURITY / DATA_LOSS` phases or in fused-loop round 4 (the last round before the cap; rounds > 4 do not exist); Opus unavailable → codex `gpt-6-astra` `high` only if independent of all authors — announced, otherwise an already allowed independent route or incomplete acceptance. Frontend phases (Claude wrote the code): see substitutions below | no | fresh every round |
 | `review-control` | 4.2 | codex `gpt-6-astra` `high` | implementer was a Codex model (Luna/Astra) → claude `opus` `high` (Astra never reviews OpenAI-written code; 4.1 and 4.2 are then both Opus in fresh terminals); Astra unavailable → claude `opus` `high` only if independent of all authors of the reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance | no | fresh every round |
 | `synthesizer` | 4.5 | antigravity `gemini-3.8-flash-high` `high` | codex `gpt-6-luna` `max` | `docs/reviews/*` only | fresh |
 | `review-final` | 5 | claude `opus` `high` | every phase written only by Claude (frontend-only plan) → codex `gpt-6-astra` `high`; Opus unavailable → codex `gpt-6-astra` `high` only if independent of all authors of each reviewed unit — announced, otherwise an already allowed independent route or incomplete acceptance. Mixed-author branch: independent assignments covering every unit | no | fresh every round (cap 2) |
 | `diagnosis` | BLOCKED / impasse summaries (`prompts/diagnosis-prompt.md`) | claude `opus` `high` | justified hard diagnosis route: codex `gpt-6-astra` `xhigh` (explicit choice, announced) | no | fresh |
 | `quickfix` | trivial path | antigravity `gemini-3.8-flash-high` `high` | codex `gpt-6-luna` `max` | yes | fresh |
-| `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.8-flash-high` `high` | — | no | fresh |
+| `integration-check` | parallel groups | `bin/verify-gate` script → antigravity `gemini-3.8-flash-high` `high` | Gemini availability failure → codex `gpt-6-luna` `max`, announced | no | fresh |
 
 ## Family-rule substitutions
 
@@ -78,6 +78,8 @@ State the profile in the Step 1 status line.
 A justified hard route `codex gpt-6-astra xhigh` may be chosen explicitly for complex tasks, announced with rationale. No model change on other diagnoses, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `NEEDS_AUTHORIZATION`, `GATE_FAIL` or `REVIEW_BLOCKING`. After a fallback the ledger and reports carry the context (`prompts/implementer-prompt.md` fresh-fallback re-brief). A retained terminal whose Task is durably settled is not an active writer.
 
 ## Provider notes
+
+`gpt-6-luna` always runs at `max` reasoning, in every role and every fallback; a Luna launch at any other level is a wrong launch, not a cheaper option. A fallback listed in the matrix is announced to the user, not asked for; ask only where the matrix says so or lists none.
 
 Every Codex launch passes an explicit `--model`: the user's `~/.codex/config.toml` defaults to `chatgpt-web/pro`, and an unqualified `codex` would route through the bridge. Bridge mechanics and incidents: [references/bridge-incidents.md](references/bridge-incidents.md), only when `--planner pro` is opted in. Antigravity's timer and login-race behaviour: orca-recipes.md §2 and §6.
 
