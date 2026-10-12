@@ -277,7 +277,7 @@ artifacts; confirm-commit and complete check currency inside the commit check.
 | `advance` | After a confirmed commit of this step/phase: next phase with `base` = that commit, or `final-review` after the last phase. Clears `accepted`, `active`, fused-review and gate-fix rounds. |
 | `finish-checkpoint` | `fleet`, current `artifact`; all phases committed. `final-review` → `delivery` (records `final_source`), `delivery` → `completion` (the gate's candidate must equal `final_source`). Clears `accepted`. |
 | `complete` | `fleet`, `artifact` whose candidate equals `final_source`, a separate `commit`; the commit check holds and the committed plan has top-level `status: done`. |
-| `extend-cap` | `authorization`: `{schema_version:1,run_id,phase,group,extra_rounds:1,findings,user_decision}` at a reached cap, naming accepted finding ids. One round per record. |
+| `extend-cap` | `authorization`: `{schema_version:1,run_id,phase,group,extra_rounds:1,findings,user_decision}` at a reached cap, naming accepted finding ids. For `plan_review` a `PLAN_WRONG` or `PHASE_TOO_LARGE` diagnosis accepted in this phase has no findings and is named `D-<its dispatch_id>`. One round per record; a record already used is rejected. |
 | `waive-independence` | `authorization`: `{schema_version:1,run_id,step,phase,files,reviewer_family,user_decision}` and the current package `artifact`; only files every known family authored. |
 
 `extend-cap` and `waive-independence` records are the user's words, saved
@@ -443,7 +443,9 @@ Caps: plan review 4 per plan (its extensions count in every phase, so a plan
 revision extended before a phase commit does not poison later phases), fused
 review 4 per phase, final review 2, consecutive gate fix 2 (an accepted
 GATE_OK resets the count). Only the user lifts a reached cap, one round per
-`extend-cap` record naming accepted findings (a gate failure is `G<r>-B1`).
+`extend-cap` record naming accepted findings (a gate failure is `G<r>-B1`; for the
+plan review, a `PLAN_WRONG` / `PHASE_TOO_LARGE` diagnosis is `D-<dispatch_id>`). A record
+lifts one cap once: replaying an already used record is rejected.
 
 ## Observations and actual model
 

@@ -571,7 +571,12 @@ function P-Validate($data) {
       $auth=P-UserRecord $data $s @('phase','group','extra_rounds','findings') @('phase') 'cap extension'
       P-Require ($PCaps.Contains([string]$auth.group) -and $auth.extra_rounds -eq 1) 'cap extension binding mismatch'
       P-Require ($s.rounds[$auth.group] -ge (P-Cap $s $auth.group)) 'cap extension before the cap is reached'
+      P-Require (-not @(@($s.cap_extensions) | Where-Object { $null -ne $_ -and $_.authorization.path -ceq $data.authorization.path }).Count) 'cap extension record already used'
       $known=@(foreach ($r in @($s.accepted)) { foreach ($f in @($r.findings)) { $f.id } })
+      if ($auth.group -ceq 'plan_review') {
+        # A diagnosis that sent this phase back to its plan has no findings: the extension names it by its Dispatch.
+        $known+=@(foreach ($r in @($s.accepted)) { if ($r.role -ceq 'diagnosis' -and $r.dispatch_id -and $r.token -cin @('PLAN_WRONG','PHASE_TOO_LARGE') -and (P-Eq $r.phase $auth.phase)) { 'D-'+$r.dispatch_id } })
+      }
       P-Require ($auth.findings -is [Array] -and $auth.findings.Count -and (P-Subset $auth.findings $known)) 'cap extension must name accepted findings'
       $s.cap_extensions=@(@($s.cap_extensions)+,([ordered]@{group=$auth.group;phase=$auth.phase;authorization=$data.authorization}))
     }

@@ -689,7 +689,13 @@ def validate(data):
         auth = user_record(data, state, ("phase", "group", "extra_rounds", "findings"), ("phase",), "cap extension")
         require(auth["group"] in CAPS and auth["extra_rounds"] == 1, "cap extension binding mismatch")
         require(state["rounds"][auth["group"]] >= cap(state, auth["group"]), "cap extension before the cap is reached")
+        require(not any((x.get("authorization") or {}).get("path") == data["authorization"]["path"] for x in state["cap_extensions"]),
+                "cap extension record already used")
         known = {f["id"] for r in state["accepted"] for f in r["findings"]}
+        if auth["group"] == "plan_review":
+            # A diagnosis that sent this phase back to its plan has no findings: the extension names it by its Dispatch.
+            known |= {"D-" + r["dispatch_id"] for r in state["accepted"] if r["role"] == "diagnosis" and r["dispatch_id"] and
+                      r["token"] in ("PLAN_WRONG", "PHASE_TOO_LARGE") and r["phase"] == auth["phase"]}
         require(isinstance(auth["findings"], list) and auth["findings"] and set(auth["findings"]) <= known, "cap extension must name accepted findings")
         state["cap_extensions"].append(dict(group=auth["group"], phase=auth["phase"], authorization=data["authorization"]))
     elif action == "waive-independence":

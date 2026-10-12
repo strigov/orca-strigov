@@ -322,9 +322,36 @@ class ProtocolTests(unittest.TestCase):
                     (dict(schema_version=1, action='extend-cap', state=early, authorization=auth()), 1, 'before the cap is reached')])
         self.batch([(self.case(action='extend-cap', authorization=auth()), 0, ''), (dispatch(), 0, '')], previous=True)
         self.assertEqual(f.state['rounds']['fused_review'], 5)
+        # One record lifts the cap once: replaying it after its round is consumed is rejected, a fresh record is not.
+        replay = self.case(action='extend-cap', authorization=f.state['cap_extensions'][-1]['authorization'])
+        self.batch([(replay, 1, 'cap extension record already used'),
+                    (self.case(action='extend-cap', authorization=auth(user_decision='6 раунд')), 0, '')])
         again = f.assignment('review-primary', 'Anthropic', round=5); again['dispatch_id'] = None; again['coverage'] = coverage
         f.state['accepted'].append(dict(f.state['accepted'][0], round=5))
         self.batch([(self.case(action='dispatch', proposed=again, artifact=art, fleet=f.fleet()), 1, 'substantive review needs a new round')])
+
+    def test_plan_review_extension_names_a_plan_wrong_diagnosis(self):
+        f = self.f; art, coverage = f.package_ref()
+        self.valid(f.report_input('review-primary', 'Anthropic', artifact=art, coverage=coverage))
+        base = copy.deepcopy(f.state['accepted'][0]); start = copy.deepcopy(f.state)
+        def diagnosis(token='PLAN_WRONG', phase='F1', dispatch_id='ctx_diag'):
+            return dict(base, role='diagnosis', token=token, phase=phase, dispatch_id=dispatch_id, findings=[], coverage={}, family='Anthropic')
+        def case(group='plan_review', findings=('D-ctx_diag',), entry=None, rounds=4):
+            state = copy.deepcopy(start); state['accepted'] = [entry or diagnosis()]
+            state['rounds']['plan_review'] = rounds; state['rounds']['fused_review'] = 4
+            auth = f.save(dict(schema_version=1, run_id='fixture-run', phase='F1', group=group, extra_rounds=1,
+                               findings=list(findings), user_decision='план: ещё один раунд ревью'))
+            return dict(schema_version=1, action='extend-cap', state=state, authorization=auth)
+        self.batch([(case(), 0, ''),
+                    (case(entry=diagnosis(token='PHASE_TOO_LARGE')), 0, ''),
+                    (case(entry=diagnosis(token='NEEDS_MORE_CONTEXT')), 1, 'must name accepted findings'),
+                    (case(entry=diagnosis(phase='F0')), 1, 'must name accepted findings'),
+                    (case(entry=diagnosis(dispatch_id=None), findings=('D-None',)), 1, 'must name accepted findings')])
+        self.batch([(case(findings=('D-ctx_other',)), 1, 'must name accepted findings'),
+                    (case(group='fused_review'), 1, 'must name accepted findings'),
+                    (case(rounds=3), 1, 'before the cap is reached')])
+        state = self.f.validate(case())[2]['state']
+        self.assertEqual(state['cap_extensions'][-1]['group'], 'plan_review')
 
     def test_summary_prints_compact_facts_of_state_or_proposal(self):
         f = self.f; state = self.valid(f.report_input())['state']
