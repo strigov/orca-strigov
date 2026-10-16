@@ -410,3 +410,188 @@ class NoFilesTests(unittest.TestCase):
         self.assertEqual(spawn(fake)[0], 0)
         self.assertEqual(call(orca_dev.cmd_close, ["term_9"], run=fake)[0], 0)
         self.assertEqual(sorted(p.name for p in tmp.iterdir()), before)
+
+
+install = load("install", ROOT / "install.py")
+
+
+class FakeRun:
+    """Stands in for install.run_cmd: maps (basename, *args) prefixes to (code, stdout)."""
+
+    def __init__(self, table=None):
+        self.table = table or {}
+        self.calls = []
+
+    def __call__(self, argv, timeout):
+        self.calls.append(list(argv))
+        key = (os.path.basename(argv[0]),) + tuple(argv[1:])
+        for size in range(len(key), 0, -1):
+            if key[:size] in self.table:
+                return self.table[key[:size]]
+        return 127, ""
+
+
+def which_all(name):
+    return "/usr/bin/" + name
+
+
+def which_none(name):
+    return None
+
+
+READY = json.dumps({"result": {"runtime": {"state": "ready"}}})
+
+
+class InstallTests(unittest.TestCase):
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.home, True)
+
+    def skill(self, directory, name):
+        path = self.home / directory / name
+        path.mkdir(parents=True)
+        (path / "SKILL.md").write_text("---\nname: %s\n---\n" % name, encoding="utf-8")
+
+    def native(self):
+        self.skill(".agents/skills", "orchestration")
+        self.skill(".claude/skills", "orca-cli")
+
+    def run_main(self, argv, run=None, which=which_none, windows=False):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = install.main(argv, home=self.home, run=run or FakeRun(), which=which, windows=windows)
+        return code, out.getvalue(), err.getvalue()
+
+    def snapshot(self):
+        return {str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
+
+    def test_missing_native_skills_prints_install_command_and_exits_1(self):
+        self.skill(".codex/skills", "orchestration")
+        before = self.snapshot()
+        code, out, err = self.run_main([])
+        self.assertEqual(code, 1)
+        self.assertIn("orca-cli", out)
+        self.assertIn("\norca skills install --skill orchestration --skill orca-cli --agent codex,claude-code\n", out)
+        self.assertEqual(self.snapshot(), before)
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks needs extra privileges on Windows")
+    def test_vendored_strigov_copy_is_not_native(self):
+        vendored = self.home / "src" / "orca-strigov" / "skills" / "orchestration"
+        vendored.mkdir(parents=True)
+        (vendored / "SKILL.md").write_text("x", encoding="utf-8")
+        (self.home / ".codex/skills").mkdir(parents=True)
+        os.symlink(str(vendored), str(self.home / ".codex/skills/orchestration"))
+        self.skill(".agents/skills", "orca-cli")
+        self.assertEqual(install.missing_native_skills(self.home), ["orchestration"])
+        self.assertIn(self.home / ".codex/skills/orchestration", install.stale_copies(self.home, "2.0.0"))
+
+    def test_clean_environment_exits_0(self):
+        self.native()
+        run = FakeRun({("orca", "--version"): (0, "1.4.224\n"), ("orca", "status"): (0, READY),
+                       ("codex", "--version"): (0, "codex-cli 0.162.1\n"), ("claude", "--version"): (0, "2.1.300\n"),
+                       ("agy", "--version"): (0, "1.0\n"), ("npm", "outdated"): (0, "{}")})
+        code, out, err = self.run_main([], run=run, which=which_all)
+        self.assertEqual(code, 0, out)
+        self.assertIn("orca runtime: ready", out)
+        self.assertTrue(out.rstrip().endswith("done."))
+
+    def test_update_notice_never_updates(self):
+        self.native()
+        run = FakeRun({("orca", "status"): (0, READY), ("npm", "outdated"): (0, json.dumps({"@openai/codex": {"current": "1", "latest": "2"}})),
+                       ("brew", "list"): (0, ""), ("brew", "outdated"): (0, "codex\n")})
+        code, out, err = self.run_main([], run=run, which=which_all)
+        self.assertIn("npm i -g @openai/codex@latest", out)
+        self.assertIn("brew upgrade --cask codex", out)
+        self.assertFalse([c for c in run.calls if {"upgrade", "install", "i", "update"} & set(c[1:2])])
+
+    def test_agy_missing_is_info_on_windows_only(self):
+        self.assertIn(("INFO", "agy not on PATH (native Windows): the implementer starts on its Luna fallback"),
+                      install.check_tools(FakeRun(), lambda n: None if n == "agy" else "/x/" + n, True))
+        self.assertIn(("WARN", "agy not on PATH"), install.check_tools(FakeRun(), lambda n: None if n == "agy" else "/x/" + n, False))
+
+    def test_repo_trust_for_repo_and_worktrees_preserves_other_keys_and_is_idempotent(self):
+        self.native()
+        repo = self.home / "work" / "repo"
+        worktree = self.home / "work" / "repo-wt"
+        repo.mkdir(parents=True)
+        worktree.mkdir(parents=True)
+        claude = self.home / ".claude.json"
+        claude.write_text(json.dumps({"keep": 7, "projects": {"/other": {"keep": True}}}), encoding="utf-8")
+        agy = self.home / ".gemini" / "antigravity-cli" / "settings.json"
+        agy.parent.mkdir(parents=True)
+        agy.write_text(json.dumps({"keep": [1, 2], "trustedWorkspaces": ["/other"]}), encoding="utf-8")
+        porcelain = "worktree %s\nHEAD abc\n\nworktree %s\nHEAD def\n" % (repo, worktree)
+        run = FakeRun({("git", "-C", str(repo), "worktree"): (0, porcelain)})
+        code, out, err = self.run_main(["--repo", str(repo)], run=run, which=lambda n: "/usr/bin/git" if n == "git" else None)
+        data = json.loads(claude.read_text(encoding="utf-8"))
+        self.assertEqual((data["keep"], data["projects"]["/other"]), (7, {"keep": True}))
+        for path in (repo, worktree):
+            self.assertTrue(data["projects"][str(path)]["hasTrustDialogAccepted"])
+        settings = json.loads(agy.read_text(encoding="utf-8"))
+        self.assertEqual(settings["keep"], [1, 2])
+        self.assertEqual(settings["trustedWorkspaces"], ["/other", str(repo), str(worktree)])
+        before = self.snapshot()
+        self.run_main(["--repo", str(repo)], run=run, which=lambda n: "/usr/bin/git" if n == "git" else None)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_check_mode_reports_and_writes_nothing(self):
+        self.native()
+        repo = self.home / "repo"
+        repo.mkdir()
+        (self.home / ".claude.json").write_text("{}", encoding="utf-8")
+        before = self.snapshot()
+        code, out, err = self.run_main(["--check", str(repo)])
+        self.assertEqual(code, 1)
+        self.assertIn("claude: %s not trusted" % repo, out)
+        self.assertIn("agy: ", out)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_missing_or_invalid_trust_files_are_warned_not_created(self):
+        self.native()
+        repo = self.home / "repo"
+        repo.mkdir()
+        (self.home / ".claude.json").write_text("[1]", encoding="utf-8")
+        code, out, err = self.run_main(["--repo", str(repo)])
+        self.assertIn("not valid JSON", out)
+        self.assertIn("run agy once, then re-run", out)
+        self.assertFalse((self.home / ".gemini").exists())
+        self.assertEqual((self.home / ".claude.json").read_text(encoding="utf-8"), "[1]")
+
+    def test_windows_keys(self):
+        self.assertEqual(install.claude_keys("C:\\repo", True), ["C:/repo"])
+        self.assertEqual(install.claude_keys("/x/repo", False), ["/x/repo"])
+        data = {"projects": {"C:\\old": {"hasTrustDialogAccepted": True}}}
+        changed, lines = install.trust_claude(data, ["C:\\old", "C:\\new"], True, True)
+        self.assertTrue(changed)
+        self.assertEqual(lines[0], ("OK", "claude: trust set for C:\\old"))
+        self.assertEqual(data["projects"]["C:/old"], {"hasTrustDialogAccepted": True})
+        self.assertEqual(data["projects"]["C:\\old"], {"hasTrustDialogAccepted": True})
+        self.assertEqual(data["projects"]["C:/new"], {"hasTrustDialogAccepted": True})
+        self.assertNotIn("C:\\new", data["projects"])
+        unchanged, check_lines = install.trust_claude(
+            {"projects": {"C:\\old": {"hasTrustDialogAccepted": True}}}, ["C:\\old"], True, False)
+        self.assertFalse(unchanged)
+        self.assertEqual(check_lines[0][0], "WARN")
+        agy = {}
+        install.trust_agy(agy, ["C:\\new"], True)
+        self.assertEqual(agy["trustedWorkspaces"], ["C:\\new"])
+
+    def test_stale_copies_listed_never_deleted(self):
+        self.native()
+        self.skill(".codex/skills", "orca-dev")
+        cache = self.home / ".codex/plugins/cache/personal/orca-strigov"
+        for name, version in ((".recovery-stage-20261006", "1.1.0"), ("1.1.0+codex.1", "1.1.0+codex.1"),
+                              ("2.0.0+codex.2", "2.0.0+codex.2")):
+            (cache / name / ".codex-plugin").mkdir(parents=True)
+            (cache / name / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+        stale = install.stale_copies(self.home, "2.0.0")
+        self.assertEqual(stale, [self.home / ".codex/skills/orca-dev", cache / ".recovery-stage-20261006", cache / "1.1.0+codex.1"])
+        before = self.snapshot()
+        code, out, err = self.run_main([])
+        self.assertEqual(code, 1)
+        self.assertIn("удалить вручную или ответить `y` на вопрос координатора при первом запуске", out)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_usage_errors_exit_2(self):
+        self.assertEqual(self.run_main(["--repo", str(self.home / "missing")])[0], 2)
+        self.assertEqual(self.run_main(["--bogus"])[0], 2)
