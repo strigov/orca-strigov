@@ -595,3 +595,112 @@ class InstallTests(unittest.TestCase):
     def test_usage_errors_exit_2(self):
         self.assertEqual(self.run_main(["--repo", str(self.home / "missing")])[0], 2)
         self.assertEqual(self.run_main(["--bogus"])[0], 2)
+
+
+SKILL_DIR = ROOT / "skills" / "orca-dev"
+PROMPTS_DIR = SKILL_DIR / "prompts"
+KIB = 1024
+# Brief name -> sorted <UPPER_SNAKE> tokens (Contracts, "Brief tokens").
+PROMPT_TOKENS = {
+    "spec-writer": ["REPO", "SPEC", "TASK"],
+    "spec-revise": ["FINDINGS", "SPEC"],
+    "spec-review": ["REPO", "SPEC", "TASK"],
+    "plan-writer": ["PLAN", "REPO", "SPEC"],
+    "plan-revise": ["FINDINGS", "PLAN"],
+    "plan-review": ["PLAN", "REPO", "SPEC"],
+    "implementer": ["CONTEXT", "REPO", "TASK", "VERIFY"],
+    "fix-round": ["FINDINGS", "VERIFY"],
+    "review-spec": ["CRITERIA", "DIFF", "REPO"],
+    "review-quality": ["DIFF", "REPO", "TASK"],
+    "final-review": ["DIFF", "PLAN", "REPO", "SPEC"],
+}
+FORBIDDEN_WORDS = re.compile(r"\b(HOLD|UNVERIFIABLE)\b")
+
+
+def brief_text(name):
+    return (PROMPTS_DIR / (name + ".md")).read_bytes().decode("utf-8")
+
+
+class BriefTemplateTests(unittest.TestCase):
+    def test_every_brief_lints_fits_and_declares_its_tokens(self):
+        for name, tokens in PROMPT_TOKENS.items():
+            with self.subTest(brief=name):
+                text = brief_text(name)
+                self.assertLessEqual(len(text.encode("utf-8")), 2 * KIB)
+                self.assertEqual(orca_dev.lint_template(text), [])
+                self.assertEqual(orca_dev.template_tokens(text), tokens)
+                self.assertNotIn("orchestration send", text)
+                self.assertNotIn("orchestration ask", text)
+                self.assertIsNone(FORBIDDEN_WORDS.search(text))
+
+    def test_every_brief_fills_by_bare_name(self):
+        for name, tokens in PROMPT_TOKENS.items():
+            with self.subTest(brief=name):
+                argv = [name] + ["%s=value-of-%s" % (t, t.lower()) for t in tokens] + ["--title", "demo/x", "--dry-run"]
+                code, out, err = call(orca_dev.cmd_brief, argv)
+                self.assertEqual((code, err), (0, ""))
+                for t in tokens:
+                    self.assertIn("value-of-%s" % t.lower(), out)
+                self.assertEqual(orca_dev.template_tokens(out), [])
+
+    def test_brief_rules(self):
+        for name in ("implementer", "fix-round"):
+            for word in ("DONE", "BLOCKED", "test", "Schedule"):
+                self.assertIn(word, brief_text(name), (name, word))
+        for name in ("spec-writer", "spec-revise", "plan-writer", "plan-revise"):
+            self.assertIn("DONE", brief_text(name), name)
+        for name in ("spec-review", "plan-review", "review-spec", "review-quality"):
+            for word in ("PASS", "FINDINGS", "blocking", "minor"):
+                self.assertIn(word, brief_text(name), (name, word))
+        for word in ("PASS", "FINDINGS", "not closed"):
+            self.assertIn(word, brief_text("final-review"), word)
+        for word in ("## Цель", "## Вне скоупа", "## Критерии приёмки", "## Дизайн", "КОГДА", "ТОГДА", "AC1"):
+            self.assertIn(word, brief_text("spec-writer"), word)
+        for key in ("spec:", "orca_run:", "status: active", "risk:", "area:", "hard:", "covers:", "verify:",
+                    "status: pending", "## F1:"):
+            self.assertIn(key, brief_text("plan-writer"), key)
+
+
+class LaunchDocTests(unittest.TestCase):
+    def setUp(self):
+        self.text = (SKILL_DIR / "launch.md").read_bytes().decode("utf-8")
+
+    def test_size_and_argv_lines_match_helper(self):
+        self.assertLessEqual(len(self.text.encode("utf-8")), 8 * KIB)
+        for argv in (orca_dev.build_argv("agy", "gemini-3.8-flash-high", None),
+                     orca_dev.build_argv("codex", "<model>", "<lvl>"),
+                     orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>")):
+            self.assertIn(" ".join(argv), self.text)
+
+    def test_agent_start_tables_match_helper(self):
+        for agent, cfg in orca_dev.AGENTS.items():
+            for key in ("marker", "busy", "login"):
+                if cfg[key]:
+                    self.assertIn(cfg[key], self.text, (agent, key))
+            self.assertIn("%d s" % cfg["timeout"], self.text, agent)
+        for row in orca_dev.MODALS:
+            line = next((l for l in self.text.splitlines() if row["id"] in l), "")
+            self.assertTrue(line, row["id"])
+            for reason in row["reasons"]:
+                self.assertIn(reason, line, (row["id"], reason))
+            for key in row["keys"]:
+                self.assertIn("Enter" if key.get("enter") else "`%s`" % key["text"], line, row["id"])
+        self.assertIn("codex login", self.text)
+
+    def test_recipes_present(self):
+        for snippet in ("orca_dev.py spawn", "orca_dev.py ready", "orca_dev.py close", "worker-start", "--terminal",
+                        "dispatch --task", "--inject", "--retry-request", "request-show", "dispatch-show",
+                        "orca terminal show", "orphaned", "worker-release", "retained", "ptyKilled",
+                        'check --wait --types "worker_done,escalation,question" --timeout-ms 900000',
+                        "/effort high", "Path A", "Path B"):
+            self.assertIn(snippet, self.text, snippet)
+        for code in range(7):
+            self.assertRegex(self.text, r"\|\s*`?%d`?\s*\|" % code)
+
+    def test_windows_section_is_at_most_ten_lines(self):
+        self.assertIn("\n## Windows", self.text)
+        section = self.text.split("\n## Windows", 1)[1].split("\n## ", 1)[0]
+        body = [l for l in section.splitlines()[1:] if l.strip()]
+        self.assertLessEqual(len(body), 10)
+        self.assertIn("py -3", section)
+        self.assertIn("$LASTEXITCODE", section)
