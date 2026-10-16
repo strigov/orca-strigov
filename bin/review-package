@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Complete C5 package. See skills/orca-dev/runtime-contracts.md.
-set -eu
-[ $# -ge 2 ] && [ $# -le 3 ] || { echo 'usage: review-package BASE HEAD [OUTFILE]' >&2; exit 2; }
-BIN=$(cd "$(dirname "$0")" && pwd)
-exec python3 -B "$BIN/lib/verification.py" package "$@"

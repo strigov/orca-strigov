@@ -12,6 +12,14 @@ Check that:
 - the phases are ordered so that each builds on the previous ones, and nothing outside the spec is planned;
 - `hard: true` and `risk: risky` are justified.
 
+Previous round (`—` if this is the first): its findings and the author's `fixed` / `not fixed: {reason}` lines.
+
+<PREVIOUS>
+
+Re-check them: a finding that is still open is reported again with its id, new findings continue the numbering; do not repeat a fixed one or a `not fixed` one whose reason holds.
+
 Severity: `blocking` means the plan cannot be executed as written or misses a criterion; `minor` means clarity or a small gap.
 
-Report through the Orca worker preamble: worker_done subject `PASS` when there is no `blocking` finding, otherwise `FINDINGS`. Body: one finding per line, `P{n} blocking|minor {phase} — {problem} → {fix}`. `minor` findings may accompany `PASS`. Do not repeat findings that were fixed in an earlier round.
+Report through the Orca worker preamble: worker_done subject `PASS` when there is no `blocking` finding, otherwise `FINDINGS`. Body: one finding per line, `P{n} blocking|minor {phase} — {problem} → {fix}`. `minor` findings may accompany `PASS`.
+
+Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

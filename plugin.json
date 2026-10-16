@@ -1,21 +1,24 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "orca-strigov",
-  "version": "1.1.0",
-  "description": "Orca development coordinator for Codex and Claude Code: worker-only implementation, evidence gates and guarded phase continuation.",
-  "author": {"name": "strigov"},
+  "version": "2.0.0",
+  "description": "Spec-driven development through supervised Orca workers for Codex and Claude Code: spec, plan, TDD phases and double review on top of native Orca orchestration.",
+  "author": {
+    "name": "strigov"
+  },
   "repository": "https://github.com/strigov/orca-strigov",
   "extensions": {
     "com.openai": {
-      "hooks": "./hooks/codex.json",
       "interface": {
         "displayName": "Orca Strigov",
-        "shortDescription": "Coordinate, verify and finish multi-agent work in Orca.",
-        "longDescription": "A coordinated replacement for the native Orca skills, with orca-dev, shared role routing, lifecycle contracts and completion guards.",
+        "shortDescription": "Spec-driven development with supervised Orca workers.",
+        "longDescription": "One orca-dev skill over native Orca orchestration: pipeline rules, model presets and launch recipes. No hooks.",
         "developerName": "strigov",
         "category": "Productivity",
         "capabilities": [],
-        "defaultPrompt": ["Use $orca-dev to implement my request through supervised Orca workers."]
+        "defaultPrompt": [
+          "Use $orca-dev to implement my request through supervised Orca workers."
+        ]
       }
     }
   }

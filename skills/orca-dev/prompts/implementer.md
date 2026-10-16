@@ -20,3 +20,5 @@ Before reporting, run each of these commands and make it pass:
 <VERIFY>
 
 When done, report through the Orca worker preamble: worker_done subject `DONE`, body: the files you changed, the tests you added and the result of each command above. If you cannot finish, subject `BLOCKED: complexity` (the code is too hard or unclear) or `BLOCKED: requirements` (the task contradicts the spec or needs a product decision); body: what is done, what blocks you, what you tried.
+
+Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

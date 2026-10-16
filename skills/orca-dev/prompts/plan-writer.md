@@ -31,3 +31,5 @@ Body: one section per phase, headed like `## F1: {title}`, with what to do, whic
 Rules: every acceptance criterion of the spec is covered by at least one phase; no phase without `covers`; usually 1 to 5 phases, each small enough for one implementer run; `verify` holds concrete commands of this repository.
 
 When done, report through the Orca worker preamble: worker_done subject `DONE`, body: number of phases, their titles, and the criteria each covers. If the spec cannot be planned as written, subject `BLOCKED` and the reason.
+
+Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

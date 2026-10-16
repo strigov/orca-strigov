@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# C3/C4: one blocking owner; exact command and optional evidence policy in JSON.
-set -eu
-BIN=$(cd "$(dirname "$0")" && pwd)
-exec python3 -B "$BIN/lib/run_check.py" "$@"

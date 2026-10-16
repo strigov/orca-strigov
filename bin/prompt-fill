@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-set -eu
-BIN="$(cd "$(dirname "$0")" && pwd)"
-exec python3 -B "$BIN/lib/prompt_fill.py" "$@"

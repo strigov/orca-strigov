@@ -604,14 +604,14 @@ KIB = 1024
 PROMPT_TOKENS = {
     "spec-writer": ["REPO", "SPEC", "TASK"],
     "spec-revise": ["FINDINGS", "SPEC"],
-    "spec-review": ["REPO", "SPEC", "TASK"],
+    "spec-review": ["PREVIOUS", "REPO", "SPEC", "TASK"],
     "plan-writer": ["PLAN", "REPO", "SPEC"],
     "plan-revise": ["FINDINGS", "PLAN"],
-    "plan-review": ["PLAN", "REPO", "SPEC"],
+    "plan-review": ["PLAN", "PREVIOUS", "REPO", "SPEC"],
     "implementer": ["CONTEXT", "REPO", "TASK", "VERIFY"],
     "fix-round": ["FINDINGS", "VERIFY"],
-    "review-spec": ["CRITERIA", "DIFF", "REPO"],
-    "review-quality": ["DIFF", "REPO", "TASK"],
+    "review-spec": ["CRITERIA", "DIFF", "PREVIOUS", "REPO"],
+    "review-quality": ["DIFF", "PREVIOUS", "REPO", "TASK"],
     "final-review": ["DIFF", "PLAN", "REPO", "SPEC"],
 }
 FORBIDDEN_WORDS = re.compile(r"\b(HOLD|UNVERIFIABLE)\b")
@@ -659,6 +659,11 @@ class BriefTemplateTests(unittest.TestCase):
         for key in ("spec:", "orca_run:", "status: active", "risk:", "area:", "hard:", "covers:", "verify:",
                     "status: pending", "## F1:"):
             self.assertIn(key, brief_text("plan-writer"), key)
+        for name in PROMPT_TOKENS:
+            for phrase in ("`--outcome failed` only with a `BLOCKED` subject", "uses `--outcome succeeded`"):
+                self.assertIn(phrase, brief_text(name), (name, phrase))
+        for name in ("spec-review", "plan-review", "review-spec", "review-quality"):
+            self.assertIn("not fixed: {reason}", brief_text(name), name)
 
 
 class LaunchDocTests(unittest.TestCase):
@@ -704,3 +709,105 @@ class LaunchDocTests(unittest.TestCase):
         self.assertLessEqual(len(body), 10)
         self.assertIn("py -3", section)
         self.assertIn("$LASTEXITCODE", section)
+
+
+REMOVED = [
+    "hooks", "bin/lib", "bin/claude-hook.cjs", "bin/wait-agent-ready", "bin/prompt-fill", "bin/protocol-state",
+    "bin/coordinator-session", "bin/run-check", "bin/verify-gate", "bin/review-package", "bin/collect-worker-fleet",
+    "bin/wait-worker-event", "bin/sdd-workspace", "bin/assemble-release.py", "bin/build-release.py",
+    "install.sh", "install.ps1", ".github", "THIRD_PARTY_NOTICES.md", "spikes",
+    "skills/orchestration", "skills/orca-cli", "skills/orca-dev/contracts", "skills/orca-dev/references",
+    "skills/orca-dev/runtime-contracts.md", "skills/orca-dev/prompt-routing.md", "skills/orca-dev/orca-recipes.md",
+    "skills/orca-dev/recipes-windows.md", "skills/orca-dev/coordinator-core.md", "skills/orca-dev/coordinator-start.md",
+    "tests/support.py", "tests/fixtures", "tests/test_prompt_fill.py",
+    "docs/architecture-runtime.md", "docs/audit-2026-09-02.md", "docs/controlled-pipeline-validation.md",
+    "docs/fixture-import-rules.md", "docs/host-adapters.md", "docs/install-plugin.md", "docs/install-windows.md",
+    "docs/phase2-smoke.md", "docs/plugin-validation.md", "docs/plugin-work-plan.md", "docs/runtime-platforms.md",
+    "docs/smoke-runs.md", "docs/upstream-orca-claude-prompt-race.md", "docs/spikes", "docs/tasks",
+    "docs/plans/2026-09-12-orca-dev-controlled-pipeline.md", "docs/plans/2026-09-28-path-b-consolidation.md",
+    "docs/plans/2026-10-03-c6-transition-checker.md",
+    "docs/plans/finished/2026-09-01-todo-cli-edit-csv-export.md",
+    "docs/plans/finished/2026-09-01-todo-concurrency-csv-import.md",
+    "docs/plans/finished/2026-09-01-todo-json-persistence.md",
+    "docs/reviews/orca-dev-controlled-pipeline-phase-1.md", "docs/reviews/todo-cli-edit-csv-export-Ф2.md",
+    "docs/reviews/todo-concurrency-csv-import-Ф2.md",
+]
+
+
+def names(directory):
+    return sorted(p.name for p in directory.iterdir() if not p.name.startswith(".") and p.name != "__pycache__")
+
+
+def read(rel):
+    return (ROOT / rel).read_bytes().decode("utf-8")
+
+
+class LayoutTests(unittest.TestCase):
+    def test_v2_tree(self):
+        self.assertEqual(names(ROOT / "bin"), ["orca_dev.py"])
+        self.assertEqual(names(ROOT / "skills"), ["orca-dev"])
+        self.assertEqual(names(SKILL_DIR), ["SKILL.md", "launch.md", "prompts", "roles.md"])
+        self.assertEqual(names(PROMPTS_DIR), sorted(n + ".md" for n in PROMPT_TOKENS))
+        self.assertEqual(names(ROOT / "tests"), ["test_orca_dev.py"])
+        for rel in REMOVED:
+            self.assertFalse(os.path.lexists(ROOT / rel), rel)
+        self.assertTrue((ROOT / "docs/specs/2026-10-14-orca-dev-v2-design.md").is_file())
+        shells = [str(p.relative_to(ROOT)) for p in ROOT.rglob("*")
+                  if ".git" not in p.parts and p.suffix in (".sh", ".ps1")]
+        self.assertEqual(shells, [])
+
+    def test_manifests_are_2_0_0_without_hooks(self):
+        portable, codex, claude = (json.loads(read(rel)) for rel in
+                                   ("plugin.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"))
+        for manifest in (portable, codex, claude):
+            self.assertEqual((manifest["name"], manifest["version"]), ("orca-strigov", "2.0.0"))
+            self.assertEqual(manifest["description"], codex["description"])
+            self.assertNotIn('"hooks"', json.dumps(manifest))
+        self.assertEqual(codex["skills"], "./skills/")
+
+    def test_size_limits(self):
+        for rel, kib in (("skills/orca-dev/SKILL.md", 18), ("skills/orca-dev/roles.md", 5), ("skills/orca-dev/launch.md", 8)):
+            self.assertLessEqual(len(read(rel).encode("utf-8")), kib * KIB, rel)
+        for rel, limit in (("README.md", 80), ("README.ru.md", 80), ("AGENTS.md", 30)):
+            self.assertLessEqual(len(read(rel).splitlines()), limit, rel)
+
+    def test_no_hold_or_unverifiable_anywhere_in_the_skill(self):
+        for path in SKILL_DIR.rglob("*.md"):
+            self.assertIsNone(FORBIDDEN_WORDS.search(path.read_bytes().decode("utf-8")), path)
+
+    def test_skill_md_anchors(self):
+        text = read("skills/orca-dev/SKILL.md")
+        self.assertTrue(text.startswith("---\nname: orca-dev\ndescription: "))
+        for anchor in ("$orca-dev", "/orca-strigov:orca-dev", "orca skills get orchestration", "orca status --json",
+                       "run-create", "run-use", "python3", "py -3", "orca_dev.py brief", "orca_dev.py spawn",
+                       "orca_dev.py close", "roles.md", "launch.md", "--set-file", "orca_run:", "implementer:",
+                       "covers:", "verify:", "risk:", "hard:", "git rev-parse HEAD", "git merge --no-ff",
+                       "git merge --abort", "git add -A", "git status --porcelain", "worker-list --run",
+                       "worker-read --dispatch", "check --wait", "request-show",
+                       "принять как есть / ещё раунд / стоп", "повторить позже / заменить на",
+                       "закоммитить как есть / отложить", "ждать дальше / остановить и заменить / стоп",
+                       "продолжить F", "терминал", "не закрылся", "the subject decides"):
+            self.assertIn(anchor, text, anchor)
+        for name in PROMPT_TOKENS:
+            self.assertIn(name, text, name)
+        for token in sorted({t for tokens in PROMPT_TOKENS.values() for t in tokens}):
+            self.assertIn(token, text, token)
+
+    def test_roles_md_anchors(self):
+        text = read("skills/orca-dev/roles.md")
+        for anchor in ("gpt-6-astra", "xhigh", "gemini-3.8-flash-high", "gpt-6-luna", "max", "gpt-6.1-sol", "opus",
+                       "sonnet", "medium", "ultra", "--agent claude --model opus --effort xhigh",
+                       "--agent codex --model gpt-6-astra --effort xhigh", "--agent agy --model gemini-3.8-flash-high",
+                       "--agent codex --model gpt-6-luna --effort max", "--agent codex --model gpt-6.1-sol --effort high"):
+            self.assertIn(anchor, text, anchor)
+
+    def test_readmes_and_agents(self):
+        for rel in ("README.md", "README.ru.md"):
+            text = read(rel)
+            for anchor in ("orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code",
+                           "install.py --repo", "$orca-dev", "/orca-strigov:orca-dev",
+                           "docs/specs/2026-10-14-orca-dev-v2-design.md", "gemini-3.8-flash-high", "gpt-6-astra"):
+                self.assertIn(anchor, text, (rel, anchor))
+        agents = read("AGENTS.md")
+        for anchor in ("python3 -m unittest discover tests", "launch.md", "bin/orca_dev.py", "roles.md"):
+            self.assertIn(anchor, agents, anchor)

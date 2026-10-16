@@ -16,3 +16,5 @@ Write the spec in Russian with exactly these sections, in this order:
 The user's answers are already in the task text; do not ask the same questions again. If a decision is still missing, choose the simplest option and state it in `## Дизайн`.
 
 When done, report through the Orca worker preamble: worker_done subject `DONE`, body: the spec path, the number of criteria and one sentence on the design. If the task cannot be specified, subject `BLOCKED` and the reason.
+
+Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

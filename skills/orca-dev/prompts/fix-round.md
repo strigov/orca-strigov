@@ -15,3 +15,5 @@ Before reporting, run each of these commands and make it pass:
 <VERIFY>
 
 When done, report through the Orca worker preamble: worker_done subject `DONE`, body: one line per item, `fixed: {how}` or `not fixed: {reason}`, then the result of each command above. If you cannot fix them, subject `BLOCKED: complexity` or `BLOCKED: requirements` and the reason.
+
+Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

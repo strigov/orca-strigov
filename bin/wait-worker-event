@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# C7: keep empty Orca waits inside one process, outside the model loop.
-set -eu
-WAIT_BIN=$(cd "$(dirname "$0")" && pwd)
-exec python3 -B "$WAIT_BIN/lib/wait_worker_event.py" "$@"
