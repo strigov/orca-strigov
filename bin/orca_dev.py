@@ -45,14 +45,16 @@ AGENTS = {
 
 # Known startup modals (launch.md "Agent start" table). Screen markers match case-insensitively;
 # reasons are Orca `terminal wait` blockedReason tokens (legacy codex-* and agent-neutral spellings).
-# Keys are best-known values; the smoke run pins them against real screens.
+# Trust keys pinned on Windows: Codex 0.163.0 / Claude Code 2.1.302 (S5).
 MODALS = [
     {"id": "codex-update-prompt", "agent": "codex", "screen": ["update available"],
      "reasons": ["codex-update-prompt", "agent-update-prompt"], "keys": [{"text": "2"}, {"enter": True}]},
     {"id": "codex-hooks-review-prompt", "agent": "codex", "screen": ["hooks need review"],
      "reasons": ["codex-hooks-review-prompt", "agent-hooks-review-prompt"], "keys": [{"text": "2"}, {"enter": True}]},
-    {"id": "claude-trust-folder", "agent": "claude", "screen": ["trust this folder", "trust the files in this folder"],
+    {"id": "codex-trust-folder", "agent": "codex", "screen": ["trust this folder?"],
      "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"enter": True}]},
+    {"id": "claude-trust-folder", "agent": "claude", "screen": ["trust this folder", "trust the files in this folder"],
+     "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"text": "\x1b[B"}, {"enter": True}]},
     {"id": "agy-trust-folder", "agent": "agy", "screen": ["trust this folder"],
      "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"enter": True}]},
 ]

@@ -198,6 +198,8 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(orca_dev.classify("codex", [""], True, 1, "agent-update-prompt")["modal"], "codex-update-prompt")
         self.assertEqual(orca_dev.classify("claude", ["Yes, I trust this folder"], True, 1)["modal"], "claude-trust-folder")
         self.assertEqual(orca_dev.classify("agy", ["Do you trust this folder?"], True, 1)["modal"], "agy-trust-folder")
+        self.assertEqual(orca_dev.classify("codex", ["Folder access", "Trust this folder?", "› 1. Trust and continue", "  2. Quit"], True, 1)["modal"], "codex-trust-folder")
+        self.assertEqual(orca_dev.classify("codex", [""], True, 1, "codex-trust-workspace")["modal"], "codex-trust-folder")
 
     def test_login_screens(self):
         self.assertEqual(orca_dev.classify("codex", ["Sign in with ChatGPT"], True, 1)["state"], "needs_login")
@@ -208,6 +210,16 @@ class ClassifyTests(unittest.TestCase):
 
 
 class ReadyTests(unittest.TestCase):
+    def test_windows_claude_trust_selects_yes_before_enter(self):
+        clock = Clock()
+        fake = FakeOrca({("terminal", "read"): [screen("❯ No, exit", "  Yes, I trust this folder"), screen("Claude Code")]})
+        code, out, err = call(orca_dev.cmd_ready, ["term_1", "claude", "30"], run=fake, clock=clock, sleep=clock.sleep)
+        self.assertEqual((code, json.loads(out)), (0, {"dismissed": ["claude-trust-folder"]}))
+        self.assertEqual(fake.called("terminal", "send"), [
+            ["terminal", "send", "--terminal", "term_1", "--text", "\x1b[B", "--json"],
+            ["terminal", "send", "--terminal", "term_1", "--enter", "--json"],
+        ])
+
     def test_ready_after_busy_with_final_idle_wait(self):
         clock = Clock()
         fake = FakeOrca({("terminal", "read"): [screen("Ask Codex", "Starting MCP servers (1/9)"), screen("Ask Codex")]})
@@ -256,6 +268,15 @@ def spawn(fake, argv=SPAWN, windows=False):
 
 
 class SpawnTests(unittest.TestCase):
+    def test_windows_codex_trust_continues_then_dispatches(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Folder access", "Trust this folder?", "› 1. Trust and continue", "  2. Quit"), screen("Ask Codex")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake, windows=True)
+        self.assertEqual((code, out["stage"], out["dismissed"]), (0, "done", ["codex-trust-folder"]))
+        self.assertEqual(fake.called("terminal", "send"), [["terminal", "send", "--terminal", "term_9", "--enter", "--json"]])
+        self.assertEqual(len(fake.called("orchestration", "dispatch")), 1)
+
     def test_argv_matches_launch_md(self):
         self.assertEqual(" ".join(orca_dev.build_argv("agy", "gemini-3.8-flash-high", None)),
                          "agy --model gemini-3.8-flash-high --dangerously-skip-permissions")
@@ -689,7 +710,7 @@ class LaunchDocTests(unittest.TestCase):
             for reason in row["reasons"]:
                 self.assertIn(reason, line, (row["id"], reason))
             for key in row["keys"]:
-                self.assertIn("Enter" if key.get("enter") else "`%s`" % key["text"], line, row["id"])
+                self.assertIn("Enter" if key.get("enter") else "`%s`" % key["text"].encode("unicode_escape").decode("ascii"), line, row["id"])
         self.assertIn("codex login", self.text)
 
     def test_recipes_present(self):

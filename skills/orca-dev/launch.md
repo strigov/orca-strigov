@@ -15,7 +15,7 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 | agent | argv |
 |---|---|
 | Antigravity | `agy --model gemini-3.8-flash-high --dangerously-skip-permissions` (no `--effort`: the level is in the id) |
-| Codex | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<lvl> -c features.multi_agent=false` (codex-cli 0.162.1) |
+| Codex | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<lvl> -c features.multi_agent=false` (codex-cli 0.163.0) |
 | Claude | `claude --dangerously-skip-permissions --model <opus|sonnet> --effort <lvl>` |
 
 `--command` is built for the host OS (`shlex.join` on POSIX, `subprocess.list2cmdline` on Windows); never type it yourself.
@@ -50,10 +50,11 @@ Known modals (`spawn` dismisses them with `orca terminal send` and lists them in
 |---|---|---|---|
 | `codex-update-prompt` | codex | "Update available" / `codex-update-prompt`, `agent-update-prompt` | `2`, then Enter (skip) |
 | `codex-hooks-review-prompt` | codex | "Hooks need review" / `codex-hooks-review-prompt`, `agent-hooks-review-prompt` | `2`, then Enter (trust all) |
-| `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
+| `codex-trust-folder` | codex | "trust this folder?" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (Trust and continue; 0.163.0, Windows S5) |
+| `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit in 2.1.302, Windows S5) |
 | `agy-trust-folder` | agy | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
 
-Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents both trust dialogs.
+Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents Claude and agy trust dialogs; Codex trust is handled at launch.
 
 ## Waiting
 
