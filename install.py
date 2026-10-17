@@ -180,22 +180,36 @@ def codex_tables(text: str) -> dict:
     return tables
 
 
-def trust_codex(text: str, paths: List[str], write: bool) -> Tuple[Optional[str], List[Line]]:
-    """(new config.toml text or None, lines). Appends a table per untrusted path; never edits an existing one."""
+def codex_key(name: str, windows: bool) -> str:
+    """The TOML key Codex itself writes: on Windows the lowercased path as a literal string."""
+    if windows and "'" not in name:
+        return "'%s'" % name
+    return json.dumps(name, ensure_ascii=False)
+
+
+def trust_codex(text: str, paths: List[str], windows: bool, write: bool) -> Tuple[Optional[str], List[Line]]:
+    """(new config.toml text or None, lines). Appends a table per untrusted path; never edits an existing one.
+    On Windows Codex lowercases the whole path, so keys are compared case-insensitively."""
     lines: List[Line] = []
-    tables = codex_tables(text)
+    tables: dict = {}
+    for key, level in codex_tables(text).items():
+        key = key.lower() if windows else key
+        if tables.get(key) != "trusted":
+            tables[key] = level
+    haystack = text.lower() if windows else text
     added = []
     for path in paths:
-        level = tables.get(path, "")
+        name = path.lower() if windows else path
+        level = tables.get(name, "")
         if level == "trusted":
             lines.append(("OK", "codex: %s trusted" % path))
-        elif path in tables or json.dumps(path, ensure_ascii=False) in text or "'%s'" % path in text:
+        elif name in tables or json.dumps(name, ensure_ascii=False) in haystack or "'%s'" % name in haystack:
             # A table with another level, or the path in a form this parser does not read: a second table would break the file.
             lines.append(("WARN", "codex: %s has another entry in config.toml -> set trust_level = \"trusted\" by hand" % path))
         elif not write:
             lines.append(("WARN", "codex: %s not trusted -> the trust dialog will block the worker" % path))
         else:
-            added.append('[projects.%s]\ntrust_level = "trusted"\n' % json.dumps(path, ensure_ascii=False))
+            added.append('[projects.%s]\ntrust_level = "trusted"\n' % codex_key(name, windows))
             lines.append(("OK", "codex: trust set for %s" % path))
     if not added:
         return None, lines
@@ -226,14 +240,14 @@ def write_atomic(file: Path, label: str, content: str) -> List[Line]:
     return []
 
 
-def update_codex(file: Path, paths: List[str], write: bool) -> List[Line]:
+def update_codex(file: Path, paths: List[str], windows: bool, write: bool) -> List[Line]:
     if not file.is_file():
         return [("WARN", "codex: %s missing -> run codex once, then re-run" % file)]
     try:
         text = file.read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
         return [("WARN", "codex: could not read %s (%s)" % (file, exc))]
-    new, lines = trust_codex(text, paths, write)
+    new, lines = trust_codex(text, paths, windows, write)
     return lines + (write_atomic(file, "codex", new) if new is not None else [])
 
 
@@ -368,7 +382,7 @@ def main(argv: Optional[List[str]] = None, home: Optional[Path] = None, run: Run
                                      lambda d: trust_claude(d, paths, windows, write)))
         warnings += emit(update_json(home / ".gemini" / "antigravity-cli" / "settings.json", "agy",
                                      "run agy once, then re-run", lambda d: trust_agy(d, paths, write)))
-        warnings += emit(update_codex(home / ".codex" / "config.toml", paths, write))
+        warnings += emit(update_codex(home / ".codex" / "config.toml", paths, windows, write))
 
     stale = stale_copies(home, version)
     if stale:

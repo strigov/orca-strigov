@@ -608,19 +608,31 @@ class InstallTests(unittest.TestCase):
     def test_codex_trust_appends_tables_and_never_edits_one(self):
         text = '[projects."/x/repo2"]\ntrust_level = "trusted"\n\n[projects.\'/x/lit\'] # c\ntrust_level = "trusted"\n'
         self.assertEqual(install.codex_tables(text), {"/x/repo2": "trusted", "/x/lit": "trusted"})
-        new, lines = install.trust_codex(text, ["/x/repo2", "/x/lit", "/x/repo"], True)
+        new, lines = install.trust_codex(text, ["/x/repo2", "/x/lit", "/x/repo"], False, True)
         self.assertEqual(lines, [("OK", "codex: /x/repo2 trusted"), ("OK", "codex: /x/lit trusted"),
                                  ("OK", "codex: trust set for /x/repo")])
         self.assertEqual(new, text + '\n[projects."/x/repo"]\ntrust_level = "trusted"\n')
-        self.assertEqual(install.trust_codex(new, ["/x/repo"], True), (None, [("OK", "codex: /x/repo trusted")]))
+        self.assertEqual(install.trust_codex(new, ["/x/repo"], False, True), (None, [("OK", "codex: /x/repo trusted")]))
+        self.assertEqual(install.trust_codex(new, ["/X/Repo"], False, False)[1][0][0], "WARN")
         other = '[projects."/x/repo"]\ntrust_level = "untrusted"\n[projects]\n"/x/inline" = { trust_level = "trusted" }\n'
-        new, lines = install.trust_codex(other, ["/x/repo", "/x/inline"], True)
+        new, lines = install.trust_codex(other, ["/x/repo", "/x/inline"], False, True)
         self.assertIsNone(new)
         self.assertEqual([level for level, _ in lines], ["WARN", "WARN"])
-        self.assertEqual(install.trust_codex("", ["/x/repo"], False)[0], None)
-        windows, _ = install.trust_codex("", ["C:\\Users\\me\\repo"], True)
-        self.assertEqual(windows, '[projects."C:\\\\Users\\\\me\\\\repo"]\ntrust_level = "trusted"\n')
-        self.assertEqual(install.codex_tables(windows), {"C:\\Users\\me\\repo": "trusted"})
+        self.assertEqual(install.trust_codex("", ["/x/repo"], False, False)[0], None)
+
+    def test_codex_trust_on_windows_matches_the_lowercased_key_codex_writes(self):
+        live = "[projects.'c:\\users\\me\\appdata\\local\\temp\\orca-smoke']\ntrust_level = \"trusted\"\n"
+        self.assertEqual(install.trust_codex(live, ["C:\\Users\\me\\AppData\\Local\\Temp\\orca-smoke"], True, True),
+                         (None, [("OK", "codex: C:\\Users\\me\\AppData\\Local\\Temp\\orca-smoke trusted")]))
+        mixed = '[projects."C:\\\\Repo"]\ntrust_level = "trusted"\n[projects.\'c:\\repo\']\ntrust_level = "untrusted"\n'
+        self.assertEqual(install.trust_codex(mixed, ["C:\\Repo"], True, False)[1][0][0], "OK")
+        self.assertEqual(install.trust_codex(live.replace('"trusted"', '"untrusted"'),
+                                             ["C:\\Users\\me\\AppData\\Local\\Temp\\orca-smoke"], True, True)[1][0][0], "WARN")
+        windows, _ = install.trust_codex("", ["C:\\Users\\me\\repo"], True, True)
+        self.assertEqual(windows, "[projects.'c:\\users\\me\\repo']\ntrust_level = \"trusted\"\n")
+        self.assertEqual(install.codex_tables(windows), {"c:\\users\\me\\repo": "trusted"})
+        quoted, _ = install.trust_codex("", ["C:\\O'Brien"], True, True)
+        self.assertEqual(install.codex_tables(quoted), {"c:\\o'brien": "trusted"})
 
     def test_stale_copies_listed_never_deleted(self):
         self.native()
