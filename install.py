@@ -2,10 +2,11 @@
 """orca-strigov 2.0 install checks (one file for macOS, Linux and Windows).
 
   python3 install.py                  read-only checks (Windows: py -3 install.py)
-  python3 install.py --repo <path>    + trust <path> and its git worktrees for Claude Code and Antigravity
+  python3 install.py --repo <path>    + trust <path> and its git worktrees for Claude Code, Antigravity and Codex
   python3 install.py --check <path>   report trust only, change nothing
 --repo/--check may repeat. Exit: 0 clean, 1 any WARN (or native Orca skills missing), 2 usage.
-Writes only ~/.claude.json and ~/.gemini/antigravity-cli/settings.json, and only with --repo.
+Writes only ~/.claude.json, ~/.gemini/antigravity-cli/settings.json and ~/.codex/config.toml (appends
+a table, never edits one), and only with --repo.
 Deletes nothing.
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +28,8 @@ NATIVE_SKILLS = ("orchestration", "orca-cli")
 INSTALL_CMD = "orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code"
 STALE_HINT = "удалить вручную или ответить `y` на вопрос координатора при первом запуске"
 CACHE = Path(".codex/plugins/cache/personal/orca-strigov")
+CODEX_TABLE = re.compile(r"""^\[\s*projects\s*\.\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*\]\s*(?:#.*)?$""")
+CODEX_TRUST = re.compile(r"""^trust_level\s*=\s*["']([^"']*)["']\s*(?:#.*)?$""")
 
 Line = Tuple[str, str]
 Run = Callable[[List[str], float], Tuple[int, str]]
@@ -153,6 +157,86 @@ def trust_agy(data: dict, paths: List[str], write: bool) -> Tuple[bool, List[Lin
     return changed, lines
 
 
+def codex_tables(text: str) -> dict:
+    """{path: trust_level or None} for every [projects."<path>"] / [projects.'<path>'] table in config.toml."""
+    tables: dict = {}
+    current = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            current = None
+            m = CODEX_TABLE.match(stripped)
+            if m:
+                raw = m.group(1)
+                try:
+                    current = raw[1:-1] if raw.startswith("'") else json.loads(raw)
+                except ValueError:  # a TOML escape JSON does not know: leave it to the raw-text check
+                    continue
+                tables.setdefault(current, None)
+        elif current is not None:
+            m = CODEX_TRUST.match(stripped)
+            if m:
+                tables[current] = m.group(1)
+    return tables
+
+
+def trust_codex(text: str, paths: List[str], write: bool) -> Tuple[Optional[str], List[Line]]:
+    """(new config.toml text or None, lines). Appends a table per untrusted path; never edits an existing one."""
+    lines: List[Line] = []
+    tables = codex_tables(text)
+    added = []
+    for path in paths:
+        level = tables.get(path, "")
+        if level == "trusted":
+            lines.append(("OK", "codex: %s trusted" % path))
+        elif path in tables or json.dumps(path, ensure_ascii=False) in text or "'%s'" % path in text:
+            # A table with another level, or the path in a form this parser does not read: a second table would break the file.
+            lines.append(("WARN", "codex: %s has another entry in config.toml -> set trust_level = \"trusted\" by hand" % path))
+        elif not write:
+            lines.append(("WARN", "codex: %s not trusted -> the trust dialog will block the worker" % path))
+        else:
+            added.append('[projects.%s]\ntrust_level = "trusted"\n' % json.dumps(path, ensure_ascii=False))
+            lines.append(("OK", "codex: trust set for %s" % path))
+    if not added:
+        return None, lines
+    sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    return text + sep + "\n".join(added), lines
+
+
+def write_atomic(file: Path, label: str, content: str) -> List[Line]:
+    """Replace one file through a temp file + os.replace, keeping its mode; symlinks are not rewritten."""
+    if file.is_symlink():
+        return [("WARN", "%s: %s is a symlink -> not rewritten, edit it by hand" % (label, file))]
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(file.parent), prefix=".install-py.", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        try:
+            os.chmod(tmp, file.stat().st_mode & 0o777)
+        except OSError:
+            pass
+        os.replace(tmp, file)
+        tmp = None
+    except OSError as exc:
+        return [("WARN", "%s: could not write %s (%s)" % (label, file, exc))]
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+    return []
+
+
+def update_codex(file: Path, paths: List[str], write: bool) -> List[Line]:
+    if not file.is_file():
+        return [("WARN", "codex: %s missing -> run codex once, then re-run" % file)]
+    try:
+        text = file.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return [("WARN", "codex: could not read %s (%s)" % (file, exc))]
+    new, lines = trust_codex(text, paths, write)
+    return lines + (write_atomic(file, "codex", new) if new is not None else [])
+
+
 def update_json(file: Path, label: str, hint: str, apply: Callable[[dict], Tuple[bool, List[Line]]]) -> List[Line]:
     """Read, apply, and atomically write (temp file + os.replace) one JSON object file."""
     if not file.is_file():
@@ -166,25 +250,7 @@ def update_json(file: Path, label: str, hint: str, apply: Callable[[dict], Tuple
     changed, lines = apply(data)
     if not changed:
         return lines
-    if file.is_symlink():
-        return lines + [("WARN", "%s: %s is a symlink -> not rewritten, edit it by hand" % (label, file))]
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(dir=str(file.parent), prefix=".install-py.", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, indent=2, ensure_ascii=False)
-        try:
-            os.chmod(tmp, file.stat().st_mode & 0o777)
-        except OSError:
-            pass
-        os.replace(tmp, file)
-        tmp = None
-    except OSError as exc:
-        lines.append(("WARN", "%s: could not write %s (%s)" % (label, file, exc)))
-    finally:
-        if tmp and os.path.exists(tmp):
-            os.unlink(tmp)
-    return lines
+    return lines + write_atomic(file, label, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def repo_paths(repos: List[Path], run: Run, git: Optional[str]) -> List[str]:
@@ -302,6 +368,7 @@ def main(argv: Optional[List[str]] = None, home: Optional[Path] = None, run: Run
                                      lambda d: trust_claude(d, paths, windows, write)))
         warnings += emit(update_json(home / ".gemini" / "antigravity-cli" / "settings.json", "agy",
                                      "run agy once, then re-run", lambda d: trust_agy(d, paths, write)))
+        warnings += emit(update_codex(home / ".codex" / "config.toml", paths, write))
 
     stale = stale_copies(home, version)
     if stale:

@@ -18,7 +18,7 @@
 
 1. Штатные скиллы Orca: `orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code`
 2. Плагин: `git clone https://github.com/strigov/orca-strigov.git`
-3. Проверки и trust проекта: `python3 orca-strigov/install.py --repo /path/to/project` (Windows: `py -3 orca-strigov\install.py --repo C:\path\to\project`). Пишет только `~/.claude.json` и `~/.gemini/antigravity-cli/settings.json`, ничего не удаляет, перечисляет старые копии.
+3. Проверки и trust проекта: `python3 orca-strigov/install.py --repo /path/to/project` (Windows: `py -3 orca-strigov\install.py --repo C:\path\to\project`). Пишет только `~/.claude.json`, `~/.gemini/antigravity-cli/settings.json` и `~/.codex/config.toml`, ничего не удаляет, перечисляет старые копии.
 4. Codex: попросить Codex «Use plugin-creator to install the plugin from /abs/path/orca-strigov into my personal marketplace», затем `codex plugin add orca-strigov@personal`; `codex plugin list` показывает `2.0.0`. Начать новую сессию.
 5. Claude Code: `claude --plugin-dir /abs/path/orca-strigov` или `/plugin install orca-strigov@<ваш локальный marketplace>`.
 

@@ -18,7 +18,7 @@ Needs Orca 1.4.224+, Python 3.10+ (`python3`; Windows `py -3`), git and logged-i
 
 1. Native Orca skills: `orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code`
 2. The plugin: `git clone https://github.com/strigov/orca-strigov.git`
-3. Checks and project trust: `python3 orca-strigov/install.py --repo /path/to/project` (Windows: `py -3 orca-strigov\install.py --repo C:\path\to\project`). It writes only `~/.claude.json` and `~/.gemini/antigravity-cli/settings.json`, deletes nothing and lists old copies.
+3. Checks and project trust: `python3 orca-strigov/install.py --repo /path/to/project` (Windows: `py -3 orca-strigov\install.py --repo C:\path\to\project`). It writes only `~/.claude.json`, `~/.gemini/antigravity-cli/settings.json` and `~/.codex/config.toml`, deletes nothing and lists old copies.
 4. Codex: ask Codex "Use plugin-creator to install the plugin from /abs/path/orca-strigov into my personal marketplace", then `codex plugin add orca-strigov@personal`; `codex plugin list` shows `2.0.0`. Start a new session.
 5. Claude Code: `claude --plugin-dir /abs/path/orca-strigov`, or `/plugin install orca-strigov@<your local marketplace>`.
 

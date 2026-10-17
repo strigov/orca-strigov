@@ -45,7 +45,7 @@ AGENTS = {
 
 # Known startup modals (launch.md "Agent start" table). Screen markers match case-insensitively;
 # reasons are Orca `terminal wait` blockedReason tokens (legacy codex-* and agent-neutral spellings).
-# Trust keys pinned on Windows: Codex 0.163.0 / Claude Code 2.1.302 (S5).
+# Trust keys pinned in smoke S4 (macOS) and S5 (Windows): Codex 0.163.0, Claude Code 2.1.301/2.1.302.
 MODALS = [
     {"id": "codex-update-prompt", "agent": "codex", "screen": ["update available"],
      "reasons": ["codex-update-prompt", "agent-update-prompt"], "keys": [{"text": "2"}, {"enter": True}]},

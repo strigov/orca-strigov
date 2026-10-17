@@ -50,11 +50,11 @@ Known modals (`spawn` dismisses them with `orca terminal send` and lists them in
 |---|---|---|---|
 | `codex-update-prompt` | codex | "Update available" / `codex-update-prompt`, `agent-update-prompt` | `2`, then Enter (skip) |
 | `codex-hooks-review-prompt` | codex | "Hooks need review" / `codex-hooks-review-prompt`, `agent-hooks-review-prompt` | `2`, then Enter (trust all) |
-| `codex-trust-folder` | codex | "trust this folder?" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (Trust and continue; 0.163.0, Windows S5) |
-| `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit in 2.1.302, Windows S5) |
+| `codex-trust-folder` | codex | "trust this folder?" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (Trust and continue; 0.163.0, smoke S4/S5) |
+| `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit: 2.1.301 macOS, 2.1.302 Windows) |
 | `agy-trust-folder` | agy | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
 
-Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents Claude and agy trust dialogs; Codex trust is handled at launch.
+Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog, and `spawn` may dispatch into it.
 
 ## Waiting
 

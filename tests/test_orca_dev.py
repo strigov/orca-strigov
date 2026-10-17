@@ -200,6 +200,8 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(orca_dev.classify("agy", ["Do you trust this folder?"], True, 1)["modal"], "agy-trust-folder")
         self.assertEqual(orca_dev.classify("codex", ["Folder access", "Trust this folder?", "› 1. Trust and continue", "  2. Quit"], True, 1)["modal"], "codex-trust-folder")
         self.assertEqual(orca_dev.classify("codex", [""], True, 1, "codex-trust-workspace")["modal"], "codex-trust-folder")
+        self.assertEqual(orca_dev.classify("codex", ["Ask Codex to do anything"], True, 1, "agent-trust-workspace")["modal"],
+                         "codex-trust-folder")
 
     def test_login_screens(self):
         self.assertEqual(orca_dev.classify("codex", ["Sign in with ChatGPT"], True, 1)["state"], "needs_login")
@@ -541,6 +543,9 @@ class InstallTests(unittest.TestCase):
         agy = self.home / ".gemini" / "antigravity-cli" / "settings.json"
         agy.parent.mkdir(parents=True)
         agy.write_text(json.dumps({"keep": [1, 2], "trustedWorkspaces": ["/other"]}), encoding="utf-8")
+        codex = self.home / ".codex" / "config.toml"
+        codex.parent.mkdir(parents=True)
+        codex.write_text('model = "x"\n\n[projects."/other"]\ntrust_level = "trusted"\n', encoding="utf-8")
         porcelain = "worktree %s\nHEAD abc\n\nworktree %s\nHEAD def\n" % (repo, worktree)
         run = FakeRun({("git", "-C", str(repo), "worktree"): (0, porcelain)})
         code, out, err = self.run_main(["--repo", str(repo)], run=run, which=lambda n: "/usr/bin/git" if n == "git" else None)
@@ -551,6 +556,9 @@ class InstallTests(unittest.TestCase):
         settings = json.loads(agy.read_text(encoding="utf-8"))
         self.assertEqual(settings["keep"], [1, 2])
         self.assertEqual(settings["trustedWorkspaces"], ["/other", str(repo), str(worktree)])
+        self.assertEqual(install.codex_tables(codex.read_text(encoding="utf-8")),
+                         {"/other": "trusted", str(repo): "trusted", str(worktree): "trusted"})
+        self.assertTrue(codex.read_text(encoding="utf-8").startswith('model = "x"\n\n[projects."/other"]\n'))
         before = self.snapshot()
         self.run_main(["--repo", str(repo)], run=run, which=lambda n: "/usr/bin/git" if n == "git" else None)
         self.assertEqual(self.snapshot(), before)
@@ -596,6 +604,23 @@ class InstallTests(unittest.TestCase):
         agy = {}
         install.trust_agy(agy, ["C:\\new"], True)
         self.assertEqual(agy["trustedWorkspaces"], ["C:\\new"])
+
+    def test_codex_trust_appends_tables_and_never_edits_one(self):
+        text = '[projects."/x/repo2"]\ntrust_level = "trusted"\n\n[projects.\'/x/lit\'] # c\ntrust_level = "trusted"\n'
+        self.assertEqual(install.codex_tables(text), {"/x/repo2": "trusted", "/x/lit": "trusted"})
+        new, lines = install.trust_codex(text, ["/x/repo2", "/x/lit", "/x/repo"], True)
+        self.assertEqual(lines, [("OK", "codex: /x/repo2 trusted"), ("OK", "codex: /x/lit trusted"),
+                                 ("OK", "codex: trust set for /x/repo")])
+        self.assertEqual(new, text + '\n[projects."/x/repo"]\ntrust_level = "trusted"\n')
+        self.assertEqual(install.trust_codex(new, ["/x/repo"], True), (None, [("OK", "codex: /x/repo trusted")]))
+        other = '[projects."/x/repo"]\ntrust_level = "untrusted"\n[projects]\n"/x/inline" = { trust_level = "trusted" }\n'
+        new, lines = install.trust_codex(other, ["/x/repo", "/x/inline"], True)
+        self.assertIsNone(new)
+        self.assertEqual([level for level, _ in lines], ["WARN", "WARN"])
+        self.assertEqual(install.trust_codex("", ["/x/repo"], False)[0], None)
+        windows, _ = install.trust_codex("", ["C:\\Users\\me\\repo"], True)
+        self.assertEqual(windows, '[projects."C:\\\\Users\\\\me\\\\repo"]\ntrust_level = "trusted"\n')
+        self.assertEqual(install.codex_tables(windows), {"C:\\Users\\me\\repo": "trusted"})
 
     def test_stale_copies_listed_never_deleted(self):
         self.native()
