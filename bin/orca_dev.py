@@ -3,7 +3,7 @@
 
 Usage (macOS/Linux: python3, Windows: py -3):
   orca_dev.py brief <template> [KEY=VALUE ...] [--set-file KEY=PATH ...] --title T [--run ID] [--dry-run]
-  orca_dev.py spawn --agent agy|codex|claude --model M [--effort E] --title T --task TASK_ID [--worktree active]
+  orca_dev.py spawn --agent agy|codex|claude --model M [--effort E] --title T --task TASK_ID [--worktree active] [--env KEY=VALUE ...]
   orca_dev.py ready <handle> <agy|codex|claude|marker> [timeout-s]
   orca_dev.py close <handle>
 
@@ -31,6 +31,7 @@ PROMPTS = PLUGIN / "skills" / "orca-dev" / "prompts"
 
 ANGLE = re.compile(r"<([^<>\n]*)>")
 UPPER_SNAKE = re.compile(r"[A-Z][A-Z0-9_]*")
+ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 POLL_S = 2.0
 READ_FAIL_LIMIT = 5
 DISMISS_LIMIT = 3
@@ -374,6 +375,19 @@ def command_line(argv: List[str], windows: bool) -> str:
     return subprocess.list2cmdline(argv) if windows else shlex.join(argv)
 
 
+def env_prefix(pairs: List[str], windows: bool) -> List[str]:
+    """`env KEY=VALUE ...` in front of the agent argv (POSIX only); [] without --env."""
+    if not pairs:
+        return []
+    if windows:
+        raise Usage("--env is POSIX-only: set the variables in the Windows user environment")
+    for pair in pairs:
+        key, sep, _ = pair.partition("=")
+        if not sep or not ENV_KEY.fullmatch(key):
+            raise Usage("expected --env KEY=VALUE: " + pair)
+    return ["env"] + pairs
+
+
 def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float] = time.monotonic,
               sleep: Callable[[float], None] = time.sleep, windows: bool = os.name == "nt",
               new_request_id: Callable[[], str] = lambda: str(uuid.uuid4())) -> int:
@@ -391,6 +405,7 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     parser.add_argument("--title", required=True)
     parser.add_argument("--task", required=True)
     parser.add_argument("--worktree", default="active")
+    parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
     try:
         args = parser.parse_args(argv)
         out["agent"], out["task_id"] = args.agent, args.task
@@ -398,7 +413,7 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
             raise Usage("agy takes no --effort: the level is part of the model id")
         if args.agent != "agy" and not args.effort:
             raise Usage("--effort is required for " + args.agent)
-        command = command_line(build_argv(args.agent, args.model, args.effort), windows)
+        command = command_line(env_prefix(args.env, windows) + build_argv(args.agent, args.model, args.effort), windows)
     except Usage as exc:
         out["error"] = str(exc)
         return emit(2)

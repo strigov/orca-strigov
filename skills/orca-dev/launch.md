@@ -6,7 +6,7 @@ Mechanics only; who runs where is in `roles.md`. `<plugin>` is the plugin root (
 
 One command per worker, after `orca_dev.py brief` printed the `task_id`:
 
-`python3 <plugin>/bin/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id>`
+`python3 <plugin>/bin/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id> [--env KEY=VALUE ...]`
 
 It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
 
@@ -19,6 +19,8 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 | Claude | `claude --dangerously-skip-permissions --model <opus|sonnet> --effort <lvl>` |
 
 `--command` is built for the host OS (`shlex.join` on POSIX, `subprocess.list2cmdline` on Windows); never type it yourself.
+
+`--env KEY=VALUE` (repeatable; POSIX only, Windows → exit 2) prefixes the argv with `env KEY=VALUE …` for this worker only. Use it when the agent cannot reach its API (DNS or network error on its screen) and a working proxy is known: `--env HTTPS_PROXY=<url> --env HTTP_PROXY=<url> --env NO_PROXY=localhost,127.0.0.1`. No secrets: the command stays visible in the terminal.
 
 `spawn` prints one JSON line `{stage, handle, task_id, dispatch_id, request_id, dismissed, agent, screen, error}`:
 

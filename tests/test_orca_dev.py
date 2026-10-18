@@ -383,6 +383,27 @@ class SpawnTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertEqual(fake.calls, [])
 
+    def test_env_prefixes_agent_argv_on_posix(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Claude Code")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        argv = ["--agent", "claude", "--model", "opus", "--effort", "xhigh", "--title", "t", "--task", "task_1",
+                "--env", "HTTPS_PROXY=http://127.0.0.1:1082", "--env", "NO_PROXY=localhost,127.0.0.1"]
+        code, out = spawn(fake, argv)
+        self.assertEqual(code, 0)
+        create = fake.called("terminal", "create")[0]
+        self.assertEqual(shlex.split(create[create.index("--command") + 1]),
+                         ["env", "HTTPS_PROXY=http://127.0.0.1:1082", "NO_PROXY=localhost,127.0.0.1"]
+                         + orca_dev.build_argv("claude", "opus", "xhigh"))
+
+    def test_bad_env_or_env_on_windows_exit_2_without_orca_calls(self):
+        for env, windows in (("1BAD=x", False), ("NOVALUE", False), ("=x", False), ("A-B=x", False), ("HTTPS_PROXY=x", True)):
+            with self.subTest(env=env, windows=windows):
+                fake = FakeOrca()
+                code, out = spawn(fake, SPAWN + ["--env", env], windows=windows)
+                self.assertEqual(code, 2)
+                self.assertIn("POSIX" if windows else "--env KEY=VALUE", out["error"])
+                self.assertEqual(fake.calls, [])
+
     def test_agy_uses_its_timeout_and_no_effort(self):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Antigravity CLI", "> ")],
                          ("orchestration", "dispatch"): [DISPATCHED]})
@@ -755,7 +776,7 @@ class LaunchDocTests(unittest.TestCase):
                         "dispatch --task", "--inject", "--retry-request", "request-show", "dispatch-show",
                         "orca terminal show", "orphaned", "worker-release", "retained", "ptyKilled",
                         'check --wait --types "worker_done,escalation,question" --timeout-ms 900000',
-                        "/effort high", "Path A", "Path B"):
+                        "/effort high", "Path A", "Path B", "--env KEY=VALUE"):
             self.assertIn(snippet, self.text, snippet)
         for code in range(7):
             self.assertRegex(self.text, r"\|\s*`?%d`?\s*\|" % code)
