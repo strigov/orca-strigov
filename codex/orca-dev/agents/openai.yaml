@@ -1,0 +1,6 @@
+interface:
+  display_name: "Orca Dev"
+  short_description: "Spec-driven development through Orca workers"
+  default_prompt: "Use $orca-dev to implement my task through supervised Orca workers."
+policy:
+  allow_implicit_invocation: false
