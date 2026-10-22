@@ -387,16 +387,16 @@ class SpawnTests(unittest.TestCase):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Claude Code")],
                          ("orchestration", "dispatch"): [DISPATCHED]})
         argv = ["--agent", "claude", "--model", "opus", "--effort", "xhigh", "--title", "t", "--task", "task_1",
-                "--env", "HTTPS_PROXY=http://127.0.0.1:1082", "--env", "NO_PROXY=localhost,127.0.0.1"]
+                "--env", "TMPDIR=/Volumes/build/tmp", "--env", "CARGO_HOME=/Volumes/build/cargo home"]
         code, out = spawn(fake, argv)
         self.assertEqual(code, 0)
         create = fake.called("terminal", "create")[0]
         self.assertEqual(shlex.split(create[create.index("--command") + 1]),
-                         ["env", "HTTPS_PROXY=http://127.0.0.1:1082", "NO_PROXY=localhost,127.0.0.1"]
+                         ["env", "TMPDIR=/Volumes/build/tmp", "CARGO_HOME=/Volumes/build/cargo home"]
                          + orca_dev.build_argv("claude", "opus", "xhigh"))
 
     def test_bad_env_or_env_on_windows_exit_2_without_orca_calls(self):
-        for env, windows in (("1BAD=x", False), ("NOVALUE", False), ("=x", False), ("A-B=x", False), ("HTTPS_PROXY=x", True)):
+        for env, windows in (("1BAD=x", False), ("NOVALUE", False), ("=x", False), ("A-B=x", False), ("TMPDIR=x", True)):
             with self.subTest(env=env, windows=windows):
                 fake = FakeOrca()
                 code, out = spawn(fake, SPAWN + ["--env", env], windows=windows)

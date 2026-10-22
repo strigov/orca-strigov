@@ -20,7 +20,7 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 
 `--command` is built for the host OS (`shlex.join` on POSIX, `subprocess.list2cmdline` on Windows); never type it yourself.
 
-`--env KEY=VALUE` (repeatable; POSIX only, Windows → exit 2) prefixes the argv with `env KEY=VALUE …` for this worker only. Use it when the agent cannot reach its API (DNS or network error on its screen) and a working proxy is known: `--env HTTPS_PROXY=<url> --env HTTP_PROXY=<url> --env NO_PROXY=localhost,127.0.0.1`. No secrets: the command stays visible in the terminal.
+`--env KEY=VALUE` (repeatable; POSIX only, Windows → exit 2) prefixes the argv with `env KEY=VALUE …` for this worker only, e.g. build paths: `--env TMPDIR=<dir> --env CARGO_HOME=<dir>`. No secrets: the command stays visible in the terminal. No proxy variables: the network goes through the system VPN; a DNS or network error on a worker's screen → tell the user.
 
 `spawn` prints one JSON line `{stage, handle, task_id, dispatch_id, request_id, dismissed, agent, screen, error}`:
 
