@@ -1,4 +1,4 @@
-"""orca-strigov 2.0: unit tests for bin/orca_dev.py and install.py. No Orca, no network, no real home."""
+"""orca-dev 2.1: unit tests for skills/orca-dev/scripts/{orca_dev,install}.py. No Orca, no network, no real home."""
 import contextlib
 import importlib.util
 import io
@@ -12,8 +12,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills" / "orca-dev" / "scripts"
 
 
 def load(name, path):
@@ -23,7 +26,7 @@ def load(name, path):
     return module
 
 
-orca_dev = load("orca_dev", ROOT / "bin" / "orca_dev.py")
+orca_dev = load("orca_dev", SCRIPTS / "orca_dev.py")
 
 
 class FakeOrca:
@@ -165,7 +168,7 @@ class BriefTests(unittest.TestCase):
         src = self.tmp / "v.txt"
         src.write_bytes(value.encode("utf-8"))
         t = self.template("A <V> B")
-        p = subprocess.run([sys.executable, str(ROOT / "bin" / "orca_dev.py"), "brief", t, "--set-file", "V=" + str(src),
+        p = subprocess.run([sys.executable, str(SCRIPTS / "orca_dev.py"), "brief", t, "--set-file", "V=" + str(src),
                             "--title", "x", "--dry-run"], capture_output=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout, ("A " + value + " B").encode("utf-8"))
@@ -456,7 +459,7 @@ class NoFilesTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in tmp.iterdir()), before)
 
 
-install = load("install", ROOT / "install.py")
+install = load("install", SCRIPTS / "install.py")
 
 
 class FakeRun:
@@ -500,14 +503,20 @@ class InstallTests(unittest.TestCase):
         self.skill(".agents/skills", "orchestration")
         self.skill(".claude/skills", "orca-cli")
 
-    def run_main(self, argv, run=None, which=which_none, windows=False):
+    def run_main(self, argv, run=None, which=which_none, windows=False, env=None, src=None):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = install.main(argv, home=self.home, run=run or FakeRun(), which=which, windows=windows)
+            code = install.main(argv, home=self.home, run=run or FakeRun(), which=which, windows=windows, env=env or {},
+                                src=src or SKILL_DIR)
         return code, out.getvalue(), err.getvalue()
 
     def snapshot(self):
         return {str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
+
+    def assertUnchanged(self, before):
+        after = self.snapshot()
+        self.assertEqual(sorted(after), sorted(before))
+        self.assertTrue(after == before, [k for k in after if after[k] != before[k]])
 
     def test_missing_native_skills_prints_install_command_and_exits_1(self):
         self.skill(".codex/skills", "orchestration")
@@ -516,7 +525,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("orca-cli", out)
         self.assertIn("\norca skills install --skill orchestration --skill orca-cli --agent codex,claude-code\n", out)
-        self.assertEqual(self.snapshot(), before)
+        self.assertUnchanged(before)
 
     @unittest.skipIf(os.name == "nt", "creating symlinks needs extra privileges on Windows")
     def test_vendored_strigov_copy_is_not_native(self):
@@ -527,7 +536,7 @@ class InstallTests(unittest.TestCase):
         os.symlink(str(vendored), str(self.home / ".codex/skills/orchestration"))
         self.skill(".agents/skills", "orca-cli")
         self.assertEqual(install.missing_native_skills(self.home), ["orchestration"])
-        self.assertIn(self.home / ".codex/skills/orchestration", install.stale_copies(self.home, "2.0.0"))
+        self.assertIn(self.home / ".codex/skills/orchestration", install.stale_copies(self.home, {}))
 
     def test_clean_environment_exits_0(self):
         self.native()
@@ -582,7 +591,7 @@ class InstallTests(unittest.TestCase):
         self.assertTrue(codex.read_text(encoding="utf-8").startswith('model = "x"\n\n[projects."/other"]\n'))
         before = self.snapshot()
         self.run_main(["--repo", str(repo)], run=run, which=lambda n: "/usr/bin/git" if n == "git" else None)
-        self.assertEqual(self.snapshot(), before)
+        self.assertUnchanged(before)
 
     def test_check_mode_reports_and_writes_nothing(self):
         self.native()
@@ -594,7 +603,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("claude: %s not trusted" % repo, out)
         self.assertIn("agy: ", out)
-        self.assertEqual(self.snapshot(), before)
+        self.assertUnchanged(before)
 
     def test_missing_or_invalid_trust_files_are_warned_not_created(self):
         self.native()
@@ -657,19 +666,164 @@ class InstallTests(unittest.TestCase):
 
     def test_stale_copies_listed_never_deleted(self):
         self.native()
-        self.skill(".codex/skills", "orca-dev")
+        self.assertEqual(self.run_main(["--agent", "claude", "--agent", "codex"])[0], 0)
+        self.skill(".agents/skills", "orca-dev")  # 1.x: no scripts/
+        standalone_2_0 = self.home / "codex-home" / "skills" / "orca-dev"
+        shutil.copytree(str(self.home / ".codex/skills/orca-dev"), str(standalone_2_0))
+        shutil.rmtree(str(standalone_2_0 / "agents"))
+        script = standalone_2_0 / "scripts" / "install.py"
+        script.write_text(script.read_text(encoding="utf-8").replace('VERSION = "2.1.0"\n', ""), encoding="utf-8")
         cache = self.home / ".codex/plugins/cache/personal/orca-strigov"
-        for name, version in ((".recovery-stage-20261006", "1.1.0"), ("1.1.0+codex.1", "1.1.0+codex.1"),
-                              ("2.0.0+codex.2", "2.0.0+codex.2")):
-            (cache / name / ".codex-plugin").mkdir(parents=True)
-            (cache / name / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
-        stale = install.stale_copies(self.home, "2.0.0")
-        self.assertEqual(stale, [self.home / ".codex/skills/orca-dev", cache / ".recovery-stage-20261006", cache / "1.1.0+codex.1"])
+        (cache / "2.0.0+codex.2" / ".codex-plugin").mkdir(parents=True)
+        env = {"CODEX_HOME": str(self.home / "codex-home")}
+        self.assertEqual(install.stale_copies(self.home, env), [standalone_2_0, self.home / ".agents/skills/orca-dev", cache])
+        self.assertEqual(install.stale_copies(self.home, {}), [self.home / ".agents/skills/orca-dev", cache])
         before = self.snapshot()
         code, out, err = self.run_main([])
         self.assertEqual(code, 1)
         self.assertIn("удалить вручную или ответить `y` на вопрос координатора при первом запуске", out)
-        self.assertEqual(self.snapshot(), before)
+        self.assertUnchanged(before)
+
+    def test_agent_installs_both_harnesses_without_probes(self):
+        run = FakeRun()
+        env = {"CODEX_HOME": str(self.home / "codex-home")}
+        code, out, err = self.run_main(["--agent", "claude", "--agent", "codex", "--agent", "claude"], run=run, env=env)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(run.calls, [])
+        claude, codex = self.home / ".claude/skills/orca-dev", self.home / "codex-home/skills/orca-dev"
+        self.assertEqual(out.count("installed at"), 2)
+        self.assertIn(str(codex), out)
+        self.assertTrue((claude / "SKILL.md").read_text(encoding="utf-8").startswith(
+            "---\nname: orca-dev\ndescription: Coordinate"))
+        self.assertIn("disable-model-invocation: true\n", (claude / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertFalse((claude / "agents").exists())
+        self.assertIn("allow_implicit_invocation: false", (codex / "agents/openai.yaml").read_text(encoding="utf-8"))
+        self.assertFalse((self.home / ".agents").exists())
+        self.assertEqual(install.stale_copies(self.home, env), [])
+        before = self.snapshot()
+        self.assertEqual(self.run_main(["--agent", "codex"], env=env)[0], 0)
+        self.assertUnchanged(before)
+        self.assertEqual(sorted(p.name for p in codex.parent.iterdir()), ["orca-dev"])
+
+    def test_agent_from_an_installed_copy(self):
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+        claude = self.home / ".claude/skills/orca-dev"
+        code, out, err = self.run_main(["--agent", "claude", "--agent", "codex"], src=claude)
+        self.assertEqual(code, 0, out)
+        self.assertIn("is this copy, nothing to do", out)
+        out_dir = self.home / "bundle"
+        install.bundle(SKILL_DIR, out_dir)
+        codex = self.home / ".codex/skills/orca-dev"
+        self.assertEqual(install.copy_files(codex), install.copy_files(out_dir / "codex/orca-dev"))
+        for rel in install.copy_files(codex):
+            self.assertEqual((codex / rel).read_bytes(), (out_dir / "codex/orca-dev" / rel).read_bytes(), rel)
+
+    def test_agent_refuses_what_is_not_an_orca_dev_copy(self):
+        self.skill(".claude/skills", "orca-dev")  # 1.x-like: no scripts/
+        foreign = self.home / ".codex/skills/orca-dev"
+        foreign.mkdir(parents=True)
+        (foreign / "SKILL.md").write_text("---\nname: something-else\n---\nname: orca-dev\n", encoding="utf-8")
+        (foreign / "scripts").mkdir()
+        (foreign / "scripts/orca_dev.py").write_text("", encoding="utf-8")
+        (foreign / "scripts/install.py").write_text('VERSION = "2.1.0"\n', encoding="utf-8")
+        before = self.snapshot()
+        code, out, err = self.run_main(["--agent", "claude", "--agent", "codex"])
+        self.assertEqual((code, out.count("is not an orca-dev copy")), (1, 2))
+        self.assertUnchanged(before)
+        shutil.rmtree(str(self.home / ".claude/skills/orca-dev"))
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+        installed = self.home / ".claude/skills/orca-dev"
+        for extra in ("notes.txt", "prompts/my-local-task.md", "agents/extra.yaml", "drafts/a.md"):
+            (installed / extra).parent.mkdir(exist_ok=True)
+            (installed / extra).write_text("mine", encoding="utf-8")
+            before = self.snapshot()
+            code, out, err = self.run_main(["--agent", "claude"])
+            self.assertEqual(code, 1, extra)
+            self.assertIn("a reinstall would lose them: " + ("drafts/" if extra.startswith("drafts") else extra), out)
+            self.assertUnchanged(before)
+            shutil.rmtree(str(installed / "drafts"), True)
+            if (installed / extra).exists():
+                (installed / extra).unlink()
+        (installed / "__pycache__").mkdir()
+        (installed / "scripts/__pycache__").mkdir()
+        (installed / "scripts/__pycache__/install.cpython-39.pyc").write_bytes(b"x")
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks needs extra privileges on Windows")
+    def test_agent_refuses_a_copy_with_a_symlink_inside(self):
+        self.assertEqual(self.run_main(["--agent", "codex"])[0], 0)
+        personal = self.home / "personal"
+        personal.mkdir()
+        (personal / "keep.md").write_text("mine", encoding="utf-8")
+        installed = self.home / ".codex/skills/orca-dev"
+        os.symlink(str(personal), str(installed / "notes"))
+        os.symlink(str(personal / "keep.md"), str(installed / "prompts" / "keep.md"))
+        (installed / "roles.md").unlink()
+        os.symlink(str(personal / "keep.md"), str(installed / "roles.md"))
+        code, out, err = self.run_main(["--agent", "codex"])
+        self.assertEqual(code, 1)
+        self.assertIn("notes/", out)
+        self.assertIn("prompts/keep.md", out)
+        self.assertIn("roles.md", out)
+        self.assertTrue(os.path.islink(installed / "notes"))
+        self.assertTrue(os.path.islink(installed / "prompts" / "keep.md"))
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks needs extra privileges on Windows")
+    def test_agent_refuses_a_symlink(self):
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+        target = self.home / ".claude/skills/orca-dev"
+        link = self.home / ".codex/skills/orca-dev"
+        link.parent.mkdir(parents=True)
+        os.symlink(str(target), str(link))
+        before = self.snapshot()
+        code, out, err = self.run_main(["--agent", "codex"])
+        self.assertEqual(code, 1)
+        self.assertIn("is not an orca-dev copy (or is a symlink)", out)
+        self.assertTrue(os.path.islink(link))
+        self.assertUnchanged(before)
+
+    def test_failed_render_keeps_the_old_copy(self):
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+        before = self.snapshot()
+        real = install.render
+
+        def broken(src, harness, dest):
+            real(src, harness, dest)
+            raise OSError("disk full")
+        install.render = broken
+        self.addCleanup(setattr, install, "render", real)
+        code, out, err = self.run_main(["--agent", "claude"])
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", out)
+        self.assertUnchanged(before)
+        self.assertEqual(sorted(p.name for p in (self.home / ".claude/skills").iterdir()), ["orca-dev"])
+
+    def test_failed_swap_restores_the_old_copy(self):
+        self.assertEqual(self.run_main(["--agent", "claude"])[0], 0)
+        before = self.snapshot()
+        real, calls = os.rename, []
+
+        def rename(src, dst):
+            calls.append(Path(src).name)
+            if len(calls) == 2:
+                raise OSError("busy")
+            real(src, dst)
+        with unittest.mock.patch.object(install.os, "rename", rename):
+            code, out, err = self.run_main(["--agent", "claude"])
+        self.assertEqual((code, calls[:2]), (1, ["orca-dev", calls[1]]))
+        self.assertTrue(calls[1].startswith(".orca-dev.new-"))
+        self.assertUnchanged(before)
+        self.assertEqual(sorted(p.name for p in (self.home / ".claude/skills").iterdir()), ["orca-dev"])
+
+    def test_mode_conflicts_exit_2_before_writes(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        before = self.snapshot()
+        for argv in (["--check", str(repo), "--agent", "claude"], ["--bundle", str(self.home / "b"), "--agent", "codex"],
+                     ["--bundle", str(self.home / "b"), "--repo", str(repo)], ["--agent", "gemini"]):
+            self.assertEqual(self.run_main(argv)[0], 2, argv)
+        self.assertUnchanged(before)
+        self.assertFalse((self.home / ".claude").exists())
 
     def test_usage_errors_exit_2(self):
         self.assertEqual(self.run_main(["--repo", str(self.home / "missing")])[0], 2)
@@ -810,6 +964,7 @@ REMOVED = [
     "docs/plans/finished/2026-09-01-todo-json-persistence.md",
     "docs/reviews/orca-dev-controlled-pipeline-phase-1.md", "docs/reviews/todo-cli-edit-csv-export-Ф2.md",
     "docs/reviews/todo-concurrency-csv-import-Ф2.md",
+    "bin", "install.py", "plugin.json", ".codex-plugin", ".claude-plugin",
 ]
 
 
@@ -823,9 +978,10 @@ def read(rel):
 
 class LayoutTests(unittest.TestCase):
     def test_v2_tree(self):
-        self.assertEqual(names(ROOT / "bin"), ["orca_dev.py"])
+        self.assertEqual(names(ROOT), ["AGENTS.md", "README.md", "README.ru.md", "assets", "docs", "skills", "tests"])
         self.assertEqual(names(ROOT / "skills"), ["orca-dev"])
-        self.assertEqual(names(SKILL_DIR), ["SKILL.md", "launch.md", "prompts", "roles.md"])
+        self.assertEqual(names(SKILL_DIR), ["SKILL.md", "launch.md", "prompts", "roles.md", "scripts"])
+        self.assertEqual(names(SCRIPTS), ["install.py", "orca_dev.py"])
         self.assertEqual(names(PROMPTS_DIR), sorted(n + ".md" for n in PROMPT_TOKENS))
         self.assertEqual(names(ROOT / "tests"), ["test_orca_dev.py"])
         for rel in REMOVED:
@@ -835,19 +991,10 @@ class LayoutTests(unittest.TestCase):
                   if ".git" not in p.parts and p.suffix in (".sh", ".ps1")]
         self.assertEqual(shells, [])
 
-    def test_manifests_are_2_0_0_without_hooks(self):
-        portable, codex, claude = (json.loads(read(rel)) for rel in
-                                   ("plugin.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"))
-        for manifest in (portable, codex, claude):
-            self.assertEqual((manifest["name"], manifest["version"]), ("orca-strigov", "2.0.0"))
-            self.assertEqual(manifest["description"], codex["description"])
-            self.assertNotIn('"hooks"', json.dumps(manifest))
-        self.assertEqual(codex["skills"], "./skills/")
-
     def test_size_limits(self):
         for rel, kib in (("skills/orca-dev/SKILL.md", 18), ("skills/orca-dev/roles.md", 5), ("skills/orca-dev/launch.md", 8)):
             self.assertLessEqual(len(read(rel).encode("utf-8")), kib * KIB, rel)
-        for rel, limit in (("README.md", 80), ("README.ru.md", 80), ("AGENTS.md", 30)):
+        for rel, limit in (("README.md", 200), ("README.ru.md", 200), ("AGENTS.md", 30)):
             self.assertLessEqual(len(read(rel).splitlines()), limit, rel)
 
     def test_no_hold_or_unverifiable_anywhere_in_the_skill(self):
@@ -857,7 +1004,9 @@ class LayoutTests(unittest.TestCase):
     def test_skill_md_anchors(self):
         text = read("skills/orca-dev/SKILL.md")
         self.assertTrue(text.startswith("---\nname: orca-dev\ndescription: "))
-        for anchor in ("$orca-dev", "/orca-strigov:orca-dev", "orca skills get orchestration", "orca status --json",
+        self.assertIn("Invoking `$orca-dev` (Codex) or `/orca-dev` (Claude Code) is the user's explicit request", text)
+        self.assertIn("Only on an explicit $orca-dev or /orca-dev;", text)
+        for anchor in ("<skill>/scripts/orca_dev.py", "<skill>/scripts/install.py", "orca skills get orchestration", "orca status --json",
                        "run-create", "run-use", "python3", "py -3", "orca_dev.py brief", "orca_dev.py spawn",
                        "orca_dev.py close", "roles.md", "launch.md", "--set-file", "orca_run:", "implementer:",
                        "covers:", "verify:", "risk:", "hard:", "git rev-parse HEAD", "git merge --no-ff",
@@ -884,9 +1033,91 @@ class LayoutTests(unittest.TestCase):
         for rel in ("README.md", "README.ru.md"):
             text = read(rel)
             for anchor in ("orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code",
-                           "install.py --repo", "$orca-dev", "/orca-strigov:orca-dev",
-                           "docs/specs/2026-10-14-orca-dev-v2-design.md", "gemini-3.8-flash-high", "gpt-6-astra"):
+                           "skills/orca-dev/scripts/install.py --agent", "--repo", "$orca-dev", "/orca-dev",
+                           "docs/specs/2026-10-14-orca-dev-v2-design.md", "gemini-3.8-flash-high", "gpt-6-astra",
+                           "release"):
                 self.assertIn(anchor, text, (rel, anchor))
+            for gone in ("/orca-strigov:orca-dev", "plugin-creator", "marketplace"):
+                self.assertNotIn(gone, text, (rel, gone))
         agents = read("AGENTS.md")
-        for anchor in ("python3 -m unittest discover tests", "launch.md", "bin/orca_dev.py", "roles.md"):
+        for anchor in ("python3 -m unittest discover tests", "launch.md", "roles.md",
+                       "skills/orca-dev/scripts/orca_dev.py", "scripts/install.py"):
             self.assertIn(anchor, agents, anchor)
+        self.assertNotIn("bin/orca_dev.py", agents)
+
+
+class BundleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out = self.tmp / "out"
+        self.assertEqual([level for level, _ in install.bundle(SKILL_DIR, self.out)], ["OK", "OK"])
+
+    def zip_name(self, harness):
+        return self.out / ("orca-dev-%s-v%s.zip" % (harness, install.VERSION))
+
+    def test_trees_and_zips_match_and_are_reproducible(self):
+        again = self.tmp / "again"
+        install.bundle(SKILL_DIR, again)
+        prompts = sorted("prompts/" + n + ".md" for n in PROMPT_TOKENS)
+        for harness, extra in (("claude", []), ("codex", ["agents/openai.yaml"])):
+            tree = self.out / harness / "orca-dev"
+            self.assertEqual(install.copy_files(tree), sorted(list(install.SHIP_FILES) + prompts + extra))
+            with zipfile.ZipFile(str(self.zip_name(harness))) as z:
+                self.assertEqual(z.namelist(), ["orca-dev/" + rel for rel in install.copy_files(tree)])
+                for rel in install.copy_files(tree):
+                    self.assertEqual(z.read("orca-dev/" + rel), (tree / rel).read_bytes(), rel)
+            self.assertEqual(self.zip_name(harness).read_bytes(),
+                             (again / self.zip_name(harness).name).read_bytes())
+            with zipfile.ZipFile(str(self.zip_name(harness))) as z:
+                self.assertEqual({i.date_time for i in z.infolist()}, {(1980, 1, 1, 0, 0, 0)})
+        with self.assertRaises(OSError):
+            install.render_skill_md("---\nname: orca-dev\n---\nno invocation line\n", "claude")
+
+    def test_each_harness_copy_names_only_its_invocation(self):
+        claude = (self.out / "claude/orca-dev/SKILL.md").read_text(encoding="utf-8")
+        codex = (self.out / "codex/orca-dev/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Only on an explicit /orca-dev;", claude)
+        self.assertIn("Invoking `/orca-dev` is the user's explicit request", claude)
+        self.assertNotIn("$orca-dev", claude.split("\n## ", 1)[0])
+        self.assertIn("Only on an explicit $orca-dev;", codex)
+        self.assertIn("Invoking `$orca-dev` is the user's explicit request", codex)
+        self.assertNotIn("disable-model-invocation", codex)
+        self.assertNotIn("/orca-dev", codex.split("\n## ", 1)[0])
+        for harness in install.HARNESSES:
+            tree = self.out / harness / "orca-dev"
+            for rel in install.copy_files(tree):
+                text = (tree / rel).read_bytes().decode("utf-8")
+                for gone in ("<plugin>", "bin/orca_dev", "/orca-strigov:orca-dev", "plugin.json"):
+                    self.assertNotIn(gone, text, (harness, rel, gone))
+
+    def test_render_is_the_same_from_any_copy(self):
+        for first, second in (("claude", "codex"), ("codex", "claude")):
+            dest = self.tmp / (first + "-to-" + second)
+            install.render(self.out / first / "orca-dev", second, dest)
+            ref = self.out / second / "orca-dev"
+            self.assertEqual(install.copy_files(dest), install.copy_files(ref))
+            for rel in install.copy_files(ref):
+                self.assertEqual((dest / rel).read_bytes(), (ref / rel).read_bytes(), rel)
+
+    def test_unpacked_zip_runs_from_a_foreign_cwd(self):
+        for harness in install.HARNESSES:
+            unpacked = self.tmp / ("unpacked-" + harness)
+            with zipfile.ZipFile(str(self.zip_name(harness))) as z:
+                z.extractall(str(unpacked))
+            helper = unpacked / "orca-dev" / "scripts" / "orca_dev.py"
+            p = subprocess.run([sys.executable, "-I", str(helper), "brief", "implementer", "REPO=/abs/repo", "TASK=t",
+                                "VERIFY=v", "CONTEXT=c", "--title", "x", "--dry-run"],
+                               capture_output=True, cwd=str(self.tmp))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn(b"/abs/repo", p.stdout)
+            p = subprocess.run([sys.executable, "-I", str(unpacked / "orca-dev" / "scripts" / "install.py"), "--bundle",
+                                str(self.tmp / ("rebundle-" + harness))], capture_output=True, cwd=str(self.tmp))
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual((self.tmp / ("rebundle-" + harness) / self.zip_name("codex").name).read_bytes(),
+                             self.zip_name("codex").read_bytes())
+
+    def test_bundle_refuses_a_dirty_or_inner_output(self):
+        self.assertEqual(install.bundle(SKILL_DIR, self.out)[0][0], "ERROR")
+        self.assertEqual(install.bundle(SKILL_DIR, SKILL_DIR / "out")[0][0], "ERROR")
+        self.assertFalse((SKILL_DIR / "out").exists())

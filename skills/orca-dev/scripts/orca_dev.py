@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orca-strigov 2.0 helper: brief, spawn, ready, close.
+"""orca-dev 2.1 helper: brief, spawn, ready, close.
 
 Usage (macOS/Linux: python3, Windows: py -3):
   orca_dev.py brief <template> [KEY=VALUE ...] [--set-file KEY=PATH ...] --title T [--run ID] [--dry-run]
@@ -26,8 +26,8 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-PLUGIN = Path(__file__).resolve().parents[1]
-PROMPTS = PLUGIN / "skills" / "orca-dev" / "prompts"
+SKILL = Path(__file__).resolve().parents[1]
+PROMPTS = SKILL / "prompts"
 
 ANGLE = re.compile(r"<([^<>\n]*)>")
 UPPER_SNAKE = re.compile(r"[A-Z][A-Z0-9_]*")

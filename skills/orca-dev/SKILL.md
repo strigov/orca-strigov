@@ -1,11 +1,11 @@
 ---
 name: orca-dev
-description: Coordinate spec-driven development through supervised Orca workers (spec, plan, TDD phases, double review, commits). Only on an explicit $orca-dev or /orca-strigov:orca-dev; never inside a dispatched Orca worker.
+description: Coordinate spec-driven development through supervised Orca workers (spec, plan, TDD phases, double review, commits). Only on an explicit $orca-dev or /orca-dev; never inside a dispatched Orca worker.
 ---
 
 # orca-dev: coordinator
 
-Invoking `$orca-dev` (Codex) or `/orca-strigov:orca-dev` (Claude Code) is the user's explicit request to coordinate supervised Orca workers for the task that follows. A dispatched worker ignores this skill.
+Invoking `$orca-dev` (Codex) or `/orca-dev` (Claude Code) is the user's explicit request to coordinate supervised Orca workers for the task that follows. A dispatched worker ignores this skill.
 
 ## Native guide and three overrides
 
@@ -19,9 +19,9 @@ Never write `worker_done` or `ask` commands into briefs: workers get them from t
 
 ## Files and helper
 
-`<plugin>` = the plugin root (the folder with `bin/` and `skills/`). `roles.md`: models, spawn arguments, fallbacks. `launch.md`: spawn exit codes, waiting, unknown dispatch, orphaned terminals, closing, Windows. `prompts/`: 11 briefs.
+`<skill>` = this skill's folder (the one with `SKILL.md` and `scripts/`). `roles.md`: models, spawn arguments, fallbacks. `launch.md`: spawn exit codes, waiting, unknown dispatch, orphaned terminals, closing, Windows. `prompts/`: 11 briefs.
 
-Helper: `python3 <plugin>/bin/orca_dev.py <subcommand>` (Windows: `py -3 <plugin>\bin\orca_dev.py <subcommand>`).
+Helper: `python3 <skill>/scripts/orca_dev.py <subcommand>` (Windows: `py -3 <skill>\scripts\orca_dev.py <subcommand>`).
 
 - `orca_dev.py brief <name> KEY=VALUE ... [--set-file KEY=PATH ...] --title <slug>/<role>-<phase> --run <orca_run>` prints the `task_id`. Exit 1: bad or unfilled token, no Task (rule 3); 2: usage or unknown KEY; 3: Orca refused.
 - `orca_dev.py spawn ... --task <task_id>` starts one fresh worker (arguments: `roles.md`; exit codes: `launch.md`).
@@ -51,7 +51,7 @@ Values: REPO = absolute repo root. SPEC, PLAN = absolute paths. TASK = the task 
 2. New task: `orca orchestration run-create --objective "<slug or task>" --json`, keep the id as `orca_run`. Resume: `orca orchestration run-use --id <orca_run> --json`, then "State and resume".
 3. Close the settled terminals of the Run (rule 9).
 4. New task and a dirty tree → one question «закоммитить как есть / отложить (`git stash`) / стоп».
-5. Once per session: `python3 <plugin>/install.py` (read-only) prints `old copy:` lines (old plugin caches, stale skill copies). Those paths plus a `.superpowers/` folder in the repo → one question with the list «удалить старые копии? y / n»; delete only on `y`, only the listed paths.
+5. Once per session: `python3 <skill>/scripts/install.py` (read-only) prints `old copy:` lines (the old plugin cache, stale skill copies). Those paths plus a `.superpowers/` folder in the repo → one question with the list «удалить старые копии? y / n»; delete only on `y`, only the listed paths.
 
 ### Step 1. Triage
 

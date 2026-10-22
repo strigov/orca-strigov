@@ -1,16 +1,16 @@
 # orca-dev — launching, waiting for and closing workers
 
-Mechanics only; who runs where is in `roles.md`. `<plugin>` is the plugin root (the folder with `bin/` and `skills/`). Helper: `python3 <plugin>/bin/orca_dev.py` (Windows: `py -3 <plugin>\bin\orca_dev.py`).
+Mechanics only; who runs where is in `roles.md`. `<skill>` is this skill's folder (the one with `SKILL.md` and `scripts/`). Helper: `python3 <skill>/scripts/orca_dev.py` (Windows: `py -3 <skill>\scripts\orca_dev.py`).
 
 ## Path B — every fresh launch
 
 One command per worker, after `orca_dev.py brief` printed the `task_id`:
 
-`python3 <plugin>/bin/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id> [--env KEY=VALUE ...]`
+`python3 <skill>/scripts/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id> [--env KEY=VALUE ...]`
 
 It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
 
-Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv` in `bin/orca_dev.py`):
+Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv` in `scripts/orca_dev.py`):
 
 | agent | argv |
 |---|---|
@@ -68,15 +68,15 @@ Orphaned terminals: before any repeated dispatch run `orca terminal show --termi
 
 ## Closing
 
-- Path B terminal (created by `spawn`): `python3 <plugin>/bin/orca_dev.py close <h>` — exit 0 when the receipt has `ptyKilled: true` or the handle is gone from `orca terminal list --worktree current --json`; exit 1 = not confirmed (do not repeat; one line in the final report).
+- Path B terminal (created by `spawn`): `python3 <skill>/scripts/orca_dev.py close <h>` — exit 0 when the receipt has `ptyKilled: true` or the handle is gone from `orca terminal list --worktree current --json`; exit 1 = not confirmed (do not repeat; one line in the final report).
 - Path A terminal: `orca orchestration worker-release --dispatch <id> --json`; `retained` in the answer → `orca_dev.py close <h>`.
 - Start/resume cleanup: `orca orchestration worker-list --run <orca_run> --json` without a state filter (Path B rows are `retained`) → close every terminal whose Task is settled with no live Dispatch; plus `orca terminal list --worktree current --json` rows titled `<slug>/…` with no live Dispatch. Never touch other Runs, the coordinator's terminal, or terminals without the `<slug>/` prefix.
 
-If Orca/Codex/agy change CLI flags, edit this file and `bin/orca_dev.py` together; `install.py` prints the versions.
+If Orca/Codex/agy change CLI flags, edit this file and `scripts/orca_dev.py` together; `install.py` prints the versions.
 
 ## Windows
 
-- Coordinator shell: PowerShell 5.1/7. Helper: `py -3 <plugin>\bin\orca_dev.py <subcommand> …`.
+- Coordinator shell: PowerShell 5.1/7. Helper: `py -3 <skill>\scripts\orca_dev.py <subcommand> …`.
 - One command = one process; check `$LASTEXITCODE` before the next one. No `$(...)`, `&&`, `mktemp`, heredoc or quote escaping: `orca_dev.py` does the fragile parts.
 - Never call `bash` (it may be the WSL launcher). Give workers absolute Windows paths.
 - `agy` on native Windows is unverified: if it is not on PATH, the implementer starts on the Luna fallback with one line to the user.
