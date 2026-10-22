@@ -20,6 +20,10 @@
 
 You describe the result. The `orca-dev` skill handles the spec, plan, implementation phases, review rounds, and handoffs.
 
+<p align="center">
+  <a href="https://github.com/strigov/orca-strigov/releases/tag/v2.1.0"><strong>Release v2.1.0</strong></a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.1.0/orca-dev-codex-v2.1.0.zip">Download for Codex</a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.1.0/orca-dev-claude-v2.1.0.zip">Download for Claude Code</a>
+</p>
+
 | What you get | How it works |
 |---|---|
 | **A shared definition of done** | Larger tasks start with a spec and acceptance criteria that you approve. |
@@ -40,23 +44,20 @@ cd orca-strigov
 python3 skills/orca-dev/scripts/install.py --agent codex --agent claude
 ```
 
-Use just one `--agent` option if you only need one variant. Installation copies a self-contained skill; it does not require a running Orca instance or change project trust.
+Use just one `--agent` option if you only need one variant. Coming from the plugin? Follow the [migration steps](#migrating-from-the-plugin) before changing an active setup. Installation copies a self-contained skill; it does not require a running Orca instance or change project trust.
 
 | Agent | Install location | Invocation |
 |---|---|---|
 | Codex | `~/.codex/skills/orca-dev` (or `$CODEX_HOME/skills/orca-dev` when set) | `$orca-dev` |
 | Claude Code | `~/.claude/skills/orca-dev` | `/orca-dev` |
 
-**Updates:** rerun the install command from the updated source. Recognized installations are replaced, including edits inside shipped files; keep your customizations elsewhere before updating. Symlinks, unrecognized destination folders and copies holding files or symlinks the new version does not ship are refused, so nothing of yours is lost silently. The installer prints the final path and does not install a second copy in `~/.agents/skills`.
+**Updates:** rerun the install command from the updated source. Recognized installations are replaced, including edits inside shipped files; keep your customizations elsewhere before updating. Symlinks, unrecognized destination folders and copies holding files or symlinks the new version does not ship are refused with a list of the conflicting entries. The installer prints the final path and does not install a second copy in `~/.agents/skills`.
 
-<details>
-<summary><strong>Prefer a ready-made download?</strong></summary>
+### Ready-made downloads
 
-[GitHub Releases](https://github.com/strigov/orca-strigov/releases) provide separate `orca-dev-codex-v2.1.0.zip` and `orca-dev-claude-v2.1.0.zip` archives. Extract your archive, then run `python3 orca-dev/scripts/install.py --agent codex` (or `--agent claude`). Each ZIP contains one `orca-dev/` folder with everything it needs.
+[Release v2.1.0](https://github.com/strigov/orca-strigov/releases/tag/v2.1.0) contains separate [Codex ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.1.0/orca-dev-codex-v2.1.0.zip) and [Claude Code ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.1.0/orca-dev-claude-v2.1.0.zip) downloads. Extract your archive, then run `python3 orca-dev/scripts/install.py --agent codex` (or `--agent claude`). Each ZIP contains one `orca-dev/` folder with everything it needs.
 
-The [release branch](https://github.com/strigov/orca-strigov/tree/release) contains the same rendered skills under `codex/orca-dev/` and `claude/orca-dev/`, plus the source commit in its README. You can clone it with `git clone --branch release --single-branch https://github.com/strigov/orca-strigov.git`, then run the installer inside the chosen variant.
-
-</details>
+The [release branch](https://github.com/strigov/orca-strigov/tree/release) contains the same rendered skills under `codex/orca-dev/` and `claude/orca-dev/`, plus the source commit in its README. You can clone it with `git clone --branch release --single-branch https://github.com/strigov/orca-strigov.git`, then run `python3 codex/orca-dev/scripts/install.py --agent codex` or `python3 claude/orca-dev/scripts/install.py --agent claude` from that checkout.
 
 ### 2. Prepare Orca and the worker CLIs
 
@@ -184,4 +185,13 @@ Both variants share the same workflow. Codex includes `agents/openai.yaml` with 
 
 **Tests:** from the source checkout, run `python3 -m unittest discover tests` (Windows: `py -3 -m unittest discover tests`). No running Orca instance is needed. Helper code must remain compatible with Python 3.9.
 
-**Migrating from the plugin:** install the standalone skill, finish any active coordinator task, then remove the old Codex plugin with `codex plugin remove orca-strigov@personal`. Remove only confirmed old copies reported by the installer; installation does not clean them up automatically. Start a new session and check that only one current `orca-dev` is available. Existing v2.0.0 releases remain historical downloads. Older 1.x hooks, receipts, ledgers, and bundled native skills are no longer part of the distribution.
+## Migrating from the plugin
+
+**Finish active coordinator tasks before changing the installation.** A running coordinator or worker wrapper may still import helpers from the old plugin cache or checkout. Keep those files in place until every task using them has finished.
+
+1. Install the standalone variant for your agent using the commands above.
+2. Remove the old Codex plugin with `codex plugin remove orca-strigov@personal`; this also removes its local cache.
+3. Inspect any remaining old-copy warnings and remove only confirmed leftovers for this skill. The skill installer reports old copies; it does not clean them up automatically.
+4. Start a new agent session and check that only one current `orca-dev` is available.
+
+Historical v2.0.0 downloads remain available. The current distribution contains no plugin manifests, hooks, receipts, ledgers, or bundled native Orca skills.
