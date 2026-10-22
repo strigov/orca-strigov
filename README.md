@@ -195,3 +195,5 @@ Both variants share the same workflow. Codex includes `agents/openai.yaml` with 
 4. Start a new agent session and check that only one current `orca-dev` is available.
 
 Historical v2.0.0 downloads remain available. The current distribution contains no plugin manifests, hooks, receipts, ledgers, or bundled native Orca skills.
+
+**License:** [MIT](LICENSE) · Copyright © 2026 strigov.

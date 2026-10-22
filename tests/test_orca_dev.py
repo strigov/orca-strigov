@@ -978,10 +978,11 @@ def read(rel):
 
 class LayoutTests(unittest.TestCase):
     def test_v2_tree(self):
-        self.assertEqual(names(ROOT), ["AGENTS.md", "README.md", "README.ru.md", "assets", "docs", "skills", "tests"])
+        self.assertEqual(names(ROOT), ["AGENTS.md", "LICENSE", "README.md", "README.ru.md", "assets", "docs", "skills", "tests"])
         self.assertEqual(names(ROOT / "skills"), ["orca-dev"])
-        self.assertEqual(names(SKILL_DIR), ["SKILL.md", "launch.md", "prompts", "roles.md", "scripts"])
+        self.assertEqual(names(SKILL_DIR), ["LICENSE", "SKILL.md", "launch.md", "prompts", "roles.md", "scripts"])
         self.assertEqual(names(SCRIPTS), ["install.py", "orca_dev.py"])
+        self.assertEqual(read("LICENSE"), read("skills/orca-dev/LICENSE"))
         self.assertEqual(names(PROMPTS_DIR), sorted(n + ".md" for n in PROMPT_TOKENS))
         self.assertEqual(names(ROOT / "tests"), ["test_orca_dev.py"])
         for rel in REMOVED:
