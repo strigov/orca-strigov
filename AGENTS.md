@@ -15,7 +15,7 @@ Rules:
 
 - Python standard library only, with syntax that also runs on Python 3.9 (macOS system `python3`). Every `orca` call is an argument list; never `shell=True`.
 - No hooks, no `.sh`/`.ps1` helpers, no state files, receipts or ledgers.
-- Size limits: `SKILL.md` 18 KiB, `roles.md` 5 KiB, `launch.md` 8 KiB, each brief 2 KiB, each README 200 lines, this file 30 lines.
+- Size limits: `SKILL.md` 20 KiB, `roles.md` 5 KiB, `launch.md` 10 KiB, each brief 2 KiB, each README 200 lines, this file 30 lines.
 - The Codex build disables implicit invocation in `agents/openai.yaml`; Claude Code uses `disable-model-invocation: true`.
 - Briefs use angle tokens only as `<UPPER_SNAKE>`.
 

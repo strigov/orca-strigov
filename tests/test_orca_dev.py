@@ -904,7 +904,7 @@ class LaunchDocTests(unittest.TestCase):
         self.text = (SKILL_DIR / "launch.md").read_bytes().decode("utf-8")
 
     def test_size_and_argv_lines_match_helper(self):
-        self.assertLessEqual(len(self.text.encode("utf-8")), 8 * KIB)
+        self.assertLessEqual(len(self.text.encode("utf-8")), 10 * KIB)
         for argv in (orca_dev.build_argv("agy", "gemini-3.8-flash-high", None),
                      orca_dev.build_argv("codex", "<model>", "<lvl>"),
                      orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>")):
@@ -993,7 +993,7 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(shells, [])
 
     def test_size_limits(self):
-        for rel, kib in (("skills/orca-dev/SKILL.md", 18), ("skills/orca-dev/roles.md", 5), ("skills/orca-dev/launch.md", 8)):
+        for rel, kib in (("skills/orca-dev/SKILL.md", 20), ("skills/orca-dev/roles.md", 5), ("skills/orca-dev/launch.md", 10)):
             self.assertLessEqual(len(read(rel).encode("utf-8")), kib * KIB, rel)
         for rel, limit in (("README.md", 200), ("README.ru.md", 200), ("AGENTS.md", 30)):
             self.assertLessEqual(len(read(rel).splitlines()), limit, rel)

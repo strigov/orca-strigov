@@ -1,6 +1,6 @@
 # orca-dev — launching, waiting for and closing workers
 
-Mechanics only; who runs where is in `roles.md`. `<skill>` is this skill's folder (the one with `SKILL.md` and `scripts/`). Helper: `python3 <skill>/scripts/orca_dev.py` (Windows: `py -3 <skill>\scripts\orca_dev.py`).
+Mechanics only; who runs where is in `roles.md`. `<skill>` is this skill's folder (the one with `SKILL.md` and `scripts/`). Helper: `python3 <skill>/scripts/orca_dev.py` (Windows: see "Windows").
 
 ## Path B — every fresh launch
 
@@ -27,9 +27,9 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 | exit | meaning | coordinator action |
 |---|---|---|
 | 0 | dispatched (`stage: done`) | wait with `check --wait` |
-| 1 | agent not ready in time (`handle` set) | `orca_dev.py close <h>`, one more `spawn`; a second 1 in a row = unavailable → roles.md fallback |
+| 1 | agent not ready in time (`handle` set) | close + one more `spawn` (SKILL.md "Failures") |
 | 2 | usage error | fix the command |
-| 3 | `terminal create` failed, nothing delivered | unavailable at once → roles.md fallback |
+| 3 | `terminal create` failed, nothing delivered | unavailable at once (SKILL.md "Failures") |
 | 4 | `dispatch` failed or unknown (`handle`, `request_id` set) | not unavailability: keep the terminal and the model, see "Unknown dispatch" |
 | 5 | unknown modal (`screen` set) | close, then SKILL.md failures (code 5/6 rule) |
 | 6 | login screen (`agent` set) | close, then SKILL.md failures; not a fix round |
@@ -68,15 +68,15 @@ Orphaned terminals: before any repeated dispatch run `orca terminal show --termi
 
 ## Closing
 
-- Path B terminal (created by `spawn`): `python3 <skill>/scripts/orca_dev.py close <h>` — exit 0 when the receipt has `ptyKilled: true` or the handle is gone from `orca terminal list --worktree current --json`; exit 1 = not confirmed (do not repeat; one line in the final report).
+- Path B terminal (created by `spawn`): `python3 <skill>/scripts/orca_dev.py close <h>` — exit 0 when the receipt has `ptyKilled: true` or the handle is gone from `orca terminal list --worktree current --json`; exit 1 = not confirmed (do not repeat; SKILL.md rule 9).
 - Path A terminal: `orca orchestration worker-release --dispatch <id> --json`; `retained` in the answer → `orca_dev.py close <h>`.
-- Start/resume cleanup: `orca orchestration worker-list --run <orca_run> --json` without a state filter (Path B rows are `retained`) → close every terminal whose Task is settled with no live Dispatch; plus `orca terminal list --worktree current --json` rows titled `<slug>/…` with no live Dispatch. Never touch other Runs, the coordinator's terminal, or terminals without the `<slug>/` prefix.
+- Start/resume cleanup: `orca orchestration worker-list --run <orca_run> --json` without a state filter (Path B rows are `retained`) → close every terminal whose Task is settled (`succeeded`/`failed`) with no live Dispatch; plus `orca terminal list --worktree current --json` rows titled `<slug>/…` with no live Dispatch. What never to touch: SKILL.md rule 9.
 
 If Orca/Codex/agy change CLI flags, edit this file and `scripts/orca_dev.py` together; `install.py` prints the versions.
 
 ## Windows
 
 - Coordinator shell: PowerShell 5.1/7. Helper: `py -3 <skill>\scripts\orca_dev.py <subcommand> …`.
-- One command = one process; check `$LASTEXITCODE` before the next one. No `$(...)`, `&&`, `mktemp`, heredoc or quote escaping: `orca_dev.py` does the fragile parts.
+- One process per command, `$LASTEXITCODE` checked before the next (SKILL.md rule 1); no `mktemp` or quote escaping: `orca_dev.py` does the fragile parts.
 - Never call `bash` (it may be the WSL launcher). Give workers absolute Windows paths.
-- `agy` on native Windows is unverified: if it is not on PATH, the implementer starts on the Luna fallback with one line to the user.
+- `agy` on native Windows is unverified: not on PATH → Luna fallback (`roles.md`).
