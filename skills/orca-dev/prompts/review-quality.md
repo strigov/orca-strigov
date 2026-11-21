@@ -20,6 +20,8 @@ Re-check them: a finding that is still open is reported again with its id, new f
 
 Severity: `blocking` means a bug, data loss, a security hole or risky logic without a test; `minor` means readability, naming and style.
 
+Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
+
 Report through the Orca worker preamble: worker_done subject `PASS` when there is no `blocking` finding, otherwise `FINDINGS`. Body: one finding per line, `Q{n} blocking|minor {file}:{line} — {problem} → {fix}`. `minor` findings may accompany `PASS`.
 
 Outcome: `--outcome failed` only with a `BLOCKED` subject, when you could not do the job; every other report, `FINDINGS` and `not fixed` lines included, uses `--outcome succeeded`.

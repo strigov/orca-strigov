@@ -1029,6 +1029,10 @@ class BriefTemplateTests(unittest.TestCase):
                 self.assertIn(phrase, brief_text(name), (name, phrase))
         for name in ("spec-review", "plan-review", "review-spec", "review-quality"):
             self.assertIn("not fixed: {reason}", brief_text(name), name)
+        for name in ("implementer", "fix-round", "review-spec", "review-quality", "final-review"):
+            self.assertIn("stop every process you started", brief_text(name), name)
+            self.assertIn("delete the temporary copies you made", brief_text(name), name)
+        self.assertIn("asserts every value the criterion names", brief_text("implementer"))
 
 
 class LaunchDocTests(unittest.TestCase):

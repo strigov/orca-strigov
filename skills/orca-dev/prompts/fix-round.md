@@ -9,6 +9,7 @@ Rules:
 - TDD: when an item is a bug, first add a test that reproduces it and see it fail, then fix the code.
 - Touch only what the fixes need. Do not commit, stash or reset.
 - Never use the `Schedule` timer; wait for tests with one blocking shell call.
+- Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 
 Before reporting, run each of these commands and make it pass:
 
