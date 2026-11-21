@@ -664,6 +664,31 @@ class InstallTests(unittest.TestCase):
         self.assertIn("brew upgrade --cask codex", out)
         self.assertFalse([c for c in run.calls if {"upgrade", "install", "i", "update"} & set(c[1:2])])
 
+    def test_agent_failing_version_is_a_warning(self):
+        run = FakeRun({("codex", "--version"): (1, ""), ("claude", "--version"): (0, "2.1.330 (Claude Code)\n"),
+                       ("agy", "--version"): (124, "")})
+        lines = install.check_tools(run, lambda n: None if n == "orca" else "/x/" + n, False)
+        self.assertIn(("WARN", "/x/codex: codex --version failed (exit 1) -> reinstall it"), lines)
+        self.assertIn(("WARN", "/x/agy: agy --version failed (exit 124) -> reinstall it"), lines)
+        self.assertIn(("OK", "claude 2.1.330 (Claude Code): /x/claude"), lines)
+        self.assertFalse([line for line in lines if line[1].startswith("codex ?")])
+
+    def test_agents_copy_of_this_version_is_listed_as_unmanaged(self):
+        self.native()
+        self.assertEqual(self.run_main(["--agent", "claude", "--agent", "codex"])[0], 0)
+        shutil.copytree(str(self.home / ".claude/skills/orca-dev"), str(self.home / ".agents/skills/orca-dev"))
+        self.assertEqual(install.unmanaged_copy(self.home), self.home / ".agents/skills/orca-dev")
+        self.assertEqual(install.stale_copies(self.home, {}), [])
+        run = FakeRun({("orca", "--version"): (0, "1.4.265\n"), ("orca", "status"): (0, READY),
+                       ("codex", "--version"): (0, "codex-cli 0.171.0\n"), ("claude", "--version"): (0, "2.1.330\n"),
+                       ("agy", "--version"): (0, "1.5.14\n"), ("npm", "outdated"): (0, "{}")})
+        before = self.snapshot()
+        code, out, err = self.run_main([], run=run, which=which_all)
+        self.assertEqual(code, 0, out)
+        self.assertIn("INFO unmanaged copy: %s" % (self.home / ".agents/skills/orca-dev"), out)
+        self.assertNotIn("old copy", out)
+        self.assertUnchanged(before)
+
     def test_agy_missing_is_info_on_windows_only(self):
         self.assertIn(("INFO", "agy not on PATH (native Windows): the implementer starts on its Luna fallback"),
                       install.check_tools(FakeRun(), lambda n: None if n == "agy" else "/x/" + n, True))

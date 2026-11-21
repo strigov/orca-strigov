@@ -51,7 +51,7 @@ Use just one `--agent` option if you only need one variant. Coming from the plug
 | Codex | `~/.codex/skills/orca-dev` (or `$CODEX_HOME/skills/orca-dev` when set) | `$orca-dev` |
 | Claude Code | `~/.claude/skills/orca-dev` | `/orca-dev` |
 
-**Updates:** rerun the install command from the updated source. Recognized installations are replaced, including edits inside shipped files; keep your customizations elsewhere before updating. Symlinks, unrecognized destination folders and copies holding files or symlinks the new version does not ship are refused with a list of the conflicting entries. The installer prints the final path and does not install a second copy in `~/.agents/skills`.
+**Updates:** rerun the install command from the updated source. Recognized installations are replaced, including edits inside shipped files; keep your customizations elsewhere before updating. Symlinks, unrecognized destination folders and copies holding files or symlinks the new version does not ship are refused with a list of the conflicting entries. The installer prints the final path and does not install a second copy in `~/.agents/skills`; the read-only check lists a copy found there as unmanaged, because updates never reach it.
 
 ### Ready-made downloads
 

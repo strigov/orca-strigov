@@ -11,7 +11,7 @@
 Exit: 0 clean, 1 any WARN or ERROR (or native Orca skills missing), 2 usage.
 --agent replaces only a recognized orca-dev copy (edits inside its files are overwritten). --repo writes
 only ~/.claude.json, ~/.gemini/antigravity-cli/settings.json and ~/.codex/config.toml (appends a table,
-never edits one). Old copies are listed, never deleted.
+never edits one). Old copies are listed, never deleted; ~/.agents/skills/orca-dev is never installed, only listed.
 """
 from __future__ import annotations
 
@@ -275,6 +275,13 @@ def stale_copies(home: Path, env: Mapping[str, str]) -> List[Path]:
     return stale
 
 
+def unmanaged_copy(home: Path) -> Optional[Path]:
+    """~/.agents/skills/orca-dev of the current version: --agent never updates it, so it drifts unseen (issue #6e).
+    Another version there is already an old copy."""
+    entry = home / ".agents" / "skills" / "orca-dev"
+    return entry if recognized_version(entry) == VERSION else None
+
+
 def claude_keys(path: str, windows: bool) -> List[str]:
     """projects[] keys that count as this path; the first one is written."""
     if not windows:
@@ -479,7 +486,11 @@ def check_tools(run: Run, which: Callable[[str], Optional[str]], windows: bool) 
         label = name
         if name != "git":
             code, text = run([exe, "--version"], 30)
-            label += " " + (text.strip().splitlines()[0] if code == 0 and text.strip() else "?")
+            if code != 0 or not text.strip():
+                # A broken install (e.g. an interrupted npm update) still sits on PATH; the worker would die at start.
+                lines.append(("WARN", "%s: %s --version failed (exit %d) -> reinstall it" % (exe, name, code)))
+                continue
+            label += " " + text.strip().splitlines()[0]
         lines.append(("OK", "%s: %s" % (label, exe)))
     return lines
 
@@ -576,6 +587,9 @@ def main(argv: Optional[List[str]] = None, home: Optional[Path] = None, run: Run
                                      "run agy once, then re-run", lambda d: trust_agy(d, paths, write)))
         warnings += emit(update_codex(home / ".codex" / "config.toml", paths, windows, write))
 
+    unmanaged = unmanaged_copy(home)
+    if unmanaged:
+        emit([("INFO", "unmanaged copy: %s (--agent never updates it; keep it in sync by hand or remove it)" % unmanaged)])
     stale = stale_copies(home, env)
     if stale:
         warnings += emit([("WARN", "old copy: %s" % p) for p in stale])
