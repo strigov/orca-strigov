@@ -28,7 +28,7 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 |---|---|---|
 | 0 | dispatched (`stage: done`) | wait with `check --wait` |
 | 1 | agent not ready in time (`handle` set) | close + one more `spawn` (SKILL.md "Failures") |
-| 2 | usage error | fix the command |
+| 2 | usage error, or no Orca worktree matched (`selector_not_found`: run from inside the worktree) | fix the command |
 | 3 | `terminal create` failed, nothing delivered | unavailable at once (SKILL.md "Failures") |
 | 4 | `dispatch` failed or unknown (`handle`, `request_id` set) | not unavailability: keep the terminal and the model, see "Unknown dispatch" |
 | 5 | unknown modal (`screen` set) | close, then SKILL.md failures (code 5/6 rule) |

@@ -110,6 +110,7 @@ class BriefTests(unittest.TestCase):
                 code, out, err = call(orca_dev.cmd_brief, [t, "REPO=/r", "--title", "x"], run=fake)
                 self.assertEqual(code, 1)
                 self.assertIn(bad, err)
+                self.assertIn("write prose placeholders as {name}", err)
                 self.assertEqual(fake.calls, [])
 
     def test_unfilled_token_exits_1_and_lists_it(self):
@@ -473,6 +474,14 @@ class SpawnTests(unittest.TestCase):
         fake = FakeOrca({("terminal", "create"): [(1, {"ok": False, "error": {"message": "no worktree"}})]})
         code, out = spawn(fake)
         self.assertEqual((code, out["stage"], out["handle"], out["error"]), (3, "terminal_create", None, "no worktree"))
+
+    def test_worktree_selector_not_found_exit_2(self):
+        message = "No Orca workspace contains the current directory: /home/u"
+        fake = FakeOrca({("terminal", "create"): [(1, {"ok": False, "error": {"code": "selector_not_found", "message": message}})]})
+        code, out = spawn(fake)
+        self.assertEqual((code, out["stage"], out["handle"]), (2, "terminal_create", None))
+        self.assertTrue(out["error"].startswith(message))
+        self.assertIn("--worktree path:", out["error"])
 
     def test_usage_exit_2_without_orca_calls(self):
         for argv in (SPAWN[:-2], ["--agent", "agy", "--model", "m", "--effort", "high", "--title", "t", "--task", "x"],

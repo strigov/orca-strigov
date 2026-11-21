@@ -196,7 +196,8 @@ def cmd_brief(argv: List[str], run: Runner = run_orca) -> int:
         return 2
     bad = lint_template(template)
     if bad:
-        print("brief: template has non-<UPPER_SNAKE> angle tokens: " + " ".join(bad), file=sys.stderr)
+        print("brief: template has non-<UPPER_SNAKE> angle tokens: %s; write prose placeholders as {name}"
+              % " ".join(bad), file=sys.stderr)
         return 1
     try:
         values = parse_values(args.pairs, args.set_file, template_tokens(template))
@@ -458,6 +459,11 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     handle = dig(data, "result", "terminal", "handle")
     if code != 0 or not isinstance(handle, str) or not handle:
         out["error"] = orca_error(code, data, raw)
+        if dig(data, "error", "code") == "selector_not_found":
+            # A worktree selector that matches nothing (e.g. `active` run outside any Orca workspace) is a
+            # usage error, not an unavailable model (issue #5.8).
+            out["error"] += " -> run spawn from inside the Orca worktree or pass --worktree path:<dir>"
+            return emit(2)
         return emit(3)
     out["handle"] = handle
 
