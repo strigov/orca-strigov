@@ -1154,7 +1154,7 @@ class LayoutTests(unittest.TestCase):
                        "принять как есть / ещё раунд / стоп", "повторить позже / заменить на",
                        "закоммитить как есть / отложить", "ждать дальше / остановить и заменить / стоп",
                        "продолжить F", "терминал", "не закрылся", "the subject decides", "payload.stopReason", "`finished`",
-                       "`needs-input`", "`lost` or `exited`", "send --to dispatch:", "outcome_unknown", "consumer_fenced"):
+                       "`needs-input`", "`lost` or `exited`", "a terminal you closed yourself", "send --to dispatch:", "outcome_unknown", "consumer_fenced"):
             self.assertIn(anchor, text, anchor)
         for name in PROMPT_TOKENS:
             self.assertIn(name, text, name)
