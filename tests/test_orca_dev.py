@@ -239,6 +239,28 @@ class ReadyTests(unittest.TestCase):
             ["terminal", "send", "--terminal", "term_1", "--enter", "--json"],
         ])
 
+    def test_dismissal_settles_before_the_next_read(self):
+        clock = Clock()
+        trust = screen("Do you trust this folder?", "> Yes")
+        blocked = (1, {"ok": True, "result": {"wait": {"satisfied": False, "blockedReason": "agent-trust-workspace"}}})
+        fake = FakeOrca({("terminal", "read"): [trust, screen("Antigravity CLI", "> ")],
+                         ("terminal", "wait"): [blocked, (0, {"ok": True, "result": {"wait": {"satisfied": True}}})]})
+        code, out, err = call(orca_dev.cmd_ready, ["term_1", "agy", "60"], run=fake, clock=clock, sleep=clock.sleep)
+        self.assertEqual((code, json.loads(out)), (0, {"dismissed": ["agy-trust-folder"]}), err)
+        self.assertEqual(len(fake.called("terminal", "send")), 1)
+        names = [(c[1], c[c.index("--timeout-ms") + 1] if "--timeout-ms" in c else None) for c in fake.calls]
+        self.assertEqual(names, [("read", None), ("send", None), ("wait", str(orca_dev.SETTLE_MS)), ("read", None), ("wait", "60000")])
+
+    def test_dialog_seen_after_each_settle_exits_5(self):
+        clock = Clock()
+        fake = FakeOrca({("terminal", "read"): [screen("Do you trust this folder?", "> Yes")]})
+        code, out, err = call(orca_dev.cmd_ready, ["term_1", "agy", "600"], run=fake, clock=clock, sleep=clock.sleep)
+        self.assertEqual(code, 5)
+        self.assertIn("persists", err)
+        self.assertEqual(len(fake.called("terminal", "send")), orca_dev.DISMISS_LIMIT)
+        settles = [c for c in fake.called("terminal", "wait") if str(orca_dev.SETTLE_MS) in c]
+        self.assertEqual(len(settles), orca_dev.DISMISS_LIMIT)
+
     def test_ready_after_busy_with_final_idle_wait(self):
         clock = Clock()
         fake = FakeOrca({("terminal", "read"): [screen("Ask Codex", "Starting MCP servers (1/9)"), screen("Ask Codex")]})

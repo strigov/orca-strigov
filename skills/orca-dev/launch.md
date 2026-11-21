@@ -56,7 +56,7 @@ Known modals (`spawn` dismisses them with `orca terminal send` and lists them in
 | `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit: 2.1.301 macOS, 2.1.302 Windows) |
 | `agy-trust-folder` | agy | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
 
-Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog; `spawn` catches it only on its last screen read before dispatch.
+Any other `blockedReason`, a refused `terminal send`, or a modal still on screen after 3 dismissals (each followed by a `tui-idle` wait of up to 10 s) → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog; `spawn` catches it only on its last screen read before dispatch.
 
 ## Waiting
 

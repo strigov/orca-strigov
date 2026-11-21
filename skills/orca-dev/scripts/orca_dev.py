@@ -306,6 +306,7 @@ def wait_ready(run: Runner, handle: str, agent: str, timeout_s: float, blocked_r
         return {"code": code, "dismissed": dismissed, "screen": tail_text(lines), "error": err}
 
     while True:
+        sent = False
         ok, new_lines, is_screen, error = read_screen(run, handle)
         if not ok:
             fails += 1
@@ -338,10 +339,18 @@ def wait_ready(run: Runner, handle: str, agent: str, timeout_s: float, blocked_r
                     return result(5, "orca refused terminal send for modal %s" % modal)
                 if modal not in dismissed:
                     dismissed.append(modal)
+                sent = True
         if clock() - start >= timeout_s:
             return result(1, "%s not ready on %s after %ss" % (agent, handle, int(timeout_s)))
         began = clock()
-        blocked_reason = probe_blocked(run, handle)
+        if sent:
+            # The TUI redraws for a few seconds after a dismissal (agy, issue #5.4): let it settle, and let the
+            # next screen read alone, not a blockedReason from this redraw, decide whether the dialog is still there.
+            run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", str(SETTLE_MS), "--json"],
+                SETTLE_MS / 1000 + 30)
+            blocked_reason = None
+        else:
+            blocked_reason = probe_blocked(run, handle)
         rest = POLL_S - (clock() - began)
         if rest > 0:
             sleep(rest)
