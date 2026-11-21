@@ -51,6 +51,8 @@ class FakeOrca:
             return 0, {"ok": True, "result": {"wait": {"satisfied": True}}}, ""
         if tuple(args[:2]) == ("terminal", "send"):
             return 0, {"ok": True, "result": {"send": {"accepted": True}}}, ""
+        if tuple(args[:2]) == ("terminal", "show"):
+            return 0, {"ok": True, "result": {"terminal": {"agentIdentity": "codex"}}}, ""
         raise AssertionError("unexpected orca call: %r" % (args,))
 
     def called(self, *prefix):
@@ -383,6 +385,52 @@ class SpawnTests(unittest.TestCase):
                 code, out = spawn(fake)
                 self.assertEqual((code, out["stage"], out["dispatch_id"]), (0, "done", "ctx_7"))
                 self.assertNotIn("--full", fake.called("orchestration", "dispatch")[0])
+
+    def test_dispatch_waits_for_agent_identity(self):
+        unnamed = (0, {"ok": True, "result": {"terminal": {"agentIdentity": None}}})
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                         ("terminal", "show"): [unnamed, unnamed, (0, {"ok": True, "result": {"terminal": {"agentIdentity": "codex"}}})],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(fake.called("terminal", "show")), 3)
+        names = [tuple(c[:2]) for c in fake.calls]
+        self.assertLess(max(i for i, n in enumerate(names) if n == ("terminal", "show")), names.index(("orchestration", "dispatch")))
+
+    def test_identity_gate_is_soft(self):
+        for show in ((0, {"ok": True, "result": {"terminal": {"handle": "term_9"}}}),
+                     (1, {"ok": False, "error": {"code": "invalid_argument", "message": "Unknown command: terminal show"}})):
+            with self.subTest(show=show):
+                clock = Clock()
+                fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                                 ("terminal", "show"): [show], ("orchestration", "dispatch"): [DISPATCHED]})
+                code, out, err = call(orca_dev.cmd_spawn, SPAWN, run=fake, clock=clock, sleep=clock.sleep,
+                                      windows=False, new_request_id=lambda: RID)
+                self.assertEqual(code, 0)
+                self.assertEqual(len(fake.called("orchestration", "dispatch")), 1)
+                shows = len(fake.called("terminal", "show"))
+                if show[0]:
+                    self.assertEqual(shows, 1)
+                else:
+                    self.assertEqual(shows, int(orca_dev.IDENTITY_S) + 1)
+
+    def test_dialog_after_ready_marker_is_dismissed_before_dispatch(self):
+        trust = screen("Folder access", "Trust this folder?", "› 1. Trust and continue", "  2. Quit")
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Ask Codex"), trust, trust, screen("Ask Codex")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake, windows=True)
+        self.assertEqual((code, out["stage"], out["dismissed"]), (0, "done", ["codex-trust-folder"]))
+        names = [tuple(c[:2]) for c in fake.calls]
+        self.assertLess(names.index(("terminal", "send")), names.index(("orchestration", "dispatch")))
+
+    def test_login_after_ready_marker_exit_6(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Ask Codex"), screen("Sign in with ChatGPT")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake)
+        self.assertEqual((code, out["stage"]), (6, "ready"))
+        self.assertEqual(fake.called("orchestration", "dispatch"), [])
 
     def test_dispatch_without_id_exit_4(self):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],

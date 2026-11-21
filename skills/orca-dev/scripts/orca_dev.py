@@ -35,6 +35,8 @@ ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 POLL_S = 2.0
 READ_FAIL_LIMIT = 5
 DISMISS_LIMIT = 3
+SETTLE_MS = 10000
+IDENTITY_S = 15.0
 SCREEN_TAIL = 15
 
 # Readiness markers, busy markers, login screens and timeouts per agent (launch.md "Agent start").
@@ -396,6 +398,21 @@ def env_prefix(pairs: List[str], windows: bool) -> List[str]:
     return ["env"] + pairs
 
 
+def wait_identity(run: Runner, handle: str, clock: Callable[[], float] = time.monotonic,
+                  sleep: Callable[[float], None] = time.sleep) -> Optional[str]:
+    """Poll `terminal show` up to IDENTITY_S for Orca's agentIdentity; dispatch refuses a terminal without one
+    ("no recognized agent detected"). Soft gate: None on timeout, on an error or on an Orca without the field."""
+    start = clock()
+    while True:
+        code, data, raw = run(["terminal", "show", "--terminal", handle, "--json"], 30)
+        identity = dig(data, "result", "terminal", "agentIdentity")
+        if isinstance(identity, str) and identity:
+            return identity
+        if code != 0 or clock() - start >= IDENTITY_S:
+            return None
+        sleep(1.0)
+
+
 def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float] = time.monotonic,
               sleep: Callable[[float], None] = time.sleep, windows: bool = os.name == "nt",
               new_request_id: Callable[[], str] = lambda: str(uuid.uuid4())) -> int:
@@ -439,12 +456,20 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     code, data, raw = run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle",
                            "--timeout-ms", "180000", "--json"], 200)
     reason = dig(data, "result", "wait", "blockedReason")
-    outcome = wait_ready(run, handle, args.agent, AGENTS[args.agent]["timeout"],
-                         reason if isinstance(reason, str) and reason else None, clock=clock, sleep=sleep)
-    out["dismissed"] = outcome["dismissed"]
-    if outcome["code"] != 0:
-        out["screen"], out["error"] = outcome["screen"], outcome["error"]
-        return emit({1: 1, 3: 1, 5: 5, 6: 6}[outcome["code"]])
+    reason = reason if isinstance(reason, str) and reason else None
+    for recheck in (True, False):
+        outcome = wait_ready(run, handle, args.agent, AGENTS[args.agent]["timeout"], reason, clock=clock, sleep=sleep)
+        out["dismissed"] += [m for m in outcome["dismissed"] if m not in out["dismissed"]]
+        if outcome["code"] != 0:
+            out["screen"], out["error"] = outcome["screen"], outcome["error"]
+            return emit({1: 1, 3: 1, 5: 5, 6: 6}[outcome["code"]])
+        wait_identity(run, handle, clock, sleep)
+        # A dialog can follow the ready marker (Codex trust: ~8 s later); one more look before dispatch.
+        ok, lines, is_screen, _ = read_screen(run, handle)
+        late = ok and classify(args.agent, lines, is_screen, float(AGENTS[args.agent]["timeout"]))["state"]
+        if not recheck or late not in ("modal", "needs_login"):
+            break
+        reason = None
 
     out["stage"] = "dispatch"
     out["request_id"] = new_request_id()

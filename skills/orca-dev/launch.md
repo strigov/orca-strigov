@@ -8,7 +8,7 @@ One command per worker, after `orca_dev.py brief` printed the `task_id`:
 
 `python3 <skill>/scripts/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id> [--env KEY=VALUE ...]`
 
-It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
+It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → up to 15 s for `agentIdentity` in `orca terminal show` (without it dispatch fails: `no recognized agent detected`) → one more screen read (a dialog after the ready marker → dismiss, wait again) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
 
 Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv` in `scripts/orca_dev.py`):
 
@@ -56,7 +56,7 @@ Known modals (`spawn` dismisses them with `orca terminal send` and lists them in
 | `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit: 2.1.301 macOS, 2.1.302 Windows) |
 | `agy-trust-folder` | agy | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
 
-Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog, and `spawn` may dispatch into it.
+Any other `blockedReason`, a refused `terminal send`, or a modal still shown after 3 dismissals → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog; `spawn` catches it only on its last screen read before dispatch.
 
 ## Waiting
 
