@@ -103,6 +103,14 @@ def dig(data, *keys):
     return data
 
 
+def dig_id(data, concise: str, record: str) -> Optional[str]:
+    """result.<concise> (Orca's concise view) or result.<record>.id (the full record); non-empty string or None."""
+    for value in (dig(data, "result", concise), dig(data, "result", record, "id")):
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def orca_error(code: int, data: Optional[dict], text: str) -> str:
     message = dig(data, "error", "message")
     if isinstance(message, str) and message:
@@ -204,8 +212,8 @@ def cmd_brief(argv: List[str], run: Runner = run_orca) -> int:
     if args.run:
         call += ["--run", args.run]
     code, data, raw = run(call + ["--json"], 60)
-    task_id = dig(data, "result", "task", "id")
-    if code != 0 or not isinstance(task_id, str):
+    task_id = dig_id(data, "taskId", "task")
+    if code != 0 or task_id is None:
         print("brief: task-create failed: " + orca_error(code, data, raw), file=sys.stderr)
         return 3
     print(task_id)
@@ -442,8 +450,8 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     out["request_id"] = new_request_id()
     code, data, raw = run(["orchestration", "dispatch", "--task", args.task, "--to", handle, "--inject",
                            "--retry-request", out["request_id"], "--json"], 120)
-    dispatch_id = dig(data, "result", "dispatch", "id")
-    if code != 0 or not isinstance(dispatch_id, str) or not dispatch_id:
+    dispatch_id = dig_id(data, "dispatchId", "dispatch")
+    if code != 0 or dispatch_id is None:
         out["error"] = orca_error(code, data, raw)
         return emit(4)
     out["dispatch_id"], out["stage"] = dispatch_id, "done"

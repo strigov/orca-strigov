@@ -156,12 +156,24 @@ class BriefTests(unittest.TestCase):
         self.assertEqual(call(orca_dev.cmd_brief, [t, "--set-file", "X=" + str(path), "--title", "x", "--dry-run"])[1], "hello")
         self.assertEqual(call(orca_dev.cmd_brief, [t, "--set-file", "X=" + str(self.tmp / "missing"), "--title", "x"])[0], 2)
 
+    def test_task_id_from_concise_or_full_view(self):
+        t = self.template("<REPO>")
+        for result in ({"taskId": "task_c", "status": "ready"}, {"task": {"id": "task_c", "status": "ready"}}):
+            with self.subTest(result=result):
+                fake = FakeOrca({("orchestration", "task-create"): [(0, {"ok": True, "result": result})]})
+                code, out, err = call(orca_dev.cmd_brief, [t, "REPO=/r", "--title", "x"], run=fake)
+                self.assertEqual((code, out.strip(), err), (0, "task_c", ""))
+                self.assertNotIn("--full", fake.calls[0])
+
     def test_task_create_failure_exits_3(self):
         t = self.template("<REPO>")
-        fake = FakeOrca({("orchestration", "task-create"): [(1, {"ok": False, "error": {"message": "runtime down"}})]})
-        code, out, err = call(orca_dev.cmd_brief, [t, "REPO=/r", "--title", "x"], run=fake)
-        self.assertEqual(code, 3)
-        self.assertIn("runtime down", err)
+        for response, message in (((1, {"ok": False, "error": {"message": "runtime down"}}), "runtime down"),
+                                  ((0, {"ok": True, "result": {"status": "ready"}}), "task-create failed")):
+            with self.subTest(response=response):
+                fake = FakeOrca({("orchestration", "task-create"): [response]})
+                code, out, err = call(orca_dev.cmd_brief, [t, "REPO=/r", "--title", "x"], run=fake)
+                self.assertEqual((code, out), (3, ""))
+                self.assertIn(message, err)
 
     def test_dry_run_cli_bytes_are_exact(self):
         value = "line1\r\nстрока2\n\n<i>3</i>"
@@ -361,6 +373,22 @@ class SpawnTests(unittest.TestCase):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("$ ")]})
         code, out = spawn(fake)
         self.assertEqual((code, out["stage"], out["handle"]), (1, "ready", "term_9"))
+
+    def test_dispatch_id_from_full_or_concise_view(self):
+        for result in ({"dispatch": {"id": "ctx_7", "task_id": "task_1"}, "injected": True},
+                       {"dispatchId": "ctx_7", "taskId": "task_1", "injected": True}):
+            with self.subTest(result=result):
+                fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                                 ("orchestration", "dispatch"): [(0, {"ok": True, "result": result})]})
+                code, out = spawn(fake)
+                self.assertEqual((code, out["stage"], out["dispatch_id"]), (0, "done", "ctx_7"))
+                self.assertNotIn("--full", fake.called("orchestration", "dispatch")[0])
+
+    def test_dispatch_without_id_exit_4(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                         ("orchestration", "dispatch"): [(0, {"ok": True, "result": {"injected": True}})]})
+        code, out = spawn(fake)
+        self.assertEqual((code, out["stage"], out["dispatch_id"]), (4, "dispatch", None))
 
     def test_dispatch_failure_exit_4_keeps_ids(self):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
