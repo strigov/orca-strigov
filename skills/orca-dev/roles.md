@@ -23,7 +23,7 @@ Rules:
 - One family rule is left: Opus writes the spec and the plan, Astra reviews them. It does not apply to code: Opus also reviews frontend written by Opus.
 - A model change is always a new terminal (the model is fixed at start). Fixes go to the implementer's terminal.
 - Revisions at `high` in the author's terminal: before the first revision send `/effort high` once (`launch.md`).
-- "Unavailable" needs positive evidence: `worker-start` failed or `spawn` exit 3; `spawn` exit 1 twice in a row on fresh terminals; `spawn` exit 5 or 6; `worker_done --outcome failed` mentioning quota, rate limit, auth or launch. Silence is not unavailability (SKILL.md "Failures").
+- "Unavailable" needs positive evidence: `worker-start` failed or `spawn` exit 3; `spawn` exit 1 twice in a row on fresh terminals; `spawn` exit 5 or 6; `worker_done --outcome failed` mentioning quota, rate limit, auth or launch; an `escalation` `finished` whose last output shows quota, rate limit or auth. Silence is not unavailability (SKILL.md "Failures").
 - Exit 5 or 6: the row has an alternative model other than the failed one (implementer Gemini → Luna; frontend Opus/Sonnet → agy) → announced switch without a retry; otherwise (spec/plan authors, Sol, every reviewer) → one question at once, no retry of the same model. Exit 6 is not a failure and not a fix round.
 - Back to the primary model only at the next independent assignment (a new phase or task), never inside the current chain of replacements; it does not undo `implementer: sol` or `luna` of the current phase.
 - Native Windows without `agy` on PATH: the implementer starts on the Luna fallback with one line to the user.

@@ -1062,8 +1062,10 @@ class LaunchDocTests(unittest.TestCase):
                         "dispatch --task", "--inject", "--retry-request", "request-show", "dispatch-show",
                         "orca terminal show", "orphaned", "worker-release", "retained", "ptyKilled",
                         'check --wait --types "worker_done,escalation,question" --timeout-ms 900000',
-                        "/effort high", "Path A", "Path B", "--env KEY=VALUE"):
+                        "/effort high", "Path A", "Path B", "--env KEY=VALUE", "whole unread batch", "agentIdentity",
+                        "selector_not_found"):
             self.assertIn(snippet, self.text, snippet)
+        self.assertNotIn("check --ack", self.text)
         for code in range(7):
             self.assertRegex(self.text, r"\|\s*`?%d`?\s*\|" % code)
 
@@ -1147,7 +1149,8 @@ class LayoutTests(unittest.TestCase):
                        "worker-read --dispatch", "check --wait", "request-show",
                        "принять как есть / ещё раунд / стоп", "повторить позже / заменить на",
                        "закоммитить как есть / отложить", "ждать дальше / остановить и заменить / стоп",
-                       "продолжить F", "терминал", "не закрылся", "the subject decides"):
+                       "продолжить F", "терминал", "не закрылся", "the subject decides", "payload.stopReason", "`finished`",
+                       "`needs-input`", "`lost` or `exited`", "send --to dispatch:", "outcome_unknown", "consumer_fenced"):
             self.assertIn(anchor, text, anchor)
         for name in PROMPT_TOKENS:
             self.assertIn(name, text, name)

@@ -60,7 +60,7 @@ Any other `blockedReason`, a refused `terminal send`, or a modal still on screen
 
 ## Waiting
 
-`orca orchestration check --wait --types "worker_done,escalation,question" --timeout-ms 900000 --json`; `question` → `orca orchestration reply --id <msg> --body <answer> --json`; `worker_done` → accept (SKILL.md) → `check --ack <delivery_id>`.
+`orca orchestration check --wait --types "worker_done,escalation,question" --timeout-ms 900000 --json`. `--types` only chooses what wakes the wait: the answer is the whole unread batch, already marked handled (no `--ack`), so act on every message in it, oldest first; other types (heartbeat) → skip. `question` → `orca orchestration reply --id <msg> --body <answer> --json`; `worker_done` → accept (SKILL.md); `escalation` → SKILL.md "Failures".
 
 Unknown dispatch (spawn exit 4): `orca orchestration request-show --request <request_id> --json` and `orca orchestration dispatch-show --task <task_id> --json`. `completed`, or a Dispatch with status `pending`/`dispatched`/`completed` → delivered, wait. `absent` and no Dispatch or a `failed` one (`last_failure` names the send error; the Task is `ready` again) → retry once: `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <request_id> --json`. A retry that leaves a `failed` Dispatch again, or `circuit_broken` → one question at once. `pending`, contradicting answers or an unknown retry → leave the terminal, wait by the silence rules, then one question.
 
