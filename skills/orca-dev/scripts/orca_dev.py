@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orca-dev 2.1 helper: brief, spawn, ready, close.
+"""orca-dev 2.2 helper: brief, spawn, ready, close.
 
 Usage (macOS/Linux: python3, Windows: py -3):
   orca_dev.py brief <template> [KEY=VALUE ...] [--set-file KEY=PATH ...] --title T [--run ID] [--dry-run]

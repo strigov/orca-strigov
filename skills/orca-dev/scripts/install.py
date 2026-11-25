@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orca-dev 2.1 install and checks (one file for macOS, Linux and Windows).
+"""orca-dev 2.2 install and checks (one file for macOS, Linux and Windows).
 
   python3 install.py                  read-only checks (Windows: py -3 install.py)
   python3 install.py --agent <a>      install this skill for claude (~/.claude/skills/orca-dev) or codex
@@ -27,7 +27,7 @@ from pathlib import Path
 import zipfile
 from typing import Callable, List, Mapping, Optional, Tuple
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 MIN_ORCA = (1, 4, 265)
 HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent

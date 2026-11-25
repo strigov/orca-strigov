@@ -1,4 +1,4 @@
-"""orca-dev 2.1: unit tests for skills/orca-dev/scripts/{orca_dev,install}.py. No Orca, no network, no real home."""
+"""orca-dev 2.2: unit tests for skills/orca-dev/scripts/{orca_dev,install}.py. No Orca, no network, no real home."""
 import contextlib
 import importlib.util
 import io
@@ -979,7 +979,7 @@ class InstallTests(unittest.TestCase):
         shutil.copytree(str(self.home / ".codex/skills/orca-dev"), str(standalone_2_0))
         shutil.rmtree(str(standalone_2_0 / "agents"))
         script = standalone_2_0 / "scripts" / "install.py"
-        script.write_text(script.read_text(encoding="utf-8").replace('VERSION = "2.1.0"\n', ""), encoding="utf-8")
+        script.write_text(script.read_text(encoding="utf-8").replace('VERSION = "2.2.0"\n', ""), encoding="utf-8")
         cache = self.home / ".codex/plugins/cache/personal/orca-strigov"
         (cache / "2.0.0+codex.2" / ".codex-plugin").mkdir(parents=True)
         env = {"CODEX_HOME": str(self.home / "codex-home")}
@@ -1032,7 +1032,7 @@ class InstallTests(unittest.TestCase):
         (foreign / "SKILL.md").write_text("---\nname: something-else\n---\nname: orca-dev\n", encoding="utf-8")
         (foreign / "scripts").mkdir()
         (foreign / "scripts/orca_dev.py").write_text("", encoding="utf-8")
-        (foreign / "scripts/install.py").write_text('VERSION = "2.1.0"\n', encoding="utf-8")
+        (foreign / "scripts/install.py").write_text('VERSION = "2.2.0"\n', encoding="utf-8")
         before = self.snapshot()
         code, out, err = self.run_main(["--agent", "claude", "--agent", "codex"])
         self.assertEqual((code, out.count("is not an orca-dev copy")), (1, 2))
