@@ -6,7 +6,9 @@ Run this to see the whole change:
 
 <DIFF>
 
-For every acceptance criterion of the spec decide whether the branch closes it: find the code and the test, and run the test. Then check that the phases fit together: no broken integration, no leftover duplicate or dead code between phases.
+For every acceptance criterion of the spec decide whether the branch closes it: find the code and the test, and run the test. Then check that the phases fit together: no broken integration, no leftover duplicate or dead code between phases, nothing built that no criterion needs (over-engineering is `minor` unless it duplicates or contradicts another phase).
+
+Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 
 Report through the Orca worker preamble: worker_done subject `PASS` when every criterion is closed and there is no `blocking` integration problem, otherwise `FINDINGS`. Body: a table with one row per criterion, `| AC{n} | closed | {test or file} |` or `| AC{n} | not closed | {why} |`; then integration problems, one per line, `I{n} blocking|minor {file}:{line} — {problem} → {fix}`.
 

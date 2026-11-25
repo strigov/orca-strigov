@@ -10,10 +10,12 @@ Context from the coordinator:
 
 Rules:
 - TDD: for each behaviour write the test first, run it and see it fail, then write the code and run the test green.
+- A test of a criterion asserts every value the criterion names (numbers, strings, fields, order), not only that a result exists or has the right type.
 - Touch only the files this task needs. If you had to change anything else, name it in the report.
 - Do not commit, stash or reset unless the task text tells you to (for example, finishing a merge): the coordinator reviews the working tree and commits.
 - Wait for a long test with one blocking shell call. Never use the `Schedule` timer: it polls the model every 30 s and burns quota.
 - If you need an answer, ask through the Orca worker preamble instead of waiting in the terminal.
+- Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 
 Before reporting, run each of these commands and make it pass:
 

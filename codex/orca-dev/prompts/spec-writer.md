@@ -9,6 +9,7 @@ Write only this file: no code, no plan, no commits. Read the code the task touch
 Write the spec in Russian with exactly these sections, in this order:
 
 - `## Цель`: the problem and the expected result, 2 to 5 sentences.
+- `## Использование`: who uses it and how (one user or many, one process or several, platforms) and what is deliberately not supported, 2 to 5 lines. Reviewers judge how often a problem can happen by this section.
 - `## Вне скоупа`: what this work deliberately does not do.
 - `## Критерии приёмки`: numbered `AC1`, `AC2`, ..., each in the form «КОГДА {условие}, ТОГДА {наблюдаемый результат}». Every criterion is observable: a command, a test, a file or an output that a reviewer can check.
 - `## Дизайн`: architecture, files to create or change, interfaces and data formats.

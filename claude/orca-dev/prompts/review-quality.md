@@ -18,7 +18,9 @@ Previous round (`—` if this is the first): its findings and the author's `fixe
 
 Re-check them: a finding that is still open is reported again with its id, new findings continue the numbering; do not repeat a fixed one or a `not fixed` one whose reason holds.
 
-Severity: `blocking` means a bug, data loss, a security hole or risky logic without a test; `minor` means readability, naming and style.
+Severity. `blocking`: a bug met in ordinary use, or risky logic without a test; or, however rare, lost or corrupted data, another user's data or a secret exposed, an irreversible change nobody approved. Each `blocking` line adds its trigger (the literal steps, who performs them, how often) and the harm in one sentence; check that the code permits those steps. A trigger that needs a rare precondition (two actors at once, an environment failure, an unsupported platform, a case `## Использование` of the spec excludes) is `minor` unless it crosses one of those lines. So are readability, naming and style.
+
+Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 
 Report through the Orca worker preamble: worker_done subject `PASS` when there is no `blocking` finding, otherwise `FINDINGS`. Body: one finding per line, `Q{n} blocking|minor {file}:{line} — {problem} → {fix}`. `minor` findings may accompany `PASS`.
 

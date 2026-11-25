@@ -8,6 +8,7 @@ Read-only: do not edit any file, do not commit.
 
 Check that:
 - the spec solves the task and nothing else, and the scope boundaries are explicit;
+- `## Использование` says who uses it, how, and what is not supported;
 - every `AC` has the form «КОГДА ..., ТОГДА ...» and is observable through a command, a test or a file;
 - the criteria together cover the task;
 - the design names real paths, commands and APIs of this repository (verify them) and contradicts neither the code nor itself.

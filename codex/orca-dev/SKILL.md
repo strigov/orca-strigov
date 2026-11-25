@@ -37,8 +37,8 @@ Helper: `python3 <skill>/scripts/orca_dev.py <subcommand>` (Windows: `py -3 <ski
 | `plan-review` | Astra | PLAN, PREVIOUS, REPO, SPEC |
 | `implementer` | quick path, phase, escalation, replacement | CONTEXT, REPO, TASK, VERIFY |
 | `fix-round` | implementer's terminal | FINDINGS, VERIFY |
-| `review-spec` | Opus: criteria met | CRITERIA, DIFF, PREVIOUS, REPO |
-| `review-quality` | Astra: code quality | DIFF, PREVIOUS, REPO, TASK |
+| `review-spec` | Opus: criteria, simplicity | CRITERIA, DIFF, PREVIOUS, REPO |
+| `review-quality` | Sol: code quality; Step 7: Astra | DIFF, PREVIOUS, REPO, TASK |
 | `final-review` | Step 7, Opus | DIFF, PLAN, REPO, SPEC |
 
 Values: REPO = absolute repo root. SPEC, PLAN = absolute paths. TASK = the task text with the user's answers (quick path, spec), or the phase id, title and body copied from the plan. VERIFY = commands, one per line. CONTEXT = `—`, or: the last report + open findings (escalation); «предыдущая попытка не завершилась; текущее состояние дерева — в `git status`» (replacement); «часть работы уже в дереве, см. `git diff`» (resume with kept edits). FINDINGS = the open findings or the red command output. PREVIOUS = `—` before the first review, else the last review round's findings and the author's `fixed` / `not fixed` lines. CRITERIA = phase id, title, the `covers` criteria quoted from the spec and `verify` (quick path: the task text). DIFF = the git commands that show the change: `git diff` and `git status --porcelain` for uncommitted work, `git diff <base-sha>..HEAD` for merges. Multi-line values: `--set-file KEY=PATH` with the file in the OS temp dir (`$TMPDIR`, `/tmp`; Windows `%TEMP%`), never in the repo.
@@ -57,9 +57,9 @@ Values: REPO = absolute repo root. SPEC, PLAN = absolute paths. TASK = the task 
 
 Quick path when all hold: at most 2 code files by your estimate; no schema, migration, security or public API change. Merging already accepted branches is quick path too. Otherwise the full path. Tell the user the choice in one line with the first dispatch.
 
-Quick path: `implementer` (TASK = the task, VERIFY = project tests/lint you choose) → `worker_done` → you run `git diff` and VERIFY → review Opus (`review-spec`, CRITERIA = the task text) → review Astra (`review-quality`) → commit (`git add -A`, then `git commit -m "<type>(<slug>): <summary>"`) → close the terminals → final message. Fixes and caps as in Steps 4 and 5. No spec, no plan, no new files in `docs/`.
+Quick path: `implementer` (TASK = the task, VERIFY = project tests/lint you choose) → `worker_done` → you run `git diff` and VERIFY → review Opus (`review-spec`, CRITERIA = the task text) → review Sol (`review-quality`) → commit (`git add -A`, then `git commit -m "<type>(<slug>): <summary>"`) → close the terminals → final message. Fixes and caps as in Steps 4 and 5. No spec, no plan, no new files in `docs/`.
 
-Merge of accepted branches (you do it): `git rev-parse HEAD`, keep the printed SHA as `<base-sha>`; `git merge --no-ff <ref>` per branch in order. Conflict → `git merge --abort` for that branch, and its merge goes to an implementer as a quick-path task (TASK says to commit the merge). After all merges: project checks, review Opus → Astra with DIFF = `git diff <base-sha>..HEAD` and `git log --oneline <base-sha>..HEAD`. `blocking` → implementer fixes, review again, the fix is an extra commit. Clean without fixes → no extra commits; the final message lists the merge commits.
+Merge of accepted branches (you do it): `git rev-parse HEAD`, keep the printed SHA as `<base-sha>`; `git merge --no-ff <ref>` per branch in order. Conflict → `git merge --abort` for that branch, and its merge goes to an implementer as a quick-path task (TASK says to commit the merge). After all merges: project checks, review Opus → Sol with DIFF = `git diff <base-sha>..HEAD` and `git log --oneline <base-sha>..HEAD`. `blocking` → implementer fixes, review again, the fix is an extra commit. Clean without fixes → no extra commits; the final message lists the merge commits.
 
 ### Step 2. Spec (full path)
 
@@ -79,8 +79,8 @@ phases:
     title: Storage
     risk: none                  # none | risky: security, data, migrations, concurrency
     area: backend               # backend | frontend
-    hard: false                 # true: implementer Sol from the start
-    implementer: gemini         # gemini | luna | sol | opus | sonnet (coordinator)
+    hard: false                 # true: implementer Opus from the start
+    implementer: gemini         # gemini | glm | kimi | luna | opus | sonnet (coordinator)
     covers: [AC1, AC2]
     verify:
       - pytest tests/test_storage.py -q
@@ -92,22 +92,24 @@ Body: one `## F<n>: <title>` per phase. Every spec criterion is covered; a phase
 
 ### Step 4. Phase F<n>
 
-Implementer from `roles.md` (`hard: true` → Sol; `area: frontend` → Opus, ≤2 files Sonnet; else Gemini). Write `implementer:` into the phase (uncommitted until the phase commit). Brief `implementer`: TASK = phase id, title and body, the spec and plan paths, `covers`; VERIFY = the phase `verify`; CONTEXT `—`. After `worker_done`: `git diff --stat`, then each `verify` command, one at a time. Red, or errors in the report → `fix-round` in the implementer's terminal. Technical fixes and review fixes share one round counter.
+Implementer from `roles.md` (`hard: true` → Opus `medium`; `area: frontend` → Opus `high`, ≤2 files Sonnet; else Gemini). Write `implementer:` into the phase (uncommitted until the phase commit). Brief `implementer`: TASK = phase id, title and body, the spec and plan paths, `covers`; VERIFY = the phase `verify`; CONTEXT `—`. After `worker_done`: `git diff --stat`, then each `verify` command, one at a time. Red, or errors in the report → `fix-round` in the implementer's terminal. Technical fixes and review fixes share one round counter.
 
-### Step 5. Phase review: always Opus, then Astra
+### Step 5. Phase review: always Opus, then Sol
 
-1. `review-spec` → Opus `high` (`xhigh` when `risk: risky` or on the last round of the implementer's budget). CRITERIA as above; DIFF = `git diff` and `git status --porcelain`.
-2. Then `review-quality` → Astra `high`.
+1. `review-spec` → Opus `medium` (`high` when `risk: risky` or on the last round of the implementer's budget). CRITERIA as above; DIFF = `git diff` and `git status --porcelain`.
+2. Then `review-quality` → Sol `high` (`xhigh` when `risk: risky`).
 
 Verdict = the `worker_done` subject: `PASS`, or `FINDINGS` with `blocking`/`minor` lines. `blocking` → `fix-round`, then the review restarts at Opus. Only `minor` = PASS; their ids go into the commit message.
 
+Triage before `fix-round`: a `blocking` label is a claim. Check the trigger of every `Q` `blocking` line against the code. Downgrade it to `minor` only when the code does not permit the steps, or the trigger needs a rare precondition (two actors at once, an environment failure, an unsupported platform, a case the spec's `## Использование` excludes), and it neither loses or corrupts data, nor exposes another user's data or a secret, nor makes an unapproved irreversible change. In doubt it stays `blocking`; `R` lines are never downgraded. A downgrade costs no fix round: its id joins the unfixed minors of the commit message, a line `Q<n> not fixed: <reason>` goes into PREVIOUS, and the reason goes into the phase line to the user.
+
 Fix budget of a phase, one finite sequence:
 
-1. The current implementer (Gemini, or Luna after an availability fallback): up to 3 fix rounds.
-2. Exhausted, or `BLOCKED: complexity` → exactly one escalation: codex `gpt-6.1-sol` `high` in a new terminal, brief `implementer` with CONTEXT = the last report + open findings, a fresh budget of 3; close the old terminal; `implementer: sol` in the plan.
-3. Sol's budget exhausted, or `BLOCKED` from Sol → cap (rule 4).
+1. The current implementer (Gemini or its availability fallback, Sonnet): up to 3 fix rounds.
+2. Exhausted, or `BLOCKED: complexity` → exactly one escalation: claude `opus` `medium` in a new terminal, brief `implementer` with CONTEXT = the last report + open findings, a fresh budget of 3; close the old terminal; `implementer: opus` in the plan.
+3. Opus's budget exhausted, or `BLOCKED` from Opus → cap (rule 4).
 
-A phase with `implementer: sol` (including `hard: true`) has no escalation: 3 rounds, then the cap. Never a second escalation to Sol. The counter lives only in this session; resume gives a fresh 3.
+A phase with `implementer: opus` (`hard: true`, frontend, escalated) has no escalation: 3 rounds, then the cap. Never a second escalation. The counter lives only in this session; resume gives a fresh 3.
 
 ### Step 6. Commit the phase
 
@@ -115,7 +117,7 @@ Set the phase `status: done`, then two separate commands: `git add -A` and `git 
 
 ### Step 7. Final review
 
-`final-review` → Opus `high`, DIFF = `git diff <sha>..HEAD`, where `<sha>` is the `docs: spec + plan for <slug>` commit; cap 2 rounds. Result: table criterion → closed / not closed (why). Not closed → add phase `F<n+1>: final fixes` to the plan (`covers` = the open criteria, `verify` = the commands of the affected phases, `risk` = the highest of theirs) and run it through Steps 4 to 6; then the second final review. Still open after round 2 → cap. All criteria closed but `I<n> blocking` lines → one question with those lines and options. Finish only on `PASS`: plan `status: done`, `git add -A`, `git commit -m "docs(<slug>): plan done"`, final report: commits, `verify` results, the criteria table, what is left.
+Two reviewers per round, cap 2 rounds; DIFF = `git diff <sha>..HEAD`, where `<sha>` is the `docs: spec + plan for <slug>` commit. First `review-quality` → Astra `high` (TASK = the spec path), triage as in Step 5. Then `final-review` → Opus `high`. Result: table criterion → closed / not closed (why). Not closed → add phase `F<n+1>: final fixes` to the plan (`covers` = the open criteria, `verify` = the commands of the affected phases, `risk` = the highest of theirs; the body also lists the open `Q` and `I` `blocking` lines) and run it through Steps 4 to 6; then the second final review. Still open after round 2 → cap. All criteria closed but `I<n>` or `Q<n>` `blocking` lines → one question with those lines and options. Finish only on `PASS`: plan `status: done`, `git add -A`, `git commit -m "docs(<slug>): plan done"`, final report: commits, `verify` results, the criteria table, what is left.
 
 ## Coordinator rules
 
@@ -126,18 +128,19 @@ Set the phase `status: done`, then two separate commands: `git add -A` and `git 
 5. Message the user only on a state change: triage chosen; a spec question; spec ready for «ок»; plan approved; phase committed; fallback or escalation; cap; a BLOCKED question; final report. While waiting for a worker: silence, no status lines on a timer.
 6. Triage before any dispatch.
 7. Autocommit after a clean review; the tree is clean before the next phase. The user can switch autocommit off in the task.
-8. One Run per plan (quick path: per task). Resume: `run-use --id <orca_run>` from the frontmatter.
-9. Terminals: remember every handle you create; title `<slug>/<role>-<phase>`. Close right after accepting the result: reviewer after its accepted report; implementer after the phase commit or its replacement; spec/plan author after approval. Path B → `orca_dev.py close <h>`; Path A → `orca orchestration worker-release --dispatch <id> --json`, and `retained` in the answer → `orca_dev.py close <h>`. At start and resume close the terminals of settled Tasks (`succeeded`/`failed`) with no live Dispatch from `orca orchestration worker-list --run <orca_run> --json` (no state filter) and the `<slug>/...` rows of `orca terminal list --worktree current --json` with no live Dispatch. Never touch other Runs, your own terminal, unprefixed or user terminals. A failed close is not repeated: one line in the final report «терминал <h> не закрылся».
+8. One Run per plan (quick path: per task). Resume: `run-use --id <orca_run>` from the frontmatter. `check` serves only the Run of the last `run-create`/`run-use` in this session: before `brief` or `check` for another Run, `run-use` it (else `consumer_fenced`).
+9. Terminals: remember every handle you create; title `<slug>/<role>-<phase>`. Close right after accepting the result: reviewer after its accepted report; implementer after the phase commit or its replacement; spec/plan author after approval. Commands and the start/resume cleanup of settled terminals: `launch.md` "Closing". Never touch other Runs, your own terminal, unprefixed or user terminals. A failed close is not repeated: one line in the final report «терминал <h> не закрылся».
 
 ## Failures
 
-- Unavailable worker (definition in `roles.md`) → its fallback, one line to the user; where the fallback is a question → «повторить позже / заменить на <модель> только на этот раунд / стоп».
+- Unavailable worker (definition in `roles.md`) → its fallback, one line to the user; where the fallback is a question → the unavailability question «повторить позже / заменить на <модель> только на этот раунд / стоп».
 - `spawn` 1 → `close`, one more `spawn`; a second 1 in a row → unavailable. `spawn` 3 → unavailable at once. `spawn` 4 → not unavailability: keep the terminal and the model; `request-show`, `dispatch-show` and at most one retry with the same `--retry-request` id (`launch.md` "Unknown dispatch"); a new writer only after its proven exit or the user's answer.
-- `spawn` 5 or 6 → `close`, no retry of the same model. The role row has an alternative → switch with exactly one line (5: «<агент> упёрся в неизвестный диалог: <фрагмент экрана>; работаю на <альтернатива>»; 6: «<агент> разлогинен, работаю на <альтернатива>; чтобы вернуть — залогинься: <команда>»). No alternative (spec/plan authors, Sol, reviewers) → one question «повторить позже / заменить на <модель> только на этот раунд / стоп» with the screen fragment or the login command (`launch.md`). Neither counts as a fix round.
-- Silence: `check --wait` (15 min per call). After 3 empty waits in a row: `orca orchestration worker-list --run <orca_run> --json` and `orca orchestration worker-read --dispatch <id> --source auto --json`. Replace only on proven exit (`liveness: exited`, or a transcript whose last agent turn lacks `worker_done` plus `orca terminal show` without a live process): close the old terminal, same role, same brief, replacement CONTEXT. Writer (implementer, spec/plan author) with unproven exit: keep waiting; after 3 more empty waits one question «ждать дальше / остановить и заменить / стоп». Reviewer with unproven exit: replace after 6 empty waits, no question.
-- `BLOCKED: complexity` → the one escalation to Sol (already Sol or `hard: true` → cap). `BLOCKED: requirements` → one question with options; an answer that changes the spec → `spec-revise` + Astra review (cap 3), then the same phase with the same implementer (counter not reset). Plain `BLOCKED` without signs of unavailability → one question with the reason and options to continue; the next step only after the answer.
+- `spawn` 5 or 6 → `close`, no retry of the same model; alternative or question per the `roles.md` exit 5/6 rule. The switch line: 5: «<агент> упёрся в неизвестный диалог: <фрагмент экрана>; работаю на <альтернатива>»; 6: «<агент> разлогинен, работаю на <альтернатива>; чтобы вернуть — залогинься: <команда>». The unavailability question adds the screen fragment or the login command (`launch.md`). Neither counts as a fix round.
+- `escalation`: Orca saw the worker stop without `worker_done`; the message has its last output. By `payload.stopReason`: `finished` → quota, rate limit or auth in that output → unavailable; else one `orca orchestration send --to dispatch:<id> --subject "report" --body "<what is missing>; finish the brief, then worker_done" --json`, a second `finished` on that Dispatch → replace. `needs-input` (a prompt only a person can answer; `send` does not reach it) → one question «<роль> ждёт ответа в своём терминале: <фрагмент>. Ответь там и напиши «ок» / заменить / стоп». `lost` or `exited` → replace; skip it for a terminal you closed yourself. Replace = close the old terminal, same role, same brief, replacement CONTEXT.
+- Silence: Orca escalates a stopped worker itself, so keep calling `check --wait` (15 min per call). After 4 empty waits in a row: `orca orchestration worker-read --dispatch <id> --source auto --json`; still working → wait on; else one question «ждать дальше / остановить и заменить / стоп».
+- `BLOCKED: complexity` → the one escalation to Opus (already Opus → cap). `BLOCKED: requirements` → one question with options; an answer that changes the spec → `spec-revise` + Astra review (cap 3), then the same phase with the same implementer (counter not reset). Plain `BLOCKED` without signs of unavailability → one question with the reason and options to continue; the next step only after the answer.
 - `worker_done --outcome failed` with subject `DONE`, `PASS` or `FINDINGS`: the subject decides; any other `failed` without signs of unavailability → BLOCKED.
-- After an Orca restart: "State and resume"; `orphaned: true` means "do not send there", not "the process exited".
+- After an Orca restart (`check --wait` fails with `outcome_unknown`; not a worker failure): `orca status --json` until `ready` (about a minute), then "State and resume"; `orphaned: true` means "do not send there", not "the process exited".
 
 ## State and resume
 
@@ -148,7 +151,7 @@ No state machine: the plan frontmatter (`orca_run`, plan and phase `status`, `im
 3. The first `pending` phase is F<n>. `worker-list --run <orca_run> --json` shows a non-settled Dispatch titled `<slug>/...-F<n>` → a live writer: wait with `check --wait` by the silence rules; a new implementer only after its proven exit.
 4. Clean tree and `git log --oneline -30` has a commit starting with `<type>(<slug>): F<n> ` → set `done`, `git add -A`, `git commit -m "docs(<slug>): F<n> done"`, back to 2. Dirty tree → 5 first.
 5. Dirty tree → the phase files: `git diff --name-only` without `docs/plans/<slug>.md`, plus untracked files from `git status --porcelain` named in the plan, the brief or the last report. One question with the list: «продолжить F<n> с текущими правками / откатить эти файлы: <список> / стоп». Rollback = `git checkout -- <tracked>` and deleting the listed untracked files; never `git clean -fd` or stash.
-6. Otherwise F<n> from Step 4: the implementer from `implementer` (empty → `roles.md`), a fresh budget of 3; `implementer: sol` → no escalation. After «продолжить» CONTEXT = «часть работы уже в дереве, см. `git diff`».
+6. Otherwise F<n> from Step 4: the implementer from `implementer` (empty → `roles.md`), a fresh budget of 3; `implementer: opus` → no escalation. After «продолжить» CONTEXT = «часть работы уже в дереве, см. `git diff`».
 
 The quick path is not resumable: start it again (dirty tree → the Step 0 question).
 
@@ -157,5 +160,5 @@ The quick path is not resumable: start it again (dirty tree → the Step 0 quest
 - Triage: «Быстрый путь: <почему>.» or «Полный путь: спека → план → фазы.»
 - Spec: «Спека готова: <путь>. Критерии: AC1 ... ACn. Ответь «ок» или напиши правки.»
 - Plan: «План: <n> фаз — F1 <title>, ... Начинаю F1.»
-- Phase: «F<n> <title> закоммичена: <short-sha>.»
-- Fallback or escalation: «<роль>: <модель> недоступна (<причина>), работаю на <альтернатива>.» / «F<n>: эскалация на Sol (<причина>).»
+- Phase: «F<n> <title> закоммичена: <short-sha>.» With downgrades: «...; понижено до minor: Q<n> — <причина>.»
+- Fallback or escalation: «<роль>: <модель> недоступна (<причина>), работаю на <альтернатива>.» / «F<n>: эскалация на Opus (<причина>).»

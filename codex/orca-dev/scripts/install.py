@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orca-dev 2.1 install and checks (one file for macOS, Linux and Windows).
+"""orca-dev 2.2 install and checks (one file for macOS, Linux and Windows).
 
   python3 install.py                  read-only checks (Windows: py -3 install.py)
   python3 install.py --agent <a>      install this skill for claude (~/.claude/skills/orca-dev) or codex
@@ -11,7 +11,7 @@
 Exit: 0 clean, 1 any WARN or ERROR (or native Orca skills missing), 2 usage.
 --agent replaces only a recognized orca-dev copy (edits inside its files are overwritten). --repo writes
 only ~/.claude.json, ~/.gemini/antigravity-cli/settings.json and ~/.codex/config.toml (appends a table,
-never edits one). Old copies are listed, never deleted.
+never edits one). Old copies are listed, never deleted; ~/.agents/skills/orca-dev is never installed, only listed.
 """
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ from pathlib import Path
 import zipfile
 from typing import Callable, List, Mapping, Optional, Tuple
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
+MIN_ORCA = (1, 4, 265)
 HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent
 SKILL_DIRS = (".codex/skills", ".claude/skills", ".agents/skills")
@@ -35,7 +36,7 @@ NATIVE_SKILLS = ("orchestration", "orca-cli")
 INSTALL_CMD = "orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code"
 STALE_HINT = "удалить вручную или ответить `y` на вопрос координатора при первом запуске"
 CACHE = Path(".codex/plugins/cache/personal/orca-strigov")
-SHIP_FILES = ("SKILL.md", "roles.md", "launch.md", "scripts/orca_dev.py", "scripts/install.py")
+SHIP_FILES = ("LICENSE", "SKILL.md", "roles.md", "launch.md", "scripts/orca_dev.py", "scripts/install.py")
 OPENAI_YAML = "agents/openai.yaml"
 IGNORED = ("__pycache__", ".DS_Store")
 DESCRIPTION = ("Coordinate spec-driven development through supervised Orca workers (spec, plan, TDD phases, "
@@ -275,6 +276,13 @@ def stale_copies(home: Path, env: Mapping[str, str]) -> List[Path]:
     return stale
 
 
+def unmanaged_copy(home: Path) -> Optional[Path]:
+    """~/.agents/skills/orca-dev of the current version: --agent never updates it, so it drifts unseen (issue #6e).
+    Another version there is already an old copy."""
+    entry = home / ".agents" / "skills" / "orca-dev"
+    return entry if recognized_version(entry) == VERSION else None
+
+
 def claude_keys(path: str, windows: bool) -> List[str]:
     """projects[] keys that count as this path; the first one is written."""
     if not windows:
@@ -458,7 +466,13 @@ def check_tools(run: Run, which: Callable[[str], Optional[str]], windows: bool) 
     orca = which("orca")
     if orca:
         code, text = run([orca, "--version"], 30)
-        lines.append(("OK", "orca %s: %s" % (text.strip() or "?", orca)))
+        found = re.search(r"\d+(?:\.\d+)+", text)
+        if found and tuple(int(n) for n in found.group().split(".")) < MIN_ORCA:
+            # Older builds need `check --ack` and do not escalate a stopped Path B worker (SKILL.md "Failures").
+            lines.append(("WARN", "orca %s: %s -> update Orca to %s or newer"
+                          % (text.strip(), orca, ".".join(str(n) for n in MIN_ORCA))))
+        else:
+            lines.append(("OK", "orca %s: %s" % (text.strip() or "?", orca)))
         code, text = run([orca, "status", "--json"], 30)
         try:
             state = json.loads(text)["result"]["runtime"]["state"]
@@ -468,18 +482,24 @@ def check_tools(run: Run, which: Callable[[str], Optional[str]], windows: bool) 
                      ("WARN", "orca runtime state: %s (run: orca open --json)" % state))
     else:
         lines.append(("WARN", "orca not on PATH"))
-    for name in ("codex", "claude", "agy", "git"):
+    for name in ("codex", "claude", "agy", "zcode", "kimi", "git"):
         exe = which(name)
         if not exe:
-            if name == "agy" and windows:
-                lines.append(("INFO", "agy not on PATH (native Windows): the implementer starts on its Luna fallback"))
+            if name in ("zcode", "kimi"):
+                lines.append(("INFO", "%s not on PATH: that implementer fallback is skipped" % name))
+            elif name == "agy" and windows:
+                lines.append(("INFO", "agy not on PATH (native Windows): the implementer starts on its next fallback"))
             else:
                 lines.append(("WARN", "%s not on PATH" % name))
             continue
         label = name
         if name != "git":
             code, text = run([exe, "--version"], 30)
-            label += " " + (text.strip().splitlines()[0] if code == 0 and text.strip() else "?")
+            if code != 0 or not text.strip():
+                # A broken install (e.g. an interrupted npm update) still sits on PATH; the worker would die at start.
+                lines.append(("WARN", "%s: %s --version failed (exit %d) -> reinstall it" % (exe, name, code)))
+                continue
+            label += " " + text.strip().splitlines()[0]
         lines.append(("OK", "%s: %s" % (label, exe)))
     return lines
 
@@ -576,6 +596,9 @@ def main(argv: Optional[List[str]] = None, home: Optional[Path] = None, run: Run
                                      "run agy once, then re-run", lambda d: trust_agy(d, paths, write)))
         warnings += emit(update_codex(home / ".codex" / "config.toml", paths, windows, write))
 
+    unmanaged = unmanaged_copy(home)
+    if unmanaged:
+        emit([("INFO", "unmanaged copy: %s (--agent never updates it; keep it in sync by hand or remove it)" % unmanaged)])
     stale = stale_copies(home, env)
     if stale:
         warnings += emit([("WARN", "old copy: %s" % p) for p in stale])
