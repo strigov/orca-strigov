@@ -1126,7 +1126,7 @@ class BriefTemplateTests(unittest.TestCase):
                 self.assertIn(word, brief_text(name), (name, word))
         for word in ("PASS", "FINDINGS", "not closed"):
             self.assertIn(word, brief_text("final-review"), word)
-        for word in ("## Цель", "## Вне скоупа", "## Критерии приёмки", "## Дизайн", "КОГДА", "ТОГДА", "AC1"):
+        for word in ("## Цель", "## Использование", "## Вне скоупа", "## Критерии приёмки", "## Дизайн", "КОГДА", "ТОГДА", "AC1"):
             self.assertIn(word, brief_text("spec-writer"), word)
         for key in ("spec:", "orca_run:", "status: active", "risk:", "area:", "hard:", "covers:", "verify:",
                     "status: pending", "## F1:"):
@@ -1140,6 +1140,12 @@ class BriefTemplateTests(unittest.TestCase):
             self.assertIn("stop every process you started", brief_text(name), name)
             self.assertIn("delete the temporary copies you made", brief_text(name), name)
         self.assertIn("asserts every value the criterion names", brief_text("implementer"))
+        for phrase in ("adds its trigger", "who performs them, how often", "rare precondition", "## Использование",
+                       "however rare"):
+            self.assertIn(phrase, brief_text("review-quality"), phrase)
+        self.assertIn("## Использование", brief_text("spec-review"))
+        for phrase in ("not fixed: not reproduced", "Prefer the simplest fix"):
+            self.assertIn(phrase, brief_text("fix-round"), phrase)
 
 
 class LaunchDocTests(unittest.TestCase):
@@ -1266,7 +1272,9 @@ class LayoutTests(unittest.TestCase):
                        "принять как есть / ещё раунд / стоп", "повторить позже / заменить на",
                        "закоммитить как есть / отложить", "ждать дальше / остановить и заменить / стоп",
                        "продолжить F", "терминал", "не закрылся", "the subject decides", "payload.stopReason", "`finished`",
-                       "`needs-input`", "`lost` or `exited`", "a terminal you closed yourself", "send --to dispatch:", "outcome_unknown", "consumer_fenced"):
+                       "`needs-input`", "`lost` or `exited`", "a terminal you closed yourself", "send --to dispatch:", "outcome_unknown", "consumer_fenced",
+                       "a `blocking` label is a claim", "`R` lines are never downgraded", "costs no fix round",
+                       "понижено до minor"):
             self.assertIn(anchor, text, anchor)
         for name in PROMPT_TOKENS:
             self.assertIn(name, text, name)

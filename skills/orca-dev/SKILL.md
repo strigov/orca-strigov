@@ -101,6 +101,8 @@ Implementer from `roles.md` (`hard: true` → Sol; `area: frontend` → Opus, �
 
 Verdict = the `worker_done` subject: `PASS`, or `FINDINGS` with `blocking`/`minor` lines. `blocking` → `fix-round`, then the review restarts at Opus. Only `minor` = PASS; their ids go into the commit message.
 
+Triage before `fix-round`: a `blocking` label is a claim. Check the trigger of every `Q` `blocking` line against the code. Downgrade it to `minor` only when the code does not permit the steps, or the trigger needs a rare precondition (two actors at once, an environment failure, an unsupported platform, a case the spec's `## Использование` excludes), and it neither loses or corrupts data, nor exposes another user's data or a secret, nor makes an unapproved irreversible change. In doubt it stays `blocking`; `R` lines are never downgraded. A downgrade costs no fix round: its id joins the unfixed minors of the commit message, a line `Q<n> not fixed: <reason>` goes into PREVIOUS, and the reason goes into the phase line to the user.
+
 Fix budget of a phase, one finite sequence:
 
 1. The current implementer (Gemini, or Luna after an availability fallback): up to 3 fix rounds.
@@ -158,5 +160,5 @@ The quick path is not resumable: start it again (dirty tree → the Step 0 quest
 - Triage: «Быстрый путь: <почему>.» or «Полный путь: спека → план → фазы.»
 - Spec: «Спека готова: <путь>. Критерии: AC1 ... ACn. Ответь «ок» или напиши правки.»
 - Plan: «План: <n> фаз — F1 <title>, ... Начинаю F1.»
-- Phase: «F<n> <title> закоммичена: <short-sha>.»
+- Phase: «F<n> <title> закоммичена: <short-sha>.» With downgrades: «...; понижено до minor: Q<n> — <причина>.»
 - Fallback or escalation: «<роль>: <модель> недоступна (<причина>), работаю на <альтернатива>.» / «F<n>: эскалация на Sol (<причина>).»
