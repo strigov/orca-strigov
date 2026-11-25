@@ -61,7 +61,7 @@ The [release branch](https://github.com/strigov/orca-strigov/tree/release) conta
 
 ### 2. Prepare Orca and the worker CLIs
 
-To **run the workflow**, use a running **Orca 1.4.265+**, Git, and the `codex`, `claude`, and `agy` CLIs with signed-in accounts for the model presets. The Python helpers use only the standard library.
+To **run the workflow**, use a running **Orca 1.4.265+**, Git, and the `codex`, `claude`, and `agy` CLIs with signed-in accounts for the model presets; `zcode` and `kimi` are optional implementer fallbacks (ZCode needs a provider config of its own: [launch.md](skills/orca-dev/launch.md)). The Python helpers use only the standard library.
 
 Install Orca's native skills:
 
@@ -148,7 +148,7 @@ The skill ships with fixed model presets. Their source of truth, including exact
 |---|---|---|
 | Write the spec and plan | Claude `opus` | `xhigh`; revisions at `high` |
 | Review the spec and plan | Codex `gpt-6.2-astra` | `xhigh` |
-| Backend and quick-path implementation | Antigravity `gemini-4-hydrogen-high` | If unavailable: Codex `gpt-6-luna` at `max` |
+| Backend and quick-path implementation | Antigravity `gemini-4-hydrogen-high` | If unavailable, in order: ZCode `GLM-5.3-Flash`, Kimi `kimi-for-coding` (K2.8 Preview), Codex `gpt-6-luna` at `max` |
 | Hard phases and one complexity escalation | Claude `opus` | `medium` |
 | Frontend implementation | Claude `opus` | `high`; `sonnet` at `medium` for phases touching ≤2 files |
 | Phase review 1: requirements and simplicity | Claude `opus` | `medium`; `high` for risky work or the last fix round |

@@ -61,7 +61,7 @@ python3 skills/orca-dev/scripts/install.py --agent codex --agent claude
 
 ### 2. Подготовьте Orca и CLI исполнителей
 
-Для **запуска процесса разработки** нужны работающая **Orca 1.4.265+**, Git и CLI `codex`, `claude`, `agy` с выполненным входом в аккаунты для выбранных моделей. Python-утилиты используют только стандартную библиотеку.
+Для **запуска процесса разработки** нужны работающая **Orca 1.4.265+**, Git и CLI `codex`, `claude`, `agy` с выполненным входом в аккаунты для выбранных моделей; `zcode` и `kimi` — необязательные запасные исполнители (ZCode нужен собственный конфиг провайдера: [launch.md](skills/orca-dev/launch.md)). Python-утилиты используют только стандартную библиотеку.
 
 Установите штатные скиллы Orca:
 
@@ -148,7 +148,7 @@ $orca-dev исправь отображение пустого списка за
 |---|---|---|
 | Написать спецификацию и план | Claude `opus` | `xhigh`; доработки на `high` |
 | Проверить спецификацию и план | Codex `gpt-6.2-astra` | `xhigh` |
-| Backend и реализация по быстрому пути | Antigravity `gemini-4-hydrogen-high` | При недоступности: Codex `gpt-6-luna` на `max` |
+| Backend и реализация по быстрому пути | Antigravity `gemini-4-hydrogen-high` | При недоступности, по порядку: ZCode `GLM-5.3-Flash`, Kimi `kimi-for-coding` (K2.8 Preview), Codex `gpt-6-luna` на `max` |
 | Сложные фазы и однократная эскалация | Claude `opus` | `medium` |
 | Frontend | Claude `opus` | `high`; для фаз до двух файлов — `sonnet` на `medium` |
 | Ревью фазы 1: требования и простота | Claude `opus` | `medium`; рискованная фаза или последний раунд — на `high` |

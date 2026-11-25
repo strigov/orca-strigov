@@ -3,8 +3,8 @@
 
 Usage (macOS/Linux: python3, Windows: py -3):
   orca_dev.py brief <template> [KEY=VALUE ...] [--set-file KEY=PATH ...] --title T [--run ID] [--dry-run]
-  orca_dev.py spawn --agent agy|codex|claude --model M [--effort E] --title T --task TASK_ID [--worktree active] [--env KEY=VALUE ...]
-  orca_dev.py ready <handle> <agy|codex|claude|marker> [timeout-s]
+  orca_dev.py spawn --agent agy|codex|claude|kimi|zcode --model M [--effort E] --title T --task TASK_ID [--worktree active] [--env KEY=VALUE ...]
+  orca_dev.py ready <handle> <agy|codex|claude|kimi|zcode|marker> [timeout-s]
   orca_dev.py close <handle>
 
 Stdlib only. Every Orca call is subprocess.run([...]) with an argument list,
@@ -37,6 +37,10 @@ READ_FAIL_LIMIT = 5
 DISMISS_LIMIT = 3
 SETTLE_MS = 10000
 IDENTITY_S = 15.0
+# Orca can name the agent in `terminal show` a few seconds before `dispatch --inject` accepts the terminal
+# (ZCode, smoke 2026-11-25): on this refusal spawn waits and repeats the dispatch once with the same request id.
+NOT_DETECTED = "no recognized agent detected"
+DETECT_RETRY_S = 8.0
 TURN_S = 6.0
 SCREEN_TAIL = 15
 
@@ -50,7 +54,19 @@ AGENTS = {
               "late": 12, "turn": "esc to interrupt"},
     "claude": {"marker": "Claude Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90,
                "late": 0, "turn": None},
+    # Kimi Code CLI 2.7.2 (Windows smoke 2026-11-21 and 2026-11-23); its login screen was not observed.
+    "kimi": {"marker": "Welcome to Kimi Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90,
+             "late": 0, "turn": None},
+    # ZCode CLI 0.17.1 (Windows smoke 2026-11-23). idle False: its TUI never reports tui-idle, so the waits are short.
+    # model_on_screen: there is no model flag; --model is only checked against the status line. No login screen seen.
+    "zcode": {"marker": "Type a prompt", "busy": None, "login": None, "login_after": 0, "timeout": 90,
+              "late": 0, "turn": None, "idle": False, "model_on_screen": True},
 }
+# Agents whose argv takes no reasoning level, and where the level comes from instead.
+NO_EFFORT = {"agy": "the level is part of the model id", "kimi": "the level comes from its config.toml",
+             "zcode": "the level comes from its provider config"}
+# tui-idle waits as (first wait in spawn, final wait in ready), each (timeout-ms, runner timeout in s).
+IDLE_WAITS = {True: (("180000", 200), ("60000", 90)), False: (("5000", 35), ("2000", 30))}
 
 # Known startup modals (launch.md "Agent start" table). Screen markers match case-insensitively;
 # reasons are Orca `terminal wait` blockedReason tokens (legacy codex-* and agent-neutral spellings).
@@ -65,6 +81,8 @@ MODALS = [
     {"id": "claude-trust-folder", "agent": "claude", "screen": ["trust this folder", "trust the files in this folder"],
      "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"text": "\x1b[B"}, {"enter": True}]},
     {"id": "agy-trust-folder", "agent": "agy", "screen": ["trust this folder"],
+     "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"enter": True}]},
+    {"id": "kimi-trust-folder", "agent": "kimi", "screen": ["trust this folder?"],
      "reasons": ["agent-trust-workspace", "codex-trust-workspace"], "keys": [{"enter": True}]},
 ]
 MODAL_BY_ID = {row["id"]: row for row in MODALS}
@@ -243,7 +261,7 @@ def classify(agent: str, lines: List[str], is_screen: bool, elapsed: float,
     text25 = view(lines, is_screen, 25)
     text20 = view(lines, is_screen, 20)
     lower25 = text25.lower()
-    if cfg and cfg["login"] in text25:
+    if cfg and cfg["login"] and cfg["login"] in text25:
         return {"state": "needs_login" if elapsed >= cfg["login_after"] else "busy", "modal": None}
     for row in MODALS:
         if row["agent"] != agent:
@@ -326,7 +344,8 @@ def wait_ready(run: Runner, handle: str, agent: str, timeout_s: float, blocked_r
             blocked_reason = None
             state = verdict["state"]
             if state == "ready":
-                data = run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"], 90)[1]
+                final_ms, final_s = IDLE_WAITS[(AGENTS.get(agent) or {}).get("idle", True)][1]
+                data = run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", final_ms, "--json"], final_s)[1]
                 final = dig(data, "result", "wait", "blockedReason")
                 if not (isinstance(final, str) and final):
                     return result(0)
@@ -366,7 +385,7 @@ def wait_ready(run: Runner, handle: str, agent: str, timeout_s: float, blocked_r
 def cmd_ready(argv: List[str], run: Runner = run_orca, clock: Callable[[], float] = time.monotonic,
               sleep: Callable[[float], None] = time.sleep) -> int:
     if len(argv) not in (2, 3) or not argv[0] or not argv[1]:
-        print("usage: orca_dev.py ready <handle> <agy|codex|claude|marker> [timeout-s]", file=sys.stderr)
+        print("usage: orca_dev.py ready <handle> <agy|codex|claude|kimi|zcode|marker> [timeout-s]", file=sys.stderr)
         return 2
     timeout = argv[2] if len(argv) == 3 else "120"
     if not timeout.isdigit():
@@ -393,6 +412,10 @@ def build_argv(agent: str, model: str, effort: Optional[str]) -> List[str]:
                 "-m", model, "-c", "model_reasoning_effort=%s" % effort, "-c", "features.multi_agent=false"]
     if agent == "claude":
         return ["claude", "--dangerously-skip-permissions", "--model", model, "--effort", str(effort)]
+    if agent == "kimi":
+        return ["kimi", "--auto", "-m", model]
+    if agent == "zcode":
+        return ["zcode", "--mode", "yolo"]
     raise Usage("unknown agent: " + agent)
 
 
@@ -483,9 +506,9 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     try:
         args = parser.parse_args(argv)
         out["agent"], out["task_id"] = args.agent, args.task
-        if args.agent == "agy" and args.effort:
-            raise Usage("agy takes no --effort: the level is part of the model id")
-        if args.agent != "agy" and not args.effort:
+        if args.agent in NO_EFFORT and args.effort:
+            raise Usage("%s takes no --effort: %s" % (args.agent, NO_EFFORT[args.agent]))
+        if args.agent not in NO_EFFORT and not args.effort:
             raise Usage("--effort is required for " + args.agent)
         command = command_line(env_prefix(args.env, windows) + build_argv(args.agent, args.model, args.effort), windows)
     except Usage as exc:
@@ -507,8 +530,9 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
     out["handle"] = handle
 
     out["stage"] = "ready"
+    first_ms, first_s = IDLE_WAITS[AGENTS[args.agent].get("idle", True)][0]
     code, data, raw = run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle",
-                           "--timeout-ms", "180000", "--json"], 200)
+                           "--timeout-ms", first_ms, "--json"], first_s)
     reason = dig(data, "result", "wait", "blockedReason")
     reason = reason if isinstance(reason, str) and reason else None
     for recheck in (True, False):
@@ -524,11 +548,24 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
             break
         reason = None
 
+    if AGENTS[args.agent].get("model_on_screen"):
+        # No model flag: the TUI starts on the model of its own config and names it in the status line.
+        ok, lines, is_screen, _ = read_screen(run, handle)
+        if not ok or (args.model + " ") not in view(lines, is_screen, 25):
+            out["screen"] = tail_text(lines)
+            out["error"] = "%s did not start on %s: set that model in its own config (launch.md)" % (args.agent, args.model)
+            return emit(5)
+
     out["stage"] = "dispatch"
     out["request_id"] = new_request_id()
-    code, data, raw = run(["orchestration", "dispatch", "--task", args.task, "--to", handle, "--inject",
-                           "--retry-request", out["request_id"], "--json"], 120)
+    dispatch = ["orchestration", "dispatch", "--task", args.task, "--to", handle, "--inject",
+                "--retry-request", out["request_id"], "--json"]
+    code, data, raw = run(dispatch, 120)
     dispatch_id = dig_id(data, "dispatchId", "dispatch")
+    if dispatch_id is None and NOT_DETECTED in orca_error(code, data, raw):
+        sleep(DETECT_RETRY_S)
+        code, data, raw = run(dispatch, 120)
+        dispatch_id = dig_id(data, "dispatchId", "dispatch")
     if code != 0 or dispatch_id is None:
         out["error"] = orca_error(code, data, raw)
         return emit(4)

@@ -482,11 +482,13 @@ def check_tools(run: Run, which: Callable[[str], Optional[str]], windows: bool) 
                      ("WARN", "orca runtime state: %s (run: orca open --json)" % state))
     else:
         lines.append(("WARN", "orca not on PATH"))
-    for name in ("codex", "claude", "agy", "git"):
+    for name in ("codex", "claude", "agy", "zcode", "kimi", "git"):
         exe = which(name)
         if not exe:
-            if name == "agy" and windows:
-                lines.append(("INFO", "agy not on PATH (native Windows): the implementer starts on its Luna fallback"))
+            if name in ("zcode", "kimi"):
+                lines.append(("INFO", "%s not on PATH: that implementer fallback is skipped" % name))
+            elif name == "agy" and windows:
+                lines.append(("INFO", "agy not on PATH (native Windows): the implementer starts on its next fallback"))
             else:
                 lines.append(("WARN", "%s not on PATH" % name))
             continue

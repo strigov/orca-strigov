@@ -80,7 +80,7 @@ phases:
     risk: none                  # none | risky: security, data, migrations, concurrency
     area: backend               # backend | frontend
     hard: false                 # true: implementer Opus from the start
-    implementer: gemini         # gemini | luna | opus | sonnet (coordinator)
+    implementer: gemini         # gemini | glm | kimi | luna | opus | sonnet (coordinator)
     covers: [AC1, AC2]
     verify:
       - pytest tests/test_storage.py -q
@@ -105,7 +105,7 @@ Triage before `fix-round`: a `blocking` label is a claim. Check the trigger of e
 
 Fix budget of a phase, one finite sequence:
 
-1. The current implementer (Gemini, Sonnet, or Luna after an availability fallback): up to 3 fix rounds.
+1. The current implementer (Gemini or its availability fallback, Sonnet): up to 3 fix rounds.
 2. Exhausted, or `BLOCKED: complexity` → exactly one escalation: claude `opus` `medium` in a new terminal, brief `implementer` with CONTEXT = the last report + open findings, a fresh budget of 3; close the old terminal; `implementer: opus` in the plan.
 3. Opus's budget exhausted, or `BLOCKED` from Opus → cap (rule 4).
 

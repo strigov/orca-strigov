@@ -344,6 +344,8 @@ class SpawnTests(unittest.TestCase):
                          "-c model_reasoning_effort=<lvl> -c features.multi_agent=false")
         self.assertEqual(" ".join(orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>")),
                          "claude --dangerously-skip-permissions --model <opus|sonnet> --effort <lvl>")
+        self.assertEqual(" ".join(orca_dev.build_argv("kimi", "<model>", None)), "kimi --auto -m <model>")
+        self.assertEqual(" ".join(orca_dev.build_argv("zcode", "GLM-5.3-Flash", None)), "zcode --mode yolo")
 
     def test_command_line_per_os(self):
         argv = orca_dev.build_argv("codex", "gpt-6.2-astra", "high")
@@ -614,6 +616,70 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual((orca_dev.AGENTS["agy"]["timeout"], orca_dev.AGENTS["codex"]["timeout"], orca_dev.AGENTS["claude"]["timeout"]), (180, 120, 90))
 
 
+class NewAgentSpawnTests(unittest.TestCase):
+    KIMI = ["--agent", "kimi", "--model", "kimi-code/kimi-for-coding", "--title", "t", "--task", "task_1"]
+    ZCODE = ["--agent", "zcode", "--model", "GLM-5.3-Flash", "--title", "t", "--task", "task_1"]
+
+    def test_kimi_dismisses_trust_and_takes_no_effort(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Trust this folder?", "> Trust and continue"),
+                                                screen("Welcome to Kimi Code!", "Model:     K2.8 Preview")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake, self.KIMI, windows=True)
+        self.assertEqual((code, out["stage"], out["dismissed"]), (0, "done", ["kimi-trust-folder"]))
+        create = fake.called("terminal", "create")[0]
+        self.assertEqual(create[create.index("--command") + 1], "kimi --auto -m kimi-code/kimi-for-coding")
+        code, out = spawn(FakeOrca(), self.KIMI + ["--effort", "max"])
+        self.assertEqual(code, 2)
+        self.assertIn("kimi takes no --effort", out["error"])
+
+    def test_zcode_checks_the_model_on_screen_and_uses_short_idle_waits(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Type a prompt", "GLM-5.3-Flash zai-api | max")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake, self.ZCODE, windows=True)
+        self.assertEqual((code, out["stage"]), (0, "done"))
+        create = fake.called("terminal", "create")[0]
+        self.assertEqual(create[create.index("--command") + 1], "zcode --mode yolo")
+        waits = [c[c.index("--timeout-ms") + 1] for c in fake.called("terminal", "wait")]
+        self.assertEqual(waits[0], "5000")
+        self.assertNotIn("180000", waits)
+        self.assertNotIn("60000", waits)
+
+    def test_zcode_on_another_model_exits_5_without_dispatch(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Type a prompt", "GLM-5.3 account:zai-individual-coding-plan | max")]})
+        code, out = spawn(fake, self.ZCODE)
+        self.assertEqual(code, 5)
+        self.assertIn("did not start on GLM-5.3-Flash", out["error"])
+        self.assertIn("GLM-5.3 account", out["screen"])
+        self.assertEqual(fake.called("orchestration", "dispatch"), [])
+
+    def test_dispatch_refused_as_not_detected_is_repeated_once_with_the_same_request(self):
+        refused = (1, {"ok": False, "error": {"message": "Cannot dispatch --inject to terminal term_9: no recognized agent detected."}})
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Type a prompt", "GLM-5.3-Flash zai-api | max")],
+                         ("orchestration", "dispatch"): [refused, DISPATCHED]})
+        code, out = spawn(fake, self.ZCODE)
+        self.assertEqual((code, out["stage"], out["dispatch_id"]), (0, "done", "ctx_7"))
+        calls = fake.called("orchestration", "dispatch")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+        fake = FakeOrca({("terminal", "create"): [CREATED],
+                         ("terminal", "read"): [screen("Type a prompt", "GLM-5.3-Flash zai-api | max")],
+                         ("orchestration", "dispatch"): [refused, refused]})
+        code, out = spawn(fake, self.ZCODE)
+        self.assertEqual((code, len(fake.called("orchestration", "dispatch"))), (4, 2))
+        self.assertIn("after 8 s", (SKILL_DIR / "launch.md").read_bytes().decode("utf-8"))
+        self.assertEqual(orca_dev.DETECT_RETRY_S, 8.0)
+
+    def test_agents_without_effort_or_idle(self):
+        self.assertEqual(sorted(orca_dev.NO_EFFORT), ["agy", "kimi", "zcode"])
+        self.assertEqual([a for a, cfg in orca_dev.AGENTS.items() if cfg.get("idle") is False], ["zcode"])
+        self.assertIsNone(orca_dev.AGENTS["zcode"]["login"])
+        self.assertEqual(orca_dev.classify("zcode", ["/login", "Type a prompt"], True, 5.0)["state"], "ready")
+
+
 class CloseTests(unittest.TestCase):
     def test_pty_killed(self):
         fake = FakeOrca({("terminal", "close"): [(0, {"ok": True, "result": {"close": {"handle": "term_1", "ptyKilled": True}}})]})
@@ -739,7 +805,8 @@ class InstallTests(unittest.TestCase):
         self.native()
         run = FakeRun({("orca", "--version"): (0, "1.4.265\n"), ("orca", "status"): (0, READY),
                        ("codex", "--version"): (0, "codex-cli 0.162.1\n"), ("claude", "--version"): (0, "2.1.300\n"),
-                       ("agy", "--version"): (0, "1.0\n"), ("npm", "outdated"): (0, "{}")})
+                       ("agy", "--version"): (0, "1.0\n"), ("zcode", "--version"): (0, "0.17.1\n"),
+                       ("kimi", "--version"): (0, "2.7.2\n"), ("npm", "outdated"): (0, "{}")})
         code, out, err = self.run_main([], run=run, which=which_all)
         self.assertEqual(code, 0, out)
         self.assertIn("orca runtime: ready", out)
@@ -788,7 +855,8 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(install.stale_copies(self.home, {}), [])
         run = FakeRun({("orca", "--version"): (0, "1.4.265\n"), ("orca", "status"): (0, READY),
                        ("codex", "--version"): (0, "codex-cli 0.171.0\n"), ("claude", "--version"): (0, "2.1.330\n"),
-                       ("agy", "--version"): (0, "1.5.14\n"), ("npm", "outdated"): (0, "{}")})
+                       ("agy", "--version"): (0, "1.5.14\n"), ("zcode", "--version"): (0, "0.17.1\n"),
+                       ("kimi", "--version"): (0, "2.7.2\n"), ("npm", "outdated"): (0, "{}")})
         before = self.snapshot()
         code, out, err = self.run_main([], run=run, which=which_all)
         self.assertEqual(code, 0, out)
@@ -797,7 +865,7 @@ class InstallTests(unittest.TestCase):
         self.assertUnchanged(before)
 
     def test_agy_missing_is_info_on_windows_only(self):
-        self.assertIn(("INFO", "agy not on PATH (native Windows): the implementer starts on its Luna fallback"),
+        self.assertIn(("INFO", "agy not on PATH (native Windows): the implementer starts on its next fallback"),
                       install.check_tools(FakeRun(), lambda n: None if n == "agy" else "/x/" + n, True))
         self.assertIn(("WARN", "agy not on PATH"), install.check_tools(FakeRun(), lambda n: None if n == "agy" else "/x/" + n, False))
 
@@ -1158,8 +1226,13 @@ class LaunchDocTests(unittest.TestCase):
         self.assertLessEqual(len(self.text.encode("utf-8")), 10 * KIB)
         for argv in (orca_dev.build_argv("agy", "gemini-4-hydrogen-high", None),
                      orca_dev.build_argv("codex", "<model>", "<lvl>"),
-                     orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>")):
+                     orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>"),
+                     orca_dev.build_argv("kimi", "<model>", None),
+                     orca_dev.build_argv("zcode", "GLM-5.3-Flash", None)):
             self.assertIn(" ".join(argv), self.text)
+        for phrase in ("never reports `tui-idle`", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "never as a command prefix",
+                       "Give ZCode a file of its own"):
+            self.assertIn(phrase, self.text, phrase)
 
     def test_agent_start_tables_match_helper(self):
         for agent, cfg in orca_dev.AGENTS.items():
@@ -1291,6 +1364,8 @@ class LayoutTests(unittest.TestCase):
                        "--agent codex --model gpt-6.2-astra --effort xhigh", "--agent agy --model gemini-4-hydrogen-high",
                        "--agent codex --model gpt-6-luna --effort max", "--agent codex --model gpt-6.2-sol --effort high",
                        "--agent codex --model gpt-6.2-astra --effort high", "--agent claude --model opus --effort medium",
+                       "--agent zcode --model GLM-5.3-Flash", "--agent kimi --model kimi-code/kimi-for-coding",
+                       "`implementer: glm`", "`implementer: kimi`", "A CLI not on PATH is skipped",
                        "Opus → Sol per phase, Astra → Opus in the final review"):
             self.assertIn(anchor, text, anchor)
         self.assertNotIn("gpt-6.1-sol", text)
