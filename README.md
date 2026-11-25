@@ -61,7 +61,7 @@ The [release branch](https://github.com/strigov/orca-strigov/tree/release) conta
 
 ### 2. Prepare Orca and the worker CLIs
 
-To **run the workflow**, use a running **Orca 1.4.224+**, Git, and the `codex`, `claude`, and `agy` CLIs with signed-in accounts for the model presets. The Python helpers use only the standard library.
+To **run the workflow**, use a running **Orca 1.4.265+**, Git, and the `codex`, `claude`, and `agy` CLIs with signed-in accounts for the model presets. The Python helpers use only the standard library.
 
 Install Orca's native skills:
 

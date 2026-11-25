@@ -8,7 +8,7 @@ One command per worker, after `orca_dev.py brief` printed the `task_id`:
 
 `python3 <skill>/scripts/orca_dev.py spawn --agent <agy|codex|claude> --model <m> [--effort <e>] --title <slug>/<role>-<phase> --task <task_id> [--env KEY=VALUE ...]`
 
-It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → up to 15 s for `agentIdentity` in `orca terminal show` (without it dispatch fails: `no recognized agent detected`) → one more screen read (a dialog after the ready marker → dismiss, wait again) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
+It runs `orca terminal create --worktree active --title <t> --command <argv> --json` → `orca terminal wait --terminal <h> --for tui-idle --timeout-ms 180000 --json` → `orca_dev.py ready <h> <agent> <timeout>` (required: `tui-idle` fires on the shell prompt before the agent draws its TUI) → up to 15 s for `agentIdentity` in `orca terminal show` (without it dispatch fails: `no recognized agent detected`) → screen reads for a late dialog (Codex: every 2 s until 12 s after the `Ask Codex` marker; others: one read; a dialog → dismiss, wait again) → `orca orchestration dispatch --task <task_id> --to <h> --inject --retry-request <uuid> --json` → Codex only: the prompt can stay unsent in the composer (no `Ask Codex`, no `esc to interrupt`); still so 6 s after dispatch → one Enter, `enter_resent: true`. Why Path B for everything: Codex needs `-c features.multi_agent=false` and the bypass flags that `worker-start` cannot pass; fresh Claude via `worker-start` lost the prompt in 3 of 6 starts (smoke 2026-09-26); one recipe for all agents is simpler. The native guide allows this through `references/low-level-topology.md`.
 
 Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv` in `scripts/orca_dev.py`):
 
@@ -22,7 +22,7 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 
 `--env KEY=VALUE` (repeatable; POSIX only, Windows → exit 2) prefixes the argv with `env KEY=VALUE …` for this worker only, e.g. build paths: `--env TMPDIR=<dir> --env CARGO_HOME=<dir>`. No secrets: the command stays visible in the terminal. No proxy variables: the network goes through the system VPN; a DNS or network error on a worker's screen → tell the user.
 
-`spawn` prints one JSON line `{stage, handle, task_id, dispatch_id, request_id, dismissed, agent, screen, error}`:
+`spawn` prints one JSON line `{stage, handle, task_id, dispatch_id, request_id, dismissed, enter_resent, agent, screen, error}`:
 
 | exit | meaning | coordinator action |
 |---|---|---|
@@ -56,7 +56,7 @@ Known modals (`spawn` dismisses them with `orca terminal send` and lists them in
 | `claude-trust-folder` | claude | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Down (`\x1b[B`), then Enter (Yes; default is No, exit: 2.1.301 macOS, 2.1.302 Windows) |
 | `agy-trust-folder` | agy | "trust this folder" / `agent-trust-workspace`, `codex-trust-workspace` | Enter (yes) |
 
-Any other `blockedReason`, a refused `terminal send`, or a modal still on screen after 3 dismissals (each followed by a `tui-idle` wait of up to 10 s) → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog; `spawn` catches it only on its last screen read before dispatch.
+Any other `blockedReason`, a refused `terminal send`, or a modal still on screen after 3 dismissals (each followed by a `tui-idle` wait of up to 10 s) → exit 5. `install.py --repo` prevents the three trust dialogs; without it Codex shows `Ask Codex` about 8 s before its trust dialog, which is why `spawn` holds a Codex dispatch for those 12 s.
 
 ## Waiting
 

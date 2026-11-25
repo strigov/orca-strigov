@@ -302,11 +302,28 @@ DISPATCHED = (0, {"ok": True, "result": {"dispatch": {"id": "ctx_7", "task_id": 
 RID = "11111111-2222-3333-4444-555555555555"
 
 
+CLAUDE_SPAWN = ["--agent", "claude", "--model", "opus", "--effort", "high", "--title", "demo/review-spec-F1", "--task", "task_1"]
+UNSENT = (">_ OpenAI Codex (v0.171.0)", "› You are an Orca worker. Task task_1: review the diff")
+
+
 def spawn(fake, argv=SPAWN, windows=False):
     clock = Clock()
     code, out, err = call(orca_dev.cmd_spawn, argv, run=fake, clock=clock, sleep=clock.sleep,
                           windows=windows, new_request_id=lambda: RID)
     return code, json.loads(out)
+
+
+def after_dispatch(fake, *screens):
+    """A runner that serves `screens` (the last one repeats) to every `terminal read` made after the dispatch call."""
+    queue = list(screens)
+
+    def run(args, timeout):
+        if tuple(args[:2]) == ("terminal", "read") and fake.called("orchestration", "dispatch"):
+            fake.calls.append(list(args))
+            response = queue.pop(0) if len(queue) > 1 else queue[0]
+            return response[0], response[1], ""
+        return fake(args, timeout)
+    return run
 
 
 class SpawnTests(unittest.TestCase):
@@ -341,8 +358,8 @@ class SpawnTests(unittest.TestCase):
         code, out = spawn(fake)
         self.assertEqual(code, 0)
         self.assertEqual(out, {"stage": "done", "handle": "term_9", "task_id": "task_1", "dispatch_id": "ctx_7",
-                               "request_id": RID, "dismissed": ["codex-update-prompt"], "agent": "codex",
-                               "screen": None, "error": None})
+                               "request_id": RID, "dismissed": ["codex-update-prompt"], "enter_resent": False,
+                               "agent": "codex", "screen": None, "error": None})
         create = fake.called("terminal", "create")[0]
         self.assertEqual(create[create.index("--title") + 1], "demo/review-quality-F1")
         self.assertEqual(create[create.index("--worktree") + 1], "active")
@@ -446,6 +463,79 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual((code, out["stage"], out["dismissed"]), (0, "done", ["codex-trust-folder"]))
         names = [tuple(c[:2]) for c in fake.calls]
         self.assertLess(names.index(("terminal", "send")), names.index(("orchestration", "dispatch")))
+
+    def test_dialog_8_s_after_the_ready_marker_is_dismissed_before_dispatch(self):
+        ready = screen("Ask Codex")
+        trust = screen("Folder access", "Trust this folder?", "› 1. Trust and continue", "  2. Quit")
+        # One read for the ready marker, then the late window reads at +0, +2, +4, +6 and +8 s.
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [ready] * 5 + [trust, trust, ready],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(fake, windows=True)
+        self.assertEqual((code, out["stage"], out["dismissed"]), (0, "done", ["codex-trust-folder"]))
+        names = [tuple(c[:2]) for c in fake.calls]
+        self.assertEqual(names.count(("terminal", "send")), 1)
+        self.assertLess(names.index(("terminal", "send")), names.index(("orchestration", "dispatch")))
+
+    def test_late_window_holds_dispatch_only_for_codex(self):
+        for argv, marker in ((SPAWN, "Ask Codex"), (CLAUDE_SPAWN, "Claude Code")):
+            with self.subTest(agent=argv[1]):
+                clock = Clock()
+                fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen(marker)],
+                                 ("orchestration", "dispatch"): [DISPATCHED]})
+                at = []
+
+                def run(args, timeout):
+                    if tuple(args[:2]) == ("orchestration", "dispatch"):
+                        at.append((clock.now, len(fake.called("terminal", "read"))))
+                    return fake(args, timeout)
+                code, out, err = call(orca_dev.cmd_spawn, argv, run=run, clock=clock, sleep=clock.sleep,
+                                      windows=False, new_request_id=lambda: RID)
+                late = orca_dev.AGENTS[argv[1]]["late"]
+                self.assertEqual(code, 0)
+                self.assertEqual(at, [(float(late), 2 + int(late / orca_dev.POLL_S))])
+        self.assertEqual((orca_dev.AGENTS["codex"]["late"], orca_dev.AGENTS["claude"]["late"], orca_dev.AGENTS["agy"]["late"]),
+                         (12, 0, 0))
+
+    def test_unsent_codex_prompt_gets_one_enter(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(after_dispatch(fake, screen(*UNSENT)))
+        self.assertEqual((code, out["stage"], out["dispatch_id"], out["enter_resent"]), (0, "done", "ctx_7", True))
+        self.assertEqual(fake.called("terminal", "send"), [["terminal", "send", "--terminal", "term_9", "--enter", "--json"]])
+        names = [tuple(c[:2]) for c in fake.calls]
+        self.assertLess(names.index(("orchestration", "dispatch")), names.index(("terminal", "send")))
+        self.assertEqual(len(names) - 1 - names.index(("orchestration", "dispatch")),
+                         int(orca_dev.TURN_S / orca_dev.POLL_S) + 1)
+
+    def test_started_codex_turn_gets_no_enter(self):
+        placeholder = screen("› review the diff", "› Ask Codex to do anything", "  GPT-6-Astra high")
+        working = screen("› review the diff", "• Working (3s • esc to interrupt)")
+        stream = screen(*UNSENT, source="stream")
+        for name, screens in (("placeholder back", [placeholder]), ("turn marker", [working]),
+                              ("slow submit", [screen(*UNSENT), placeholder]), ("stream read", [stream]),
+                              ("read fails", [(1, {"ok": False, "error": {"message": "gone"}})])):
+            with self.subTest(name):
+                fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                                 ("orchestration", "dispatch"): [DISPATCHED]})
+                code, out = spawn(after_dispatch(fake, *screens))
+                self.assertEqual((code, out["stage"], out["enter_resent"]), (0, "done", False))
+                self.assertEqual(fake.called("terminal", "send"), [])
+
+    def test_unsent_check_is_codex_only(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Claude Code")],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(after_dispatch(fake, screen("> You are an Orca worker")), argv=CLAUDE_SPAWN)
+        self.assertEqual((code, out["enter_resent"]), (0, False))
+        self.assertEqual(tuple(fake.calls[-1][:2]), ("orchestration", "dispatch"))
+        self.assertEqual((orca_dev.AGENTS["codex"]["turn"], orca_dev.AGENTS["claude"]["turn"], orca_dev.AGENTS["agy"]["turn"]),
+                         ("esc to interrupt", None, None))
+
+    def test_refused_enter_is_not_reported_as_resent(self):
+        fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Ask Codex")],
+                         ("terminal", "send"): [(1, {"ok": False, "error": {"message": "not writable"}})],
+                         ("orchestration", "dispatch"): [DISPATCHED]})
+        code, out = spawn(after_dispatch(fake, screen(*UNSENT)))
+        self.assertEqual((code, out["stage"], out["enter_resent"]), (0, "done", False))
 
     def test_login_after_ready_marker_exit_6(self):
         fake = FakeOrca({("terminal", "create"): [CREATED],
@@ -647,7 +737,7 @@ class InstallTests(unittest.TestCase):
 
     def test_clean_environment_exits_0(self):
         self.native()
-        run = FakeRun({("orca", "--version"): (0, "1.4.224\n"), ("orca", "status"): (0, READY),
+        run = FakeRun({("orca", "--version"): (0, "1.4.265\n"), ("orca", "status"): (0, READY),
                        ("codex", "--version"): (0, "codex-cli 0.162.1\n"), ("claude", "--version"): (0, "2.1.300\n"),
                        ("agy", "--version"): (0, "1.0\n"), ("npm", "outdated"): (0, "{}")})
         code, out, err = self.run_main([], run=run, which=which_all)
@@ -663,6 +753,23 @@ class InstallTests(unittest.TestCase):
         self.assertIn("npm i -g @openai/codex@latest", out)
         self.assertIn("brew upgrade --cask codex", out)
         self.assertFalse([c for c in run.calls if {"upgrade", "install", "i", "update"} & set(c[1:2])])
+
+    def test_orca_older_than_the_floor_is_a_warning(self):
+        self.assertEqual(install.MIN_ORCA, (1, 4, 265))
+        for text, level in (("1.4.264\n", "WARN"), ("1.4.224\n", "WARN"), ("1.3.999\n", "WARN"), ("1.4.265\n", "OK"),
+                            ("orca 1.5.0 (abc)\n", "OK"), ("2.0\n", "OK"), ("", "OK"), ("dev build\n", "OK")):
+            with self.subTest(text=text):
+                run = FakeRun({("orca", "--version"): (0, text), ("orca", "status"): (0, READY)})
+                line = install.check_tools(run, lambda n: "/x/orca" if n == "orca" else None, False)[0]
+                self.assertEqual(line[0], level, line)
+                self.assertTrue(line[1].startswith("orca %s: /x/orca" % (text.strip() or "?")), line)
+                self.assertEqual("-> update Orca to 1.4.265 or newer" in line[1], level == "WARN", line)
+
+    def test_readmes_name_the_orca_floor(self):
+        floor = ".".join(str(n) for n in install.MIN_ORCA)
+        for name in ("README.md", "README.ru.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertEqual(re.findall(r"Orca (\d+\.\d+\.\d+)\+", text), [floor], name)
 
     def test_agent_failing_version_is_a_warning(self):
         run = FakeRun({("codex", "--version"): (1, ""), ("claude", "--version"): (0, "2.1.330 (Claude Code)\n"),
@@ -1052,6 +1159,11 @@ class LaunchDocTests(unittest.TestCase):
                 if cfg[key]:
                     self.assertIn(cfg[key], self.text, (agent, key))
             self.assertIn("%d s" % cfg["timeout"], self.text, agent)
+            if cfg["late"]:
+                self.assertIn("%d s after the `%s` marker" % (cfg["late"], cfg["marker"]), self.text, agent)
+            if cfg["turn"]:
+                self.assertIn("`%s`" % cfg["turn"], self.text, agent)
+                self.assertIn("%d s after dispatch" % orca_dev.TURN_S, self.text, agent)
         for row in orca_dev.MODALS:
             line = next((l for l in self.text.splitlines() if row["id"] in l), "")
             self.assertTrue(line, row["id"])
@@ -1067,7 +1179,7 @@ class LaunchDocTests(unittest.TestCase):
                         "orca terminal show", "orphaned", "worker-release", "retained", "ptyKilled",
                         'check --wait --types "worker_done,escalation,question" --timeout-ms 900000',
                         "/effort high", "Path A", "Path B", "--env KEY=VALUE", "whole unread batch", "agentIdentity",
-                        "selector_not_found"):
+                        "selector_not_found", "enter_resent"):
             self.assertIn(snippet, self.text, snippet)
         self.assertNotIn("check --ack", self.text)
         for code in range(7):

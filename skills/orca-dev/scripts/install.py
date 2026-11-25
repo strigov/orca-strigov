@@ -28,6 +28,7 @@ import zipfile
 from typing import Callable, List, Mapping, Optional, Tuple
 
 VERSION = "2.1.0"
+MIN_ORCA = (1, 4, 265)
 HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent
 SKILL_DIRS = (".codex/skills", ".claude/skills", ".agents/skills")
@@ -465,7 +466,13 @@ def check_tools(run: Run, which: Callable[[str], Optional[str]], windows: bool) 
     orca = which("orca")
     if orca:
         code, text = run([orca, "--version"], 30)
-        lines.append(("OK", "orca %s: %s" % (text.strip() or "?", orca)))
+        found = re.search(r"\d+(?:\.\d+)+", text)
+        if found and tuple(int(n) for n in found.group().split(".")) < MIN_ORCA:
+            # Older builds need `check --ack` and do not escalate a stopped Path B worker (SKILL.md "Failures").
+            lines.append(("WARN", "orca %s: %s -> update Orca to %s or newer"
+                          % (text.strip(), orca, ".".join(str(n) for n in MIN_ORCA))))
+        else:
+            lines.append(("OK", "orca %s: %s" % (text.strip() or "?", orca)))
         code, text = run([orca, "status", "--json"], 30)
         try:
             state = json.loads(text)["result"]["runtime"]["state"]

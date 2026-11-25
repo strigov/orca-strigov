@@ -37,13 +37,19 @@ READ_FAIL_LIMIT = 5
 DISMISS_LIMIT = 3
 SETTLE_MS = 10000
 IDENTITY_S = 15.0
+TURN_S = 6.0
 SCREEN_TAIL = 15
 
 # Readiness markers, busy markers, login screens and timeouts per agent (launch.md "Agent start").
+# late: seconds after the ready marker in which a startup dialog can still appear (dispatch waits them out).
+# turn: text on screen while a turn runs; set only where an injected prompt can stay unsent (resend_enter).
 AGENTS = {
-    "agy": {"marker": "Antigravity", "busy": "not signed in", "login": "Select login method", "login_after": 20, "timeout": 180},
-    "codex": {"marker": "Ask Codex", "busy": "Starting MCP servers", "login": "Sign in with ChatGPT", "login_after": 0, "timeout": 120},
-    "claude": {"marker": "Claude Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90},
+    "agy": {"marker": "Antigravity", "busy": "not signed in", "login": "Select login method", "login_after": 20, "timeout": 180,
+            "late": 0, "turn": None},
+    "codex": {"marker": "Ask Codex", "busy": "Starting MCP servers", "login": "Sign in with ChatGPT", "login_after": 0, "timeout": 120,
+              "late": 12, "turn": "esc to interrupt"},
+    "claude": {"marker": "Claude Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90,
+               "late": 0, "turn": None},
 }
 
 # Known startup modals (launch.md "Agent start" table). Screen markers match case-insensitively;
@@ -423,11 +429,44 @@ def wait_identity(run: Runner, handle: str, clock: Callable[[], float] = time.mo
         sleep(1.0)
 
 
+def late_dialog(run: Runner, handle: str, agent: str, until: float, clock: Callable[[], float] = time.monotonic,
+                sleep: Callable[[float], None] = time.sleep) -> bool:
+    """True when a known dialog or a login screen shows up after the ready marker: one screen read, then one every
+    POLL_S until `until` (Codex draws its trust dialog about 8 s after `Ask Codex`, issue #5.3)."""
+    while True:
+        ok, lines, is_screen, _ = read_screen(run, handle)
+        if ok and classify(agent, lines, is_screen, float(AGENTS[agent]["timeout"]))["state"] in ("modal", "needs_login"):
+            return True
+        if clock() >= until:
+            return False
+        sleep(POLL_S)
+
+
+def resend_enter(run: Runner, handle: str, agent: str, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep) -> bool:
+    """Codex can keep an injected prompt unsent in its composer: the Enter is lost, no turn starts and Orca never
+    escalates (1 of 3 spawns, Codex 0.171.0). The composer then holds the prompt instead of the ready marker; a
+    submitted prompt brings the marker back at once. Still unsent TURN_S after dispatch -> one Enter (an Enter on
+    an empty composer does nothing). True when the Enter was sent."""
+    cfg = AGENTS[agent]
+    if not cfg["turn"]:
+        return False
+    start = clock()
+    while True:
+        sleep(POLL_S)
+        ok, lines, is_screen, _ = read_screen(run, handle)
+        text = view(lines, is_screen, 25)
+        if not ok or not is_screen or cfg["marker"] in text or cfg["turn"] in text:
+            return False
+        if clock() - start >= TURN_S:
+            return send_keys(run, handle, [{"enter": True}])
+
+
 def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float] = time.monotonic,
               sleep: Callable[[float], None] = time.sleep, windows: bool = os.name == "nt",
               new_request_id: Callable[[], str] = lambda: str(uuid.uuid4())) -> int:
     out = {"stage": None, "handle": None, "task_id": None, "dispatch_id": None, "request_id": None,
-           "dismissed": [], "agent": None, "screen": None, "error": None}
+           "dismissed": [], "enter_resent": False, "agent": None, "screen": None, "error": None}
 
     def emit(code: int) -> int:
         print(json.dumps(out, ensure_ascii=False))
@@ -478,11 +517,10 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
         if outcome["code"] != 0:
             out["screen"], out["error"] = outcome["screen"], outcome["error"]
             return emit({1: 1, 3: 1, 5: 5, 6: 6}[outcome["code"]])
+        # A dialog can follow the ready marker: watch the screen for the agent's `late` window before dispatch.
+        settled = clock() + AGENTS[args.agent]["late"]
         wait_identity(run, handle, clock, sleep)
-        # A dialog can follow the ready marker (Codex trust: ~8 s later); one more look before dispatch.
-        ok, lines, is_screen, _ = read_screen(run, handle)
-        late = ok and classify(args.agent, lines, is_screen, float(AGENTS[args.agent]["timeout"]))["state"]
-        if not recheck or late not in ("modal", "needs_login"):
+        if not recheck or not late_dialog(run, handle, args.agent, settled, clock, sleep):
             break
         reason = None
 
@@ -495,6 +533,7 @@ def cmd_spawn(argv: List[str], run: Runner = run_orca, clock: Callable[[], float
         out["error"] = orca_error(code, data, raw)
         return emit(4)
     out["dispatch_id"], out["stage"] = dispatch_id, "done"
+    out["enter_resent"] = resend_enter(run, handle, args.agent, clock, sleep)
     return emit(0)
 
 
