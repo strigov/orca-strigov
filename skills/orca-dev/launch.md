@@ -14,7 +14,7 @@ Argv built by `spawn` (source of truth; edit together with `AGENTS`/`build_argv`
 
 | agent | argv |
 |---|---|
-| Antigravity | `agy --model gemini-3.8-flash-high --dangerously-skip-permissions` (no `--effort`: the level is in the id) |
+| Antigravity | `agy --model gemini-4-hydrogen-high --dangerously-skip-permissions` (no `--effort`: the level is in the id) |
 | Codex | `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> -c model_reasoning_effort=<lvl> -c features.multi_agent=false` (codex-cli 0.163.0) |
 | Claude | `claude --dangerously-skip-permissions --model <opus|sonnet> --effort <lvl>` |
 

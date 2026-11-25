@@ -296,7 +296,7 @@ class ReadyTests(unittest.TestCase):
         self.assertEqual(call(orca_dev.cmd_ready, ["term_1", "codex", "-5"])[0], 2)
 
 
-SPAWN = ["--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--title", "demo/review-quality-F1", "--task", "task_1"]
+SPAWN = ["--agent", "codex", "--model", "gpt-6.2-astra", "--effort", "high", "--title", "demo/review-quality-F1", "--task", "task_1"]
 CREATED = (0, {"ok": True, "result": {"terminal": {"handle": "term_9"}}})
 DISPATCHED = (0, {"ok": True, "result": {"dispatch": {"id": "ctx_7", "task_id": "task_1"}}})
 RID = "11111111-2222-3333-4444-555555555555"
@@ -337,8 +337,8 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual(len(fake.called("orchestration", "dispatch")), 1)
 
     def test_argv_matches_launch_md(self):
-        self.assertEqual(" ".join(orca_dev.build_argv("agy", "gemini-3.8-flash-high", None)),
-                         "agy --model gemini-3.8-flash-high --dangerously-skip-permissions")
+        self.assertEqual(" ".join(orca_dev.build_argv("agy", "gemini-4-hydrogen-high", None)),
+                         "agy --model gemini-4-hydrogen-high --dangerously-skip-permissions")
         self.assertEqual(" ".join(orca_dev.build_argv("codex", "<model>", "<lvl>")),
                          "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m <model> "
                          "-c model_reasoning_effort=<lvl> -c features.multi_agent=false")
@@ -346,7 +346,7 @@ class SpawnTests(unittest.TestCase):
                          "claude --dangerously-skip-permissions --model <opus|sonnet> --effort <lvl>")
 
     def test_command_line_per_os(self):
-        argv = orca_dev.build_argv("codex", "gpt-6-astra", "high")
+        argv = orca_dev.build_argv("codex", "gpt-6.2-astra", "high")
         self.assertEqual(shlex.split(orca_dev.command_line(argv, windows=False)), argv)
         self.assertEqual(orca_dev.command_line(["a b", "c"], windows=True), '"a b" c')
         self.assertEqual(orca_dev.command_line(["a b", "c"], windows=False), "'a b' c")
@@ -363,7 +363,7 @@ class SpawnTests(unittest.TestCase):
         create = fake.called("terminal", "create")[0]
         self.assertEqual(create[create.index("--title") + 1], "demo/review-quality-F1")
         self.assertEqual(create[create.index("--worktree") + 1], "active")
-        self.assertEqual(shlex.split(create[create.index("--command") + 1]), orca_dev.build_argv("codex", "gpt-6-astra", "high"))
+        self.assertEqual(shlex.split(create[create.index("--command") + 1]), orca_dev.build_argv("codex", "gpt-6.2-astra", "high"))
         self.assertEqual(fake.called("terminal", "send")[0][-3:], ["--text", "2", "--json"])
         dispatch = fake.called("orchestration", "dispatch")[0]
         self.assertEqual(dispatch, ["orchestration", "dispatch", "--task", "task_1", "--to", "term_9", "--inject",
@@ -607,7 +607,7 @@ class SpawnTests(unittest.TestCase):
     def test_agy_uses_its_timeout_and_no_effort(self):
         fake = FakeOrca({("terminal", "create"): [CREATED], ("terminal", "read"): [screen("Antigravity CLI", "> ")],
                          ("orchestration", "dispatch"): [DISPATCHED]})
-        code, out = spawn(fake, ["--agent", "agy", "--model", "gemini-3.8-flash-high", "--title", "t", "--task", "task_1"])
+        code, out = spawn(fake, ["--agent", "agy", "--model", "gemini-4-hydrogen-high", "--title", "t", "--task", "task_1"])
         self.assertEqual(code, 0)
         command = fake.called("terminal", "create")[0]
         self.assertNotIn("--effort", command[command.index("--command") + 1])
@@ -1144,6 +1144,8 @@ class BriefTemplateTests(unittest.TestCase):
                        "however rare"):
             self.assertIn(phrase, brief_text("review-quality"), phrase)
         self.assertIn("## Использование", brief_text("spec-review"))
+        self.assertIn("as simple and clean as the criteria allow", brief_text("review-spec"))
+        self.assertIn("nothing built that no criterion needs", brief_text("final-review"))
         for phrase in ("not fixed: not reproduced", "Prefer the simplest fix"):
             self.assertIn(phrase, brief_text("fix-round"), phrase)
 
@@ -1154,7 +1156,7 @@ class LaunchDocTests(unittest.TestCase):
 
     def test_size_and_argv_lines_match_helper(self):
         self.assertLessEqual(len(self.text.encode("utf-8")), 10 * KIB)
-        for argv in (orca_dev.build_argv("agy", "gemini-3.8-flash-high", None),
+        for argv in (orca_dev.build_argv("agy", "gemini-4-hydrogen-high", None),
                      orca_dev.build_argv("codex", "<model>", "<lvl>"),
                      orca_dev.build_argv("claude", "<opus|sonnet>", "<lvl>")):
             self.assertIn(" ".join(argv), self.text)
@@ -1274,7 +1276,8 @@ class LayoutTests(unittest.TestCase):
                        "продолжить F", "терминал", "не закрылся", "the subject decides", "payload.stopReason", "`finished`",
                        "`needs-input`", "`lost` or `exited`", "a terminal you closed yourself", "send --to dispatch:", "outcome_unknown", "consumer_fenced",
                        "a `blocking` label is a claim", "`R` lines are never downgraded", "costs no fix round",
-                       "понижено до minor"):
+                       "понижено до minor", "always Opus, then Sol", "`review-quality` → Astra `high`",
+                       "claude `opus` `medium` in a new terminal", "эскалация на Opus"):
             self.assertIn(anchor, text, anchor)
         for name in PROMPT_TOKENS:
             self.assertIn(name, text, name)
@@ -1283,18 +1286,22 @@ class LayoutTests(unittest.TestCase):
 
     def test_roles_md_anchors(self):
         text = read("skills/orca-dev/roles.md")
-        for anchor in ("gpt-6-astra", "xhigh", "gemini-3.8-flash-high", "gpt-6-luna", "max", "gpt-6.1-sol", "opus",
+        for anchor in ("gpt-6.2-astra", "xhigh", "gemini-4-hydrogen-high", "gpt-6-luna", "max", "gpt-6.2-sol", "opus",
                        "sonnet", "medium", "ultra", "--agent claude --model opus --effort xhigh",
-                       "--agent codex --model gpt-6-astra --effort xhigh", "--agent agy --model gemini-3.8-flash-high",
-                       "--agent codex --model gpt-6-luna --effort max", "--agent codex --model gpt-6.1-sol --effort high"):
+                       "--agent codex --model gpt-6.2-astra --effort xhigh", "--agent agy --model gemini-4-hydrogen-high",
+                       "--agent codex --model gpt-6-luna --effort max", "--agent codex --model gpt-6.2-sol --effort high",
+                       "--agent codex --model gpt-6.2-astra --effort high", "--agent claude --model opus --effort medium",
+                       "Opus → Sol per phase, Astra → Opus in the final review"):
             self.assertIn(anchor, text, anchor)
+        self.assertNotIn("gpt-6.1-sol", text)
+        self.assertNotIn("`sol`", text)
 
     def test_readmes_and_agents(self):
         for rel in ("README.md", "README.ru.md"):
             text = read(rel)
             for anchor in ("orca skills install --skill orchestration --skill orca-cli --agent codex,claude-code",
                            "skills/orca-dev/scripts/install.py --agent", "--repo", "$orca-dev", "/orca-dev",
-                           "docs/specs/2026-10-14-orca-dev-v2-design.md", "gemini-3.8-flash-high", "gpt-6-astra",
+                           "docs/specs/2026-10-14-orca-dev-v2-design.md", "gemini-4-hydrogen-high", "gpt-6.2-astra",
                            "release"):
                 self.assertIn(anchor, text, (rel, anchor))
             for gone in ("/orca-strigov:orca-dev", "plugin-creator", "marketplace"):

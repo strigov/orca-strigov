@@ -1,4 +1,4 @@
-# Review: does the change meet its criteria
+# Review: criteria and simplicity
 
 Repository: `<REPO>`. Read-only: do not edit any file, do not commit.
 
@@ -14,6 +14,7 @@ Check that:
 - every criterion is closed by the change and by a test that would fail without it;
 - the tests check behaviour and were written for the criteria (TDD), not adjusted to pass;
 - nothing outside the criteria was added: extra features, unrelated refactors, files outside the task;
+- the code is as simple and clean as the criteria allow: no layer, option or abstraction that no criterion needs, no duplicated or dead code;
 - the `verify` commands named in the criteria pass (run them).
 
 Previous round (`—` if this is the first): its findings and the author's `fixed` / `not fixed: {reason}` lines.
@@ -22,7 +23,7 @@ Previous round (`—` if this is the first): its findings and the author's `fixe
 
 Re-check them: a finding that is still open is reported again with its id, new findings continue the numbering; do not repeat a fixed one or a `not fixed` one whose reason holds.
 
-Severity: `blocking` means a criterion is not closed, a test is missing or wrong, or the scope was broken in a way that matters; `minor` means everything else.
+Severity: `blocking` means a criterion is not closed, a test is missing or wrong, or the scope was broken in a way that matters; `minor` means everything else, simplicity findings included unless whole machinery serves no criterion.
 
 Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 

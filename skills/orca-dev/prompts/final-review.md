@@ -6,7 +6,7 @@ Run this to see the whole change:
 
 <DIFF>
 
-For every acceptance criterion of the spec decide whether the branch closes it: find the code and the test, and run the test. Then check that the phases fit together: no broken integration, no leftover duplicate or dead code between phases.
+For every acceptance criterion of the spec decide whether the branch closes it: find the code and the test, and run the test. Then check that the phases fit together: no broken integration, no leftover duplicate or dead code between phases, nothing built that no criterion needs (over-engineering is `minor` unless it duplicates or contradicts another phase).
 
 Before you report, stop every process you started (servers, watchers, app instances) and delete the temporary copies you made (app copies, build folders); name both in the report.
 

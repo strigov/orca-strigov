@@ -28,7 +28,7 @@ You describe the result. The `orca-dev` skill handles the spec, plan, implementa
 |---|---|
 | **A shared definition of done** | Larger tasks start with a spec and acceptance criteria that you approve. |
 | **Checks after implementation** | The coordinator inspects the diff and runs the verification commands. |
-| **Two review perspectives** | Opus checks the requirements; Astra checks code quality. |
+| **Two review perspectives** | Opus checks the requirements and simplicity; Sol checks code quality. |
 | **Visible progress** | Completed phases become Git commits; the final report maps results to acceptance criteria. |
 | **Bounded retries** | Fix rounds have limits, model fallbacks are announced, and unresolved decisions return to you. |
 
@@ -118,7 +118,7 @@ The skill starts **only when explicitly invoked**. An ordinary chat request does
 For an estimated **two code files or fewer**, with no schema, migration, security, or public API change:
 
 ```text
-Implement → Run checks → Opus review → Astra review → Commit
+Implement → Run checks → Opus review → Sol review → Commit
 ```
 
 Merging already accepted branches also uses the quick path. No separate spec or plan is created.
@@ -127,14 +127,14 @@ Merging already accepted branches also uses the quick path. No separate spec or 
 
 ```text
 Spec → Your approval → Plan → Implementation phases → Final review
-                              └ each phase: build → checks → Opus → Astra → commit
+                              └ each phase: build → checks → Opus → Sol → commit
 ```
 
 1. **Agree on the result.** Opus writes the spec; Astra reviews it. You approve the acceptance criteria with «ок» before planning starts.
 2. **Break it into phases.** Opus writes a plan; Astra reviews it. Each phase names its criteria and verification commands.
 3. **Implement and verify.** An agent works through the phase using the TDD instructions in its brief; the coordinator checks the diff and runs the commands.
-4. **Review twice.** Opus checks whether the criteria are met, then Astra reviews code quality. Blocking findings go back for fixes and another review cycle.
-5. **Record the result.** Accepted phases are committed. A final Opus review checks the full result against the spec.
+4. **Review twice.** Opus checks whether the criteria are met and the code stays simple, then Sol reviews code quality. A blocking quality finding names who hits it and how often; the coordinator checks that claim before sending it back for fixes and another review cycle.
+5. **Record the result.** Accepted phases are committed. The final review (Astra on quality across phases, then Opus against the spec) checks the full result.
 
 **You stay in control.** Commits are automatic after clean review unless you disable autocommit in your task. Ask to see the plan first if you want an additional approval point. Exhausted fix budgets and unresolved blockers lead to a concrete choice: accept, allow another round, or stop.
 
@@ -147,14 +147,15 @@ The skill ships with fixed model presets. Their source of truth, including exact
 | Assignment | Default model | Effort / fallback |
 |---|---|---|
 | Write the spec and plan | Claude `opus` | `xhigh`; revisions at `high` |
-| Review the spec and plan | Codex `gpt-6-astra` | `xhigh` |
-| Backend and quick-path implementation | Antigravity `gemini-3.8-flash-high` | If unavailable: Codex `gpt-6-luna` at `max` |
-| Hard phases and one complexity escalation | Codex `gpt-6.1-sol` | `high` |
+| Review the spec and plan | Codex `gpt-6.2-astra` | `xhigh` |
+| Backend and quick-path implementation | Antigravity `gemini-4-hydrogen-high` | If unavailable: Codex `gpt-6-luna` at `max` |
+| Hard phases and one complexity escalation | Claude `opus` | `medium` |
 | Frontend implementation | Claude `opus` | `high`; `sonnet` at `medium` for phases touching ≤2 files |
-| Requirements review and final review | Claude `opus` | `high`; phase review uses `xhigh` for risky work or the last fix round |
-| Code quality review | Codex `gpt-6-astra` | `high` |
+| Phase review 1: requirements and simplicity | Claude `opus` | `medium`; `high` for risky work or the last fix round |
+| Phase review 2: code quality | Codex `gpt-6.2-sol` | `high`; `xhigh` for risky work |
+| Final review | Codex `gpt-6.2-astra`, then Claude `opus` | `high` |
 
-Review order is always **Opus → Astra**. Reviewers are never swapped automatically. Implementation has up to three fix rounds, then one escalation to Sol with three more; phases that start on Sol have no further escalation.
+Review order is always **Opus → Sol** per phase and **Astra → Opus** in the final review. Reviewers are never swapped automatically. Implementation has up to three fix rounds, then one escalation to Opus with three more; phases that start on Opus have no further escalation.
 
 ## One source, two agent variants
 
