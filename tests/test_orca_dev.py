@@ -1304,8 +1304,15 @@ REMOVED = [
 ]
 
 
+def present(path):
+    """False for OS and Python leftovers (.DS_Store, __pycache__) and for folders holding nothing else."""
+    if path.name in (".DS_Store", "__pycache__"):
+        return False
+    return not path.is_dir() or path.is_symlink() or any(present(p) for p in path.iterdir())
+
+
 def names(directory):
-    return sorted(p.name for p in directory.iterdir() if not p.name.startswith(".") and p.name != "__pycache__")
+    return sorted(p.name for p in directory.iterdir() if not p.name.startswith(".") and present(p))
 
 
 def read(rel):
@@ -1322,10 +1329,11 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(names(PROMPTS_DIR), sorted(n + ".md" for n in PROMPT_TOKENS))
         self.assertEqual(names(ROOT / "tests"), ["test_orca_dev.py"])
         for rel in REMOVED:
-            self.assertFalse(os.path.lexists(ROOT / rel), rel)
+            self.assertFalse(os.path.lexists(ROOT / rel) and present(ROOT / rel), rel)
         self.assertTrue((ROOT / "docs/specs/2026-10-14-orca-dev-v2-design.md").is_file())
+        # Hidden folders (.git, ignored local tool state) are not shipped; .github is in REMOVED.
         shells = [str(p.relative_to(ROOT)) for p in ROOT.rglob("*")
-                  if ".git" not in p.parts and p.suffix in (".sh", ".ps1")]
+                  if not any(x.startswith(".") for x in p.relative_to(ROOT).parts[:-1]) and p.suffix in (".sh", ".ps1")]
         self.assertEqual(shells, [])
 
     def test_size_limits(self):
