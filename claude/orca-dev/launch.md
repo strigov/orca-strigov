@@ -46,7 +46,7 @@ Path A (`orca orchestration worker-start --task <id> --worktree current --termin
 |---|---|---|---|---|---|
 | agy | `Antigravity` | `not signed in` (keyring race in the first ~20 s) | `Select login method` after 20 s | 180 s | `agy`, then log in interactively |
 | codex | `Ask Codex` | `Starting MCP servers` | `Sign in with ChatGPT` | 120 s | `codex login` |
-| claude | `Claude Code` | — | `/login` | 90 s | `claude`, then `/login` |
+| claude | `Claude Code` | — | `/login`, not on an `expires` line | 90 s | `claude`, then `/login` |
 | kimi | `Welcome to Kimi Code` | — | `/login` (not observed) | 90 s | `kimi`, then `/login` |
 | zcode | `Type a prompt` | — | none observed | 90 s | an API key in its provider config |
 

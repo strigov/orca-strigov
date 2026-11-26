@@ -45,6 +45,7 @@ TURN_S = 6.0
 SCREEN_TAIL = 15
 
 # Readiness markers, busy markers, login screens and timeouts per agent (launch.md "Agent start").
+# login_warn: a line with the login text and this word is a warning, not a login screen.
 # late: seconds after the ready marker in which a startup dialog can still appear (dispatch waits them out).
 # turn: text on screen while a turn runs; set only where an injected prompt can stay unsent (resend_enter).
 AGENTS = {
@@ -53,7 +54,7 @@ AGENTS = {
     "codex": {"marker": "Ask Codex", "busy": "Starting MCP servers", "login": "Sign in with ChatGPT", "login_after": 0, "timeout": 120,
               "late": 12, "turn": "esc to interrupt"},
     "claude": {"marker": "Claude Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90,
-               "late": 0, "turn": None},
+               "late": 0, "turn": None, "login_warn": "expires"},
     # Kimi Code CLI 2.7.2 (Windows smoke 2026-11-21 and 2026-11-23); its login screen was not observed.
     "kimi": {"marker": "Welcome to Kimi Code", "busy": None, "login": "/login", "login_after": 0, "timeout": 90,
              "late": 0, "turn": None},
@@ -261,7 +262,8 @@ def classify(agent: str, lines: List[str], is_screen: bool, elapsed: float,
     text25 = view(lines, is_screen, 25)
     text20 = view(lines, is_screen, 20)
     lower25 = text25.lower()
-    if cfg and cfg["login"] and cfg["login"] in text25:
+    warn = cfg.get("login_warn") if cfg else None
+    if cfg and cfg["login"] and any(cfg["login"] in x and not (warn and warn in x) for x in text25.splitlines()):
         return {"state": "needs_login" if elapsed >= cfg["login_after"] else "busy", "modal": None}
     for row in MODALS:
         if row["agent"] != agent:
