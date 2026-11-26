@@ -225,6 +225,11 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(orca_dev.classify("codex", ["Sign in with ChatGPT"], True, 1)["state"], "needs_login")
         self.assertEqual(orca_dev.classify("claude", ["Claude Code", "Please run /login"], True, 1)["state"], "needs_login")
 
+    def test_claude_login_expiry_warning_is_not_login(self):
+        lines = ["Claude Code v3.1", "Your login expires in 3 days · run /login to renew"]
+        self.assertEqual(orca_dev.classify("claude", lines, True, 1)["state"], "ready")
+        self.assertEqual(orca_dev.classify("claude", lines + ["Please run /login"], True, 1)["state"], "needs_login")
+
     def test_unknown_blocked_reason(self):
         self.assertEqual(orca_dev.classify("codex", ["Allow command? y/n"], True, 1, "agent-interactive-prompt")["state"], "blocked")
 
@@ -1236,8 +1241,8 @@ class LaunchDocTests(unittest.TestCase):
 
     def test_agent_start_tables_match_helper(self):
         for agent, cfg in orca_dev.AGENTS.items():
-            for key in ("marker", "busy", "login"):
-                if cfg[key]:
+            for key in ("marker", "busy", "login", "login_warn"):
+                if cfg.get(key):
                     self.assertIn(cfg[key], self.text, (agent, key))
             self.assertIn("%d s" % cfg["timeout"], self.text, agent)
             if cfg["late"]:
