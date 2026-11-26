@@ -28,7 +28,7 @@ Do not add `implementer`: the coordinator sets it.
 
 Body: one section per phase, headed like `## F1: {title}`, with what to do, which files, which tests to write first (TDD: the test for each criterion before the code) and which criteria it closes.
 
-Rules: every acceptance criterion of the spec is covered by at least one phase; no phase without `covers`; usually 1 to 5 phases, each small enough for one implementer run; `verify` holds concrete commands of this repository.
+Rules: every acceptance criterion of the spec is covered by at least one phase; no phase without `covers`; usually 1 to 5 phases, each small enough for one implementer run; `verify` holds concrete commands of this repository: existing commands (`cargo test`, `pnpm test`, `git diff --exit-code`) or runs of the tests this phase writes first, never an inline program (`python3 -c`, `node -e`); if neither fits, rework the criterion, not the command.
 
 When done, report through the Orca worker preamble: worker_done subject `DONE`, body: number of phases, their titles, and the criteria each covers. If the spec cannot be planned as written, subject `BLOCKED` and the reason.
 
