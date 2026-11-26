@@ -21,7 +21,7 @@
 You describe the result. The `orca-dev` skill handles the spec, plan, implementation phases, review rounds, and handoffs.
 
 <p align="center">
-  <a href="https://github.com/strigov/orca-strigov/releases/tag/v2.2.0"><strong>Release v2.2.0</strong></a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-codex-v2.2.0.zip">Download for Codex</a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-claude-v2.2.0.zip">Download for Claude Code</a>
+  <a href="https://github.com/strigov/orca-strigov/releases/tag/v2.2.1"><strong>Release v2.2.1</strong></a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-codex-v2.2.1.zip">Download for Codex</a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-claude-v2.2.1.zip">Download for Claude Code</a>
 </p>
 
 | What you get | How it works |
@@ -55,7 +55,7 @@ Use just one `--agent` option if you only need one variant. Coming from the plug
 
 ### Ready-made downloads
 
-[Release v2.2.0](https://github.com/strigov/orca-strigov/releases/tag/v2.2.0) contains separate [Codex ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-codex-v2.2.0.zip) and [Claude Code ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-claude-v2.2.0.zip) downloads. Extract your archive, then run `python3 orca-dev/scripts/install.py --agent codex` (or `--agent claude`). Each ZIP contains one `orca-dev/` folder with everything it needs.
+[Release v2.2.1](https://github.com/strigov/orca-strigov/releases/tag/v2.2.1) contains separate [Codex ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-codex-v2.2.1.zip) and [Claude Code ZIP](https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-claude-v2.2.1.zip) downloads. Extract your archive, then run `python3 orca-dev/scripts/install.py --agent codex` (or `--agent claude`). Each ZIP contains one `orca-dev/` folder with everything it needs.
 
 The [release branch](https://github.com/strigov/orca-strigov/tree/release) contains the same rendered skills under `codex/orca-dev/` and `claude/orca-dev/`, plus the source commit in its README. You can clone it with `git clone --branch release --single-branch https://github.com/strigov/orca-strigov.git`, then run `python3 codex/orca-dev/scripts/install.py --agent codex` or `python3 claude/orca-dev/scripts/install.py --agent claude` from that checkout.
 

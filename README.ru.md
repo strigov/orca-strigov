@@ -21,7 +21,7 @@
 Вы описываете результат. Скилл `orca-dev` организует подготовку спецификации и плана, фазы реализации, исправления и передачу работы между агентами.
 
 <p align="center">
-  <a href="https://github.com/strigov/orca-strigov/releases/tag/v2.2.0"><strong>Релиз v2.2.0</strong></a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-codex-v2.2.0.zip">Скачать для Codex</a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-claude-v2.2.0.zip">Скачать для Claude Code</a>
+  <a href="https://github.com/strigov/orca-strigov/releases/tag/v2.2.1"><strong>Релиз v2.2.1</strong></a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-codex-v2.2.1.zip">Скачать для Codex</a> · <a href="https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-claude-v2.2.1.zip">Скачать для Claude Code</a>
 </p>
 
 | Что вы получаете | Как это устроено |
@@ -55,7 +55,7 @@ python3 skills/orca-dev/scripts/install.py --agent codex --agent claude
 
 ### Готовые архивы
 
-В [релизе v2.2.0](https://github.com/strigov/orca-strigov/releases/tag/v2.2.0) доступны отдельные [ZIP для Codex](https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-codex-v2.2.0.zip) и [ZIP для Claude Code](https://github.com/strigov/orca-strigov/releases/download/v2.2.0/orca-dev-claude-v2.2.0.zip). Распакуйте нужный архив и выполните `python3 orca-dev/scripts/install.py --agent codex` (или `--agent claude`). Каждый ZIP содержит одну папку `orca-dev/` со всеми нужными файлами.
+В [релизе v2.2.1](https://github.com/strigov/orca-strigov/releases/tag/v2.2.1) доступны отдельные [ZIP для Codex](https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-codex-v2.2.1.zip) и [ZIP для Claude Code](https://github.com/strigov/orca-strigov/releases/download/v2.2.1/orca-dev-claude-v2.2.1.zip). Распакуйте нужный архив и выполните `python3 orca-dev/scripts/install.py --agent codex` (или `--agent claude`). Каждый ZIP содержит одну папку `orca-dev/` со всеми нужными файлами.
 
 Ветка [release](https://github.com/strigov/orca-strigov/tree/release) содержит те же подготовленные скиллы в `codex/orca-dev/` и `claude/orca-dev/`, а её README — исходный коммит. Можно клонировать её командой `git clone --branch release --single-branch https://github.com/strigov/orca-strigov.git` и из её каталога выполнить `python3 codex/orca-dev/scripts/install.py --agent codex` или `python3 claude/orca-dev/scripts/install.py --agent claude`.
 
