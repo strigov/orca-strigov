@@ -27,7 +27,7 @@ from pathlib import Path
 import zipfile
 from typing import Callable, List, Mapping, Optional, Tuple
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 MIN_ORCA = (1, 4, 265)
 HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent

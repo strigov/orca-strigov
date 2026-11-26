@@ -7,7 +7,7 @@ Read-only: do not edit any file, do not commit.
 Check that:
 - the frontmatter has `spec`, `orca_run`, `status` and, for every phase, `id`, `title`, `risk`, `area`, `hard`, `covers`, `verify` and `status: pending`;
 - every `AC` of the spec is in the `covers` of some phase, and no phase lacks `covers`;
-- every `verify` command exists in this repository and proves its phase;
+- every `verify` command exists in this repository and proves its phase; an inline program (`python3 -c`, `node -e`) in `verify` is `blocking`;
 - each phase body says what to do, which files and which tests come first (TDD);
 - the phases are ordered so that each builds on the previous ones, and nothing outside the spec is planned;
 - `hard: true` and `risk: risky` are justified.
